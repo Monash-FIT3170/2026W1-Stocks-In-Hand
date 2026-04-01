@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from transformers import pipeline
+from playwright.async_api import async_playwright
 
 # --- DB ---
 engine = create_engine(os.environ["DATABASE_URL"])
@@ -20,8 +21,32 @@ class Result(Base):
 
 Base.metadata.create_all(engine)
 
-# --- HuggingFace: FinBERT (financial sentiment) ---
+# --- HuggingFace: FinBERT ---
 sentiment = pipeline("text-classification", model="ProsusAI/finbert")
+
+# --- Playwright scraper ---
+async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
+    url = f"https://finance.yahoo.com/quote/{ticker}/news/"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        page = await browser.new_page()
+        await page.goto(url, timeout=15000)
+        await page.wait_for_load_state("domcontentloaded")
+
+        # grab all h3 text on the page, filter out short/nav ones
+        items = await page.query_selector_all("h3")
+        headlines = []
+        for item in items[:30]:
+            text = (await item.inner_text()).strip()
+            if len(text) > 20:  # filter out nav labels like "Trending Tickers"
+                headlines.append(text)
+
+        await browser.close()
+    return headlines[:10]
 
 # --- API ---
 app = FastAPI()
@@ -49,3 +74,7 @@ def results():
     with Session() as db:
         rows = db.query(Result).order_by(Result.id.desc()).limit(10).all()
     return [{"id": r.id, "text": r.text[:80], "label": r.label, "score": r.score} for r in rows]
+
+@app.get("/headlines")
+async def headlines():
+    return await scrape_yahoo_headlines()

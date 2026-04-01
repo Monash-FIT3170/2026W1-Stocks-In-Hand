@@ -1,10 +1,12 @@
 "use client"
 import { useState } from "react"
+import React from "react"
 
 export default function Home() {
   const [text, setText] = useState("")
   const [result, setResult] = useState<{label:string,score:number}|null>(null)
   const [loading, setLoading] = useState(false)
+  const [headlines, setHeadlines] = useState<string[]>([])
 
   async function analyse() {
     setLoading(true)
@@ -15,6 +17,11 @@ export default function Home() {
     })
     setResult(await res.json())
     setLoading(false)
+  }
+
+  async function fetchHeadlines() {
+    const res = await fetch("/api/headlines")
+    setHeadlines(await res.json())
   }
 
   const colour = result?.label === "positive" ? "#22c55e" : result?.label === "negative" ? "#ef4444" : "#94a3b8"
@@ -50,6 +57,30 @@ export default function Home() {
           </span>
         </div>
       )}
+
+      <div style={{ marginTop: 40, borderTop: "1px solid #2d3148", paddingTop: 24 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>Headlines</h2>
+        <button
+          onClick={fetchHeadlines}
+          style={{ padding: "10px 24px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}
+        >
+          Load Headlines
+        </button>
+
+        {headlines.length > 0 && (
+          <ul style={{ marginTop: 16, padding: 0, listStyle: "none" }}>
+            {headlines.map((h, i) => (
+              <li key={i} style={{
+                padding: "10px 14px", marginBottom: 8,
+                background: "#1e2130", border: "1px solid #2d3148",
+                borderRadius: 8, fontSize: 13, color: "#cbd5e1"
+              }}>
+                {h}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </main>
   )
 }
