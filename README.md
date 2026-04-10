@@ -14,3 +14,4 @@
 * Roshan Raj Saravanan
 * Moin Vohra
 * Caden Arnold
+* Jordan Tran
