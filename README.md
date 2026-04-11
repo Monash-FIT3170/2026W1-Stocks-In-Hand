@@ -16,3 +16,4 @@
 * Caden Arnold
 * Jordan Tran
 * Alan Sebastian
+* Aadi Kapoor
