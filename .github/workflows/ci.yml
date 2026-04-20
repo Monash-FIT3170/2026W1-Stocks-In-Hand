@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'spike/backend/**.py'
+      - 'spike/backend/requirements.txt'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: ['**']
+    paths:
+      - 'spike/backend/**.py'
+      - 'spike/backend/requirements.txt'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  type-check:
+    name: Python type hint check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install mypy and backend deps
+        working-directory: spike/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install mypy
+          # Install your app's deps so mypy can resolve imports like fastapi.
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run mypy (report missing type hints)
+        working-directory: spike/backend
+        run: |
+          mypy . \
+            --disallow-untyped-defs \
+            --disallow-incomplete-defs \
+            --check-untyped-defs \
+            --ignore-missing-imports \
+            --no-strict-optional \
+            --pretty
