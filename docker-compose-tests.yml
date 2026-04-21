@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: spike
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d spike"]
+      interval: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      target: testing
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+    command: ["./tests.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: testing
+    volumes:
+      - ./frontend:/app          # mount your local files into the container
+      - /app/node_modules        # but keep node_modules from the container, not your machine
+    command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
+    depends_on:
+      - backend
