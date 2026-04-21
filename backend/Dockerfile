@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     chromium \
     && rm -rf /var/lib/apt/lists/*
     
+# Copying HuggingFace model from the "download" stage into this stage
 COPY --from=download /app/finbert /app/finbert
 
 COPY requirements.txt .
