@@ -1,5 +1,5 @@
-mypy
-pylint
-pytest
-coverage
-bandit
+mypy==1.20.0
+pylint==4.0.5
+pytest==9.0.3
+coverage==7.13.5
+bandit==1.9.4

@@ -42,12 +42,6 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 ---
 
-## Running the spike
-```bash
-cd spike
-docker compose -f docker-compose.yml up --build
-```
-
 Then open:
 | URL | What |
 |---|---|
@@ -58,25 +52,6 @@ Then open:
 
 First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on first run and is cached after that.
 
----
-
-## Project structure
-```
-spike/
-├── docker-compose.yml
-├── backend/
-│   ├── Dockerfile
-│   ├── main.py          # FastAPI app, FinBERT, Playwright scraper
-│   └── requirements.txt
-└── frontend/
-    ├── Dockerfile
-    ├── next.config.js   # proxies /api/* → backend:8000
-    └── app/
-        ├── layout.tsx
-        └── page.tsx
-```
-
----
 
 ## API endpoints
 
@@ -93,10 +68,4 @@ spike/
 ```bash
 docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
-```
-
-## Running the tests
-```bash
-cd spike
-docker compose -f docker-compose-tests.yml up --build
 ```
