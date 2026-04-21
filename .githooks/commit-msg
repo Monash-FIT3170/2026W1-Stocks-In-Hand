@@ -1,4 +1,3 @@
-
 #!/bin/bash
 LC_ALL=C
 
@@ -23,15 +22,17 @@ More info can be found in the QAP here: https://drive.google.com/file/d/1K6GDwCu
 
 local_branch="$(git rev-parse --abbrev-ref HEAD)"
 
-valid_bugfix_admin_branch_regex="(^(admin|bugfix)/)"
+valid_bugfix_admin_branch_regex="^(admin|bugfix)/"
 
 if [[ $local_branch =~ $valid_bugfix_admin_branch_regex ]]
 then
-    echo "matches branch"
+    echo "Bugfix/Admin branch detected"
     valid_commit_regex=$valid_bugfix_commit_regex
 fi
 
-if [[ ! $1 =~ $valid_commit_regex ]]
+commit_msg="$(cat $1)"
+
+if [[ ! $commit_msg =~ $valid_commit_regex ]]
 then
     echo "$message"
     exit 1
