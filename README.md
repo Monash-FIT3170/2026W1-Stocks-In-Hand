@@ -94,3 +94,9 @@ spike/
 docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
 ```
+
+## Running the tests
+```bash
+cd spike
+docker compose -f docker-compose-tests.yml up --build
+```
