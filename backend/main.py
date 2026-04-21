@@ -22,7 +22,7 @@ class Result(Base):
 Base.metadata.create_all(engine)
 
 # --- HuggingFace: FinBERT ---
-sentiment = pipeline("text-classification", model="ProsusAI/finbert")
+sentiment = pipeline("text-classification", model="/app/finbert")
 
 # --- Playwright scraper ---
 async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
