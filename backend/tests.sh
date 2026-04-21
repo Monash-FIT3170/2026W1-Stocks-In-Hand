@@ -1,6 +1,11 @@
 #!/bin/bash
 
-# put any properly formed bash commands below to run unit tests
+# checks for code style
+echo "---------- PYLINT ----------"
+pylint --recursive=y .
+
+# checks for type annotations
+echo "---------- MYPY ----------"
 mypy . \
     --disallow-untyped-defs \
     --disallow-incomplete-defs \
@@ -8,3 +13,11 @@ mypy . \
     --ignore-missing-imports \
     --no-strict-optional \
     --pretty
+
+# runs unit tests and reports code coverage
+echo "---------- PYTEST ----------"
+coverage run -m pytest
+
+# searches for code security vulnerabilities
+echo "---------- BANDIT ----------"
+bandit -c bandit.yaml -r .
