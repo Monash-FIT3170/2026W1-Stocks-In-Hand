@@ -42,6 +42,12 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 ---
 
+## Running the project
+In the root folder of the project
+```bash
+docker compose -f docker-compose.yml up --build
+```
+
 Then open:
 | URL | What |
 |---|---|
@@ -68,4 +74,10 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 ```bash
 docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
+```
+
+## Running the tests
+In the root folder of the project
+```bash
+docker compose -f docker-compose-tests.yml up --build
 ```
