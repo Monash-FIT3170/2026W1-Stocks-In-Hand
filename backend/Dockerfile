@@ -17,17 +17,25 @@ RUN apt-get update && apt-get install -y \
     curl \
     chromium \
     && rm -rf /var/lib/apt/lists/*
-    
+
 # Copying HuggingFace model from the "download" stage into this stage
 COPY --from=download /app/finbert /app/finbert
 
+# Install uv to speed up pip installation
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install chromium
+
+# Use uv to install requirements (improves parallelism)
+# Using cache to reduce build time incase requirements change
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/ms-playwright playwright install chromium
 
 COPY . .
 
 FROM production AS testing
 
 COPY requirements-testing.txt .
-RUN pip install --no-cache-dir -r requirements-testing.txt
+
+# Using cache to reduce build time incase requirements change
+RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system -r requirements-testing.txt
