@@ -1,5 +1,6 @@
 from .claim import Claim
 from .claim_source import ClaimSource
+from .llm_run import LLMRun
 from .report import Report
 from .report_claim import ReportClaim
 from .scrape_run import ScrapeRun
