@@ -6,7 +6,57 @@ from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from transformers import pipeline
 from playwright.async_api import async_playwright
+from fastapi import FastAPI
+from app.api.routes import (
+    investor,
+    ticker,
+    watchlist,
+    watchlist_ticker,
+    alert,
+    report,
+    artifact,
+    artifact_chunk,
+    artifact_summary,
+    artifact_sentiment,
+    artifact_topic,
+    extracted_fact,
+    claim,
+    claim_source,
+    report_claim,
+    llm_run,
+    scrape_run,
+    market_data,
+    information_platform,
+    topic
+)
 
+app = FastAPI(title="Spike API")
+
+# Routes for database
+app.include_router(investor.router)
+app.include_router(ticker.router)
+app.include_router(watchlist.router)
+app.include_router(watchlist_ticker.router)
+app.include_router(alert.router)
+app.include_router(report.router)
+app.include_router(artifact.router)
+app.include_router(artifact_chunk.router)
+app.include_router(artifact_summary.router)
+app.include_router(artifact_sentiment.router)
+app.include_router(artifact_topic.router)
+app.include_router(extracted_fact.router)
+app.include_router(claim.router)
+app.include_router(claim_source.router)
+app.include_router(report_claim.router)
+app.include_router(llm_run.router)
+app.include_router(scrape_run.router)
+app.include_router(market_data.router)
+app.include_router(information_platform.router)
+app.include_router(topic.router)
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 # --- DB ---
 engine = create_engine(os.environ["DATABASE_URL"])
 Session = sessionmaker(bind=engine)
