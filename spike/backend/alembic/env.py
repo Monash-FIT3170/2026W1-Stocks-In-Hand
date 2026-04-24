@@ -10,6 +10,7 @@ from app.models import artifact
 from app.models import artifact_chunk
 from app.models import artifact_summary
 from app.models import artifact_sentiment
+from app.models import topic
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
