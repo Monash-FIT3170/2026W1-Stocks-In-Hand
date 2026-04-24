@@ -55,6 +55,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 class AnalyseRequest(BaseModel):
     text: str
 
+@app.get("/")
+def root():
+    return {
+        "message": "StonksInHand FastAPI backend",
+        "frontend": "http://localhost:3000",
+        "docs": "/docs",
+        "health": "/health",
+        "endpoints": ["/analyse", "/headlines", "/results"],
+    }
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
