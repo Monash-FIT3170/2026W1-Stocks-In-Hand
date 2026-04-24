@@ -17,7 +17,7 @@ class Artifact(Base):
     author = Column(String, nullable=True)
     raw_text = Column(Text, nullable=True)
     raw_html = Column(Text, nullable=True)
-    metadata = Column(JSONB, nullable=True)
+    artifact_metadata = Column(JSONB, nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     scraped_at = Column(DateTime(timezone=True), server_default=func.now())
     content_hash = Column(String, unique=True, nullable=True)

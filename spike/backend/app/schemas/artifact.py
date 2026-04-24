@@ -12,7 +12,7 @@ class ArtifactCreate(BaseModel):
     author: Optional[str] = None
     raw_text: Optional[str] = None
     raw_html: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
+    artifact_metadata: Optional[dict[str, Any]] = None
     published_at: Optional[datetime] = None
     content_hash: Optional[str] = None
     credibility_label: Optional[str] = None

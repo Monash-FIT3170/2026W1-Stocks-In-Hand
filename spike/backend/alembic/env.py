@@ -2,7 +2,6 @@ from logging.config import fileConfig
 
 from app.core.config import settings
 from app.database.base import Base
-from app.models import user
 from app.models import investor 
 from app.models import ticker
 from app.models import information_platform
@@ -13,6 +12,17 @@ from app.models import artifact_sentiment
 from app.models import topic
 from app.models import artifact_topic
 from app.models import extracted_fact
+from app.models import claim
+from app.models import claim_source
+from app.models import alert
+from app.models import llm_run
+from app.models import market_data
+from app.models import report_claim
+from app.models import report
+from app.models import scrape_run
+from app.models import watchlist_ticker
+from app.models import watchlist
+
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
