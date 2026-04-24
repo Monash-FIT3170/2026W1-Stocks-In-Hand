@@ -31,6 +31,7 @@ from app.api.routes import (
 )
 
 app = FastAPI(title="Spike API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Routes for database
 app.include_router(investor.router)
@@ -53,6 +54,16 @@ app.include_router(scrape_run.router)
 app.include_router(market_data.router)
 app.include_router(information_platform.router)
 app.include_router(topic.router)
+
+@app.get("/")
+def root():
+    return {
+        "message": "StonksInHand FastAPI backend",
+        "frontend": "http://localhost:3000",
+        "docs": "/docs",
+        "health": "/health",
+        "endpoints": ["/analyse", "/headlines", "/results"],
+    }
 
 @app.get("/health")
 def health_check():
@@ -99,15 +110,9 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
     return headlines[:10]
 
 # --- API ---
-app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 class AnalyseRequest(BaseModel):
     text: str
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
 
 @app.post("/analyse")
 def analyse(body: AnalyseRequest):
