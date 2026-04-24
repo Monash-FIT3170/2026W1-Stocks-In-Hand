@@ -30,3 +30,5 @@ services:
     command: npm run dev         # override the CMD from the Dockerfile
     depends_on:
       - backend
+volumes:
+  postgres_data:
