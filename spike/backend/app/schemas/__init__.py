@@ -4,3 +4,4 @@ from .report import ReportCreate, ReportResponse
 from .report_claim import ReportClaimCreate, ReportClaimResponse
 from .user import UserCreate, UserResponse
 from .watchlist import WatchlistCreate, WatchlistResponse
+from .watchlist_ticker import WatchlistTickerCreate, WatchlistTickerResponse
