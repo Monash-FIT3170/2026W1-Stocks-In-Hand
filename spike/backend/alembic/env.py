@@ -3,6 +3,8 @@ from logging.config import fileConfig
 from app.core.config import settings
 from app.database.base import Base
 from app.models import user
+from app.models import investor 
+from app.models import ticker 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
