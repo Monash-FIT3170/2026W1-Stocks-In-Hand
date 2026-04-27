@@ -1,6 +1,9 @@
 # This file contains the Python, Nodejs and Nextjs sample .gitignore files provided from this repository:
 # https://github.com/github/gitignore/tree/main
 
+**/_data
+**/_test_output
+
 ####################################################################################################
 ########################################## PYTHON DEFAULT ##########################################
 ####################################################################################################

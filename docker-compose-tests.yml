@@ -14,6 +14,8 @@ services:
     build:
       context: ./backend
       target: testing
+    volumes:
+      - ./backend/_test_output:/test_output
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
@@ -29,9 +31,6 @@ services:
       target: testing
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app          # mount your local files into the container
-      - /app/node_modules        # but keep node_modules from the container, not your machine
     command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
     depends_on: 
       backend:
