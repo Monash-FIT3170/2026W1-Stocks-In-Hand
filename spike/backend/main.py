@@ -6,6 +6,9 @@ from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from transformers import pipeline
 from playwright.async_api import async_playwright
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 # --- DB ---
 engine = create_engine(os.environ["DATABASE_URL"])
@@ -48,6 +51,67 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
         await browser.close()
     return headlines[:10]
 
+# --- HotCopper forum scraper ---
+async def scrape_hotcopper_discussions(
+    ticker: str = "BHP",
+    output_file: str = "scraped_hotcopper_discussions.jsonl",
+    max_posts: int = 10,
+) -> list[dict]:
+    ticker = ticker.lower().strip()
+    url = f"https://hotcopper.com.au/asx/{ticker}/discussion/"
+
+    scraped_items = []
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            executable_path="/usr/bin/chromium",
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+
+        page = await browser.new_page()
+        await page.goto(url, timeout=15000)
+        await page.wait_for_load_state("domcontentloaded")
+
+        rows = await page.query_selector_all("tr")
+
+        for row in rows:
+            if len(scraped_items) >= max_posts:
+                break
+
+            text = (await row.inner_text()).strip()
+
+            # skips empty rows / navbar-like rows
+            if len(text) < 30:
+                continue
+
+            if ticker.upper() not in text.upper():
+                continue
+
+            if "Thread" not in text:
+                continue
+
+            if text.count("ASX - By Stock") > 1:
+                continue
+
+            scraped_items.append({
+                "source": "HotCopper",
+                "ticker": ticker.upper(),
+                "url": url,
+                "raw_text": text,
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        await browser.close()
+
+    output_path = Path(output_file)
+
+    with output_path.open("a", encoding="utf-8") as file:
+        for item in scraped_items:
+            file.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    return scraped_items
+
 # --- API ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -78,3 +142,13 @@ def results():
 @app.get("/headlines")
 async def headlines():
     return await scrape_yahoo_headlines()
+
+@app.get("/hotcopper/{ticker}")
+async def hotcopper(ticker: str):
+    results = await scrape_hotcopper_discussions(ticker)
+
+    return {
+        "ticker": ticker.upper(),
+        "count": len(results),
+        "results": results,
+    }
