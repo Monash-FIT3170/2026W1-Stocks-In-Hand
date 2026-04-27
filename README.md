@@ -76,6 +76,23 @@ docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
 ```
 
+## Setup
+Before doing any development work in this repository, you must run the init.sh script. It only needs to be run once, unless dependencies change majorly and it may need to be re-run, but this will be clearly communicated
+
+In the root of the repository run the following:
+```bash
+./init.sh
+```
+
+### On macOS and Linux
+If you're on macOS or Linux, you may need to change the file permissions first
+
+In the root of the repository run the following:
+```bash
+chmod +x ./init.sh
+./init.sh
+```
+
 ## Running the tests
 In the root folder of the project
 ```bash
