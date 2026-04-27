@@ -22,12 +22,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    healthcheck:
-      test: "curl localhost:8000/health"
-      interval: 10s
-      timeout: 1s
-      retries: 3
-      start_period: 10s
 
   frontend:
     build:
@@ -39,6 +33,4 @@ services:
       - ./frontend:/app          # mount your local files into the container
       - /app/node_modules        # but keep node_modules from the container, not your machine
     command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
-    depends_on:
-      backend:
-        condition: service_healthy
+    depends_on: backend
