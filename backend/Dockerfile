@@ -26,6 +26,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 COPY requirements.txt .
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
 # Use uv to install requirements (improves parallelism)
 # Using cache to reduce build time incase requirements change
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install --system -r requirements.txt
