@@ -1,11 +1,14 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from transformers import pipeline
 from playwright.async_api import async_playwright
+from pathlib import Path
+
+from scrapers.registry import scrape, available_tickers
 
 # --- DB ---
 engine = create_engine(os.environ["DATABASE_URL"])
@@ -30,19 +33,17 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            executable_path="/usr/bin/chromium",
             args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
         page = await browser.new_page()
         await page.goto(url, timeout=15000)
         await page.wait_for_load_state("domcontentloaded")
 
-        # grab all h3 text on the page, filter out short/nav ones
         items = await page.query_selector_all("h3")
         headlines = []
         for item in items[:30]:
             text = (await item.inner_text()).strip()
-            if len(text) > 20:  # filter out nav labels like "Trending Tickers"
+            if len(text) > 20:
                 headlines.append(text)
 
         await browser.close()
@@ -51,6 +52,8 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
 # --- API ---
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+OUTPUT_DIR = Path("/app/output")
 
 class AnalyseRequest(BaseModel):
     text: str
@@ -78,3 +81,23 @@ def results():
 @app.get("/headlines")
 async def headlines():
     return await scrape_yahoo_headlines()
+
+@app.post("/scrape/{ticker}")
+async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
+    """
+    Trigger an ASX announcement scrape for a given ticker.
+    Runs in the background — returns immediately.
+    PDFs are saved to /app/output/{ticker}/
+    """
+    if ticker.upper() not in available_tickers():
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{ticker.upper()}' not implemented. Available: {available_tickers()}"
+        )
+    background_tasks.add_task(scrape, ticker, OUTPUT_DIR)
+    return {"status": "queued", "ticker": ticker.upper()}
+
+@app.get("/tickers")
+def tickers():
+    """Return all implemented ASX tickers."""
+    return {"tickers": available_tickers()}
