@@ -2,12 +2,13 @@ from pathlib import Path
 
 from .base import BaseScraper, Announcement
 from .companies.anz import ANZScraper
+from .companies.csl import CSLScraper
 
 # Add one import and one line here each time a new company is onboarded.
 REGISTRY: dict[str, type[BaseScraper]] = {
     "ANZ": ANZScraper,
+    "CSL": CSLScraper,
     # "BHP": BHPScraper,
-    # "CSL": CSLScraper,
     # "CBA": CBAScraper,
     # "WES": WesScraper,
 }

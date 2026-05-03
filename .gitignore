@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 discover.py
 output
+frontend/next-env.d.ts

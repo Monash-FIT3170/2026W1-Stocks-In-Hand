@@ -82,7 +82,9 @@ class ANZScraper(BaseScraper):
         This inherits cookies and headers from the browser session,
         bypassing the 403 that direct httpx requests receive.
         """
-        filename = re.sub(r"[^\w\-_]", "_", announcement.title) + ".pdf"
+        date_str = announcement.date.strftime("%Y-%m-%d")
+        clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
+        filename = f"{date_str}_{clean_title}.pdf"
         dest = self.output_dir / filename
 
         # Use the browser's request context — same session, correct referer
