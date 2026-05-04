@@ -1,0 +1,29 @@
+#!/bin/bash
+LC_ALL=C
+
+local_branch="$(git rev-parse --abbrev-ref HEAD)"
+
+valid_branch_regex="(^feature\/[A-Za-z0-9]{9}(-|\/)[A-Za-z0-9_]+$|^(admin|bugfix)/)"
+
+message="Your branch name does not follow the StonksInHand branch naming rules! Branch names must follow these rules:
+    If it is going to be merged to main (via pull request):
+        - feature/<user_story_id>-<description>
+        - bugfix/<description>
+        - admin/<description>
+
+    You may create sub-branches of your feature branch, but these can only be merged into your feature branch and must follow the name:
+        - feature/<user_story_id>/<description>
+
+Common issues: 
+- description cannot contain '-' and should use '_' instead
+- user_story_id should be 9 characters from ClickUp
+
+More info can be found in the QAP here: https://drive.google.com/file/d/1K6GDwCu4lsxXjte1OnPNDcxfxlZWomZ1/view?usp=sharing"
+
+if [[ ! $local_branch =~ $valid_branch_regex ]]
+then
+    echo "$message"
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: spike
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d spike"]
+      interval: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      target: testing
+    volumes:
+      - ./backend/_test_output:/test_output
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+    ports:
+      - "8000:8000"
+    command: ["./tests.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: testing
+    ports:
+      - "3000:3000"
+    command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
+    depends_on: 
+      backend:
+        condition: service_started

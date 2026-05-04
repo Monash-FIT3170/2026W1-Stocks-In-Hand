@@ -1,0 +1,41 @@
+#!/bin/bash
+LC_ALL=C
+
+valid_commit_regex="^([0-9]\.){3}[A-Za-z0-9]{9} - "
+valid_bugfix_commit_regex="^([0-9]\.){2}[0-9] - "
+
+message="Your commit message does not follow the StonksInHand commit message rules! Commit messages must follow these rules:
+
+<milestone_number>.<sprint_number>.<team_number>.<user_story_id> - <Description>
+
+Where:
+- milestone_number: the number of the milestone this task is being completed within
+- sprint_number: the number of the sprint this task is being completed within
+- team_number: the number of the agile release team which you are part of
+- user_story_id (not needed for bugfix/admin branches): the user_story_id from ClickUp for the code you are committing
+- Description: a brief description of the changes being made (can include any character, including spaces)
+
+Example:
+2.1.1.86d2buamy - Adding ability to fetch websites and store them to the database
+
+More info can be found in the QAP here: https://drive.google.com/file/d/1K6GDwCu4lsxXjte1OnPNDcxfxlZWomZ1/view?usp=sharing"
+
+local_branch="$(git rev-parse --abbrev-ref HEAD)"
+
+valid_bugfix_admin_branch_regex="^(admin|bugfix)/"
+
+if [[ $local_branch =~ $valid_bugfix_admin_branch_regex ]]
+then
+    echo "Bugfix/Admin branch detected"
+    valid_commit_regex=$valid_bugfix_commit_regex
+fi
+
+commit_msg="$(cat $1)"
+
+if [[ ! $commit_msg =~ $valid_commit_regex ]]
+then
+    echo "$message"
+    exit 1
+fi
+
+exit 0
