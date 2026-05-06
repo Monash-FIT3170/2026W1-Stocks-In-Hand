@@ -39,7 +39,9 @@ RUN pip install --no-cache-dir --timeout=300 --retries=5 \
     sqlalchemy==2.0.30 \
     psycopg2-binary==2.9.9 \
     playwright==1.44.0 \
-    httpx
+    httpx \
+    groq==1.1.1 \
+    pypdf==4.2.0
 
 # Install heavy ML deps separately — cached unless these lines change
 RUN pip install --no-cache-dir --timeout=300 --retries=5 \

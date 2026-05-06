@@ -12,6 +12,9 @@ services:
 
   backend:
     build: ./backend
+    # Contains api key for groq usage
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
