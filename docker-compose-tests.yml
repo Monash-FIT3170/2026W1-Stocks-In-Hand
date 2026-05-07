@@ -11,30 +11,30 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
     # Contains api key for groq usage
     env_file:
       - ./backend/.env
+    build:
+      context: ./backend
+      target: testing
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
-      # Persist downloaded PDFs on the host
-      - ./output:/app/output
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: ["./tests.sh"]
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - ./backend/_test_output:/test_output
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: testing
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    command: npm run dev
-    depends_on:
-      - backend
+    command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
+    depends_on: 
+      backend:
+        condition: service_started
