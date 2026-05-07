@@ -6,3 +6,5 @@ transformers==4.41.0
 torch==2.3.0
 playwright==1.44.0
 httpx
+groq==1.1.1
+pypdf==4.2.0
