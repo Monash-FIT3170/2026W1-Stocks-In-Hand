@@ -1,0 +1,163 @@
+.appShell {
+  --bg: #f8f9fb;
+  --panel: #f1f3f5;
+  --surface: #ffffff;
+  --soft: #eceeef;
+  --text: #191c1e;
+  --muted: #3e4943;
+  --subtle: #64748b;
+  --faint: #7a857f;
+  --green: #006445;
+  --green2: #047857;
+  --mint: #99f5c8;
+  --orange: #f59e0b;
+  --red: #b04747;
+  --line: rgba(226, 232, 240, 0.82);
+  --shadow: 0 16px 30px rgba(25, 28, 30, 0.06);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.appShell *,
+.appShell *::before,
+.appShell *::after {
+  box-sizing: border-box;
+}
+
+.appShell button,
+.appShell input {
+  font: inherit;
+}
+
+.appShell button {
+  cursor: pointer;
+}
+
+.appShell svg {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.topNav {
+  background: rgba(255, 255, 255, 0.88);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.navInner {
+  align-items: center;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(170px, 1fr) auto minmax(130px, 1fr);
+  margin: 0 auto;
+  max-width: 1280px;
+  min-height: 72px;
+  padding: 14px 26px;
+}
+
+.brandButton,
+.navLink,
+.activeNavLink,
+.signInButton {
+  border: 0;
+  background: transparent;
+  text-decoration: none;
+}
+
+.brandButton {
+  color: var(--green);
+  font-size: 20px;
+  font-weight: 850;
+  justify-self: start;
+  padding: 0;
+}
+
+.navLinks {
+  align-items: center;
+  display: flex;
+  gap: 32px;
+  justify-content: center;
+}
+
+.navLink,
+.activeNavLink {
+  color: #334155;
+  font-size: 16px;
+  padding: 0 0 5px;
+}
+
+.activeNavLink {
+  border-bottom: 2px solid var(--green2);
+  color: var(--green);
+  font-weight: 800;
+}
+
+.signInButton {
+  background: var(--green);
+  border-radius: 999px;
+  color: white;
+  font-weight: 850;
+  justify-self: end;
+  padding: 10px 24px;
+}
+
+.footer {
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: 1232px;
+  padding: 40px 0 64px;
+  width: calc(100% - 52px);
+}
+
+.footer strong {
+  color: var(--green);
+  display: block;
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+
+.footer p,
+.footer a {
+  color: var(--subtle);
+  font-size: 14px;
+  margin: 0;
+  text-decoration: none;
+}
+
+.footer nav {
+  display: flex;
+  gap: 32px;
+}
+
+@media (max-width: 980px) {
+  .navInner {
+    grid-template-columns: 1fr auto;
+  }
+
+  .navLinks {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-start;
+    justify-self: stretch;
+    width: 100%;
+  }
+}
+
+@media (max-width: 680px) {
+  .footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 24px;
+    width: calc(100% - 32px);
+  }
+}
