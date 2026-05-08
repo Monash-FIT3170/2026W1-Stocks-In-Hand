@@ -1,17 +1,17 @@
 "use client"
 
 import Link from "next/link"
-import { FormEvent, useState } from "react"
+import { useState } from "react"
 import { AppFrame } from "../components/layout/AppFrame"
 import { SearchIcon } from "../components/icons"
 import { searchResults } from "../mock/stocks"
 import styles from "../page.module.css"
 
-export default function SearchPage({ searchParams }: { searchParams?: { q?: string } }) {
+export default function SearchPage({ searchParams }) {
   const query = searchParams?.q || "BHP"
   const [value, setValue] = useState(query)
 
-  function handleSearch(event: FormEvent<HTMLFormElement>) {
+  function handleSearch(event) {
     event.preventDefault()
     window.location.href = `/search?q=${encodeURIComponent(value.trim() || "BHP")}`
   }

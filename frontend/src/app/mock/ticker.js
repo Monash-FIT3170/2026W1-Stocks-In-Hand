@@ -15,7 +15,7 @@ export const themes = [
   "China Stimulus: Direct correlation with iron ore demand sentiment.",
 ]
 
-export const timelineItems: TimelineItem[] = [
+export const timelineItems = [
   {
     month: "Aug 2024",
     tag: "Earnings",
@@ -44,4 +44,3 @@ export const timelineItems: TimelineItem[] = [
     tone: "red",
   },
 ]
-import { TimelineItem } from "../types"

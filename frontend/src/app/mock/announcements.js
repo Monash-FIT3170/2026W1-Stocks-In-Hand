@@ -1,6 +1,4 @@
-import { Announcement } from "../types"
-
-export const announcementCards: Announcement[] = [
+export const announcementCards = [
   {
     ticker: "BHP",
     tag: "Earnings/Guidance",

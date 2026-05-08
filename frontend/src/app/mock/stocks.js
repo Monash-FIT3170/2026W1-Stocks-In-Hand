@@ -1,6 +1,4 @@
-import { SearchResult } from "../types"
-
-export const searchResults: SearchResult[] = [
+export const searchResults = [
   {
     ticker: "BHP",
     sector: "Mining",

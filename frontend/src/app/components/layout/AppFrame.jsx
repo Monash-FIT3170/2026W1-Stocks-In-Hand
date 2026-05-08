@@ -5,10 +5,6 @@ export function AppFrame({
   active,
   signedIn = false,
   children,
-}: {
-  active?: "home" | "announcements" | "watchlist"
-  signedIn?: boolean
-  children: React.ReactNode
 }) {
   return (
     <main className={styles.appShell}>

@@ -22,4 +22,4 @@ export const features = [
     body: "Zero hallucinations. Every insight includes direct links to official ASX announcements or verified data.",
     featured: true,
   },
-] as const
+]

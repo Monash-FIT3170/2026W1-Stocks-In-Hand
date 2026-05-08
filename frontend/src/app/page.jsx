@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { FormEvent, useState } from "react"
+import { useState } from "react"
 import { AppFrame } from "./components/layout/AppFrame"
 import { BadgeIcon, BellIcon, CalendarIcon, SearchIcon } from "./components/icons"
 import { features, popularStocks } from "./mock/landing"
@@ -12,7 +12,7 @@ const iconMap = { calendar: CalendarIcon, bell: BellIcon, badge: BadgeIcon }
 export default function Home() {
   const [query, setQuery] = useState("BHP")
 
-  function handleSearch(event: FormEvent<HTMLFormElement>) {
+  function handleSearch(event) {
     event.preventDefault()
     window.location.href = `/search?q=${encodeURIComponent(query.trim() || "BHP")}`
   }

@@ -1,9 +1,8 @@
 import Link from "next/link"
-import { announcementCards } from "../../mock/announcements"
 import styles from "../../page.module.css"
 import { BookmarkIcon } from "../icons"
 
-export function AnnouncementCard({ item }: { item: (typeof announcementCards)[number] }) {
+export function AnnouncementCard({ item }) {
   return (
     <article className={styles.announcementCard}>
       <div className={styles.cardTopLine}>

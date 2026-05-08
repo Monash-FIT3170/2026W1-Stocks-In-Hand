@@ -1,7 +1,7 @@
 import Link from "next/link"
 import styles from "../../page.module.css"
 
-export function BriefTabs({ active }: { active: "summary" | "news" | "deep" }) {
+export function BriefTabs({ active }) {
   return (
     <div className={styles.tabBar}>
       <Link className={active === "summary" ? styles.activeTab : styles.tabButton} href="/ticker/BHP">Summary</Link>

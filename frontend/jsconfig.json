@@ -5,9 +5,7 @@
       "dom",
       "esnext"
     ],
-    "allowJs": true,
     "skipLibCheck": true,
-    "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",
@@ -15,7 +13,6 @@
     "jsx": "preserve",
     "incremental": true,
     "resolveJsonModule": true,
-    "isolatedModules": true,
     "plugins": [
       {
         "name": "next"
@@ -23,10 +20,8 @@
     ]
   },
   "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts"
+    "**/*.js",
+    "**/*.jsx"
   ],
   "exclude": [
     "node_modules"

@@ -5,10 +5,6 @@ export function AuthField({
   label,
   placeholder,
   password = false,
-}: {
-  label: string
-  placeholder: string
-  password?: boolean
 }) {
   return (
     <label className={styles.field}>
