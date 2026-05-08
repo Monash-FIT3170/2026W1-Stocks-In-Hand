@@ -7,25 +7,25 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database.base import Base
-from app.models.user import User
+from app.models.result import Result
 
 
-def test_database_can_create_table_insert_and_read_user(tmp_path):
+def test_database_can_create_table_insert_and_read_result(tmp_path):
     database_url = f"sqlite:///{tmp_path / 'test.db'}"
     engine = create_engine(database_url)
     TestingSessionLocal = sessionmaker(bind=engine)
 
-    Base.metadata.create_all(bind=engine, tables=[User.__table__])
+    Base.metadata.create_all(bind=engine, tables=[Result.__table__])
 
     with TestingSessionLocal() as session:
-        user = User(name="Test User", email="test@example.com")
-        session.add(user)
+        result = Result(text="ASX headline", label="positive", score=0.95)
+        session.add(result)
         session.commit()
 
     with TestingSessionLocal() as session:
-        saved_user = session.execute(
-            select(User).where(User.email == "test@example.com")
+        saved_result = session.execute(
+            select(Result).where(Result.text == "ASX headline")
         ).scalar_one()
 
-    assert saved_user.name == "Test User"
-    assert saved_user.email == "test@example.com"
+    assert saved_result.label == "positive"
+    assert saved_result.score == 0.95

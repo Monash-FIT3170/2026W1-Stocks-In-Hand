@@ -1,12 +1,11 @@
-import os
+"""
+main python file which creates database connection, connects to finBERT, and runs a FastAPI server
+"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Float
-from sqlalchemy.orm import declarative_base, sessionmaker
 from transformers import pipeline
 from playwright.async_api import async_playwright
-from fastapi import FastAPI
 from app.api.routes import (
     investor,
     ticker,
@@ -29,6 +28,8 @@ from app.api.routes import (
     information_platform,
     topic
 )
+from app.database.connection import SessionLocal
+from app.models.result import Result
 
 app = FastAPI(title="Spike API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -66,27 +67,24 @@ def root():
     }
 
 @app.get("/health")
-def health_check():
+def health() -> dict:
+    """Returns the health status of the server"""
     return {"status": "ok"}
-# --- DB ---
-engine = create_engine(os.environ["DATABASE_URL"])
-Session = sessionmaker(bind=engine)
-Base = declarative_base()
-
-class Result(Base):
-    __tablename__ = "results"
-    id    = Column(Integer, primary_key=True)
-    text  = Column(String)
-    label = Column(String)
-    score = Column(Float)
-
-Base.metadata.create_all(engine)
 
 # --- HuggingFace: FinBERT ---
-sentiment = pipeline("text-classification", model="ProsusAI/finbert")
+sentiment = pipeline("text-classification", model="/app/finbert")
 
 # --- Playwright scraper ---
 async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
+    """
+    Scrapes Yahoo for headlines relating to a ticker
+
+    Keyword arguments:
+    ticker -- a string representing the ticker of a company
+
+    Returns:
+    a list of 10 headlines (strings) relating to the ticker that was input
+    """
     url = f"https://finance.yahoo.com/quote/{ticker}/news/"
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -100,24 +98,26 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
 
         # grab all h3 text on the page, filter out short/nav ones
         items = await page.query_selector_all("h3")
-        headlines = []
+        headline_list = []
         for item in items[:30]:
             text = (await item.inner_text()).strip()
             if len(text) > 20:  # filter out nav labels like "Trending Tickers"
-                headlines.append(text)
+                headline_list.append(text)
 
         await browser.close()
-    return headlines[:10]
+    return headline_list[:10]
 
 # --- API ---
 
 class AnalyseRequest(BaseModel):
+    """Class representing the structure of requests made to the analyse API"""
     text: str
 
 @app.post("/analyse")
-def analyse(body: AnalyseRequest):
+def analyse(body: AnalyseRequest) -> dict:
+    """Analyses the sentiment of a headline passed in as an AnalyseRequest"""
     out = sentiment(body.text[:512])[0]
-    with Session() as db:
+    with SessionLocal() as db:
         row = Result(text=body.text, label=out["label"].lower(), score=round(out["score"], 4))
         db.add(row)
         db.commit()
@@ -125,11 +125,13 @@ def analyse(body: AnalyseRequest):
     return {"id": row.id, "label": row.label, "score": row.score}
 
 @app.get("/results")
-def results():
-    with Session() as db:
+def results() -> list[dict]:
+    """Returns a list of sentiment analysis results"""
+    with SessionLocal() as db:
         rows = db.query(Result).order_by(Result.id.desc()).limit(10).all()
     return [{"id": r.id, "text": r.text[:80], "label": r.label, "score": r.score} for r in rows]
 
 @app.get("/headlines")
-async def headlines():
+async def headlines() -> list[str]:
+    """Returns a list of headlines from Yahoo for the default ticker"""
     return await scrape_yahoo_headlines()

@@ -11,26 +11,36 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      target: production
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app 
+    command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: "curl localhost:8000/health"
+      interval: 10s
+      timeout: 1s
+      retries: 3
+      start_period: 10s
+    volumes:
+      - ./backend/_data:/data
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      target: dev
     ports:
       - "3000:3000"
     volumes:
       - ./frontend:/app          # mount your local files into the container
       - /app/node_modules        # but keep node_modules from the container, not your machine
-    command: npm run dev         # override the CMD from the Dockerfile
+    command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
     depends_on:
-      - backend
-volumes:
-  postgres_data:
+      backend:
+        condition: service_healthy

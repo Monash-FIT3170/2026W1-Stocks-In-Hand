@@ -22,6 +22,7 @@ from app.models import report
 from app.models import scrape_run
 from app.models import watchlist_ticker
 from app.models import watchlist
+from app.models import result
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool

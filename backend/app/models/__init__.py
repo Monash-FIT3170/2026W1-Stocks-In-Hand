@@ -18,3 +18,4 @@ from .report_claim import ReportClaim
 from .scrape_run import ScrapeRun
 from .watchlist import Watchlist
 from .watchlist_ticker import WatchlistTicker
+from .result import Result
