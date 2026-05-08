@@ -140,7 +140,7 @@ class BHPScraper(BaseScraper):
 
         return None
     
-    async def _download_via_browser(self, context: BrowserContext, announcement: Announcement) -> Path:
+    async def _download_via_browser(self, context, announcement: Announcement) -> Path:
         date_str = announcement.date.strftime("%Y-%m-%d")
         clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
         filename = f"{date_str}_{clean_title}.pdf"
