@@ -1,3 +1,7 @@
+// Placeholder watchlist and alert data.
+// Later this should come from the signed-in user's watchlist and notification history.
+// color maps to CSS classes used by stock avatars/status dots; alerts is just a badge
+// count for the mock card and does not represent a real notification model yet.
 export const watchlistStocks = [
   { ticker: "BHP", name: "BHP Group", status: "Bullish Sentiment", color: "green", alerts: 2 },
   { ticker: "CSL", name: "CSL Limited", status: "Mixed Sentiment", color: "orange", alerts: 0 },

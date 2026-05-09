@@ -1,6 +1,9 @@
 import styles from "../../page.module.css"
 import { ChartIcon } from "../icons"
 
+// Ticker sidebar numbers.
+// These values are static placeholders; once the company profile endpoint exists,
+// pass revenue/report date as props or replace this with a data-aware container.
 export function KeyNumbers() {
   return (
     <section className={styles.sideCard}>

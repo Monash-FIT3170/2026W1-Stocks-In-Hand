@@ -5,6 +5,10 @@ import { TickerHeader } from "../../../components/ticker/TickerHeader"
 import { timelineItems } from "../../../mock/ticker"
 import styles from "../../../page.module.css"
 
+// Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
+// The filter chips are static visual controls for now. Timeline entries come from
+// mock/ticker.js and can later be replaced by company event history data, keeping
+// this page responsible for the timeline layout and interaction state.
 export default function TickerDeepDiveRoute() {
   return (
     <AppFrame active="home">

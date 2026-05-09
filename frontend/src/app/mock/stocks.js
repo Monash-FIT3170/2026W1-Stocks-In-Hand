@@ -1,3 +1,7 @@
+// Placeholder search results for the Figma prototype.
+// The search page currently renders these for any query. The accent value maps to
+// CSS classes in page.module.css, so keep it to supported visual tones unless you
+// also add the corresponding card color style.
 export const searchResults = [
   {
     ticker: "BHP",

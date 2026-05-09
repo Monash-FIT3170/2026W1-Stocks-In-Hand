@@ -1,3 +1,9 @@
+/*
+  Shared page controls and card primitives.
+  This module holds screen-level styles for the prototype routes. Keep global shell
+  concerns such as design tokens, nav, and footer in components/layout/AppFrame.module.css.
+  If you add a new page, prefer reusing these primitives before creating new one-off classes.
+*/
 .pageSearchBar,
 .popularRow a,
 .primaryAction,
@@ -66,6 +72,12 @@
   margin-bottom: 48px;
 }
 
+/*
+  Landing page.
+  Covers the hero, large search bar, popular ticker row, and three feature cards.
+  Content changes should usually happen in mock/landing.js; spacing/visual changes
+  for the landing experience belong in this section.
+*/
 .homePage,
 .contentPage {
   margin: 0 auto;
@@ -244,6 +256,12 @@
   padding-top: 48px;
 }
 
+/*
+  Search results and shared page headings.
+  contentPage is reused by most non-home screens so they share the same max width
+  and responsive padding. Be careful when changing heading selectors here because
+  search, announcements, watchlist, and ticker pages all inherit these rules.
+*/
 .searchHeader,
 .announcementsHero,
 .watchlistHero {
@@ -376,6 +394,12 @@
   color: #9a5d00;
 }
 
+/*
+  Announcements feed.
+  Includes the two-column announcements layout, reusable AnnouncementCard styles,
+  filter chips, and sidebar cards used on /announcements. Some sidebar panel styles
+  are intentionally shared with ticker brief pages for visual consistency.
+*/
 .announcementsHero,
 .watchlistHero,
 .tickerHeader {
@@ -484,6 +508,12 @@
   color: #1d1d1d;
 }
 
+/*
+  Ticker brief pages.
+  Shared styles for /ticker/[symbol], /ticker/[symbol]/news, and
+  /ticker/[symbol]/deep-dive live here: header, price cards, tabs, story/sentiment
+  cards, and the reusable right sidebar. Route-specific JSX decides which pieces appear.
+*/
 .briefMain {
   min-width: 0;
 }
@@ -709,6 +739,12 @@
   padding: 14px 16px;
 }
 
+/*
+  Deep dive timeline.
+  Styles the filter chips and vertical event chronology. Timeline item content comes
+  from mock/ticker.js; this section only controls the visual rhythm, dots, cards,
+  and metric blocks.
+*/
 .filterTabs {
   display: flex;
   flex-wrap: wrap;
@@ -795,6 +831,12 @@
   padding: 14px;
 }
 
+/*
+  Watchlist dashboard.
+  Contains the signed-in portfolio layout: watchlist cards, empty add card, alert
+  feed, and timeline dots. These controls are static for the prototype, so future
+  add/remove/clear/history behavior can be wired without redesigning the cards.
+*/
 .watchlistHero h1,
 .announcementsHero h1 {
   color: var(--green);
@@ -1010,6 +1052,12 @@
   width: 100%;
 }
 
+/*
+  Auth screens.
+  Shared styles for sign-in and sign-up. These are visual-only forms; validation,
+  OAuth redirects, and session handling should be added in the route/component logic,
+  not by encoding behavior into CSS.
+*/
 .authPage {
   background:
     radial-gradient(circle at 18% 36%, rgba(255, 224, 190, 0.45), transparent 25%),
@@ -1102,6 +1150,12 @@
   padding: 12px 18px;
 }
 
+/*
+  Responsive layout adjustments.
+  These breakpoints keep the Figma-inspired desktop layout usable on tablet and
+  mobile. New page sections should generally collapse to one column at 980px and
+  tighten spacing/card padding at 680px to match the existing behavior.
+*/
 @media (max-width: 980px) {
   .featureGrid,
   .twoColumn,

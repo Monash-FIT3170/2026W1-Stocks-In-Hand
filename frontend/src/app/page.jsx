@@ -7,6 +7,11 @@ import { BadgeIcon, BellIcon, CalendarIcon, SearchIcon } from "./components/icon
 import { features, popularStocks } from "./mock/landing"
 import styles from "./page.module.css"
 
+// Landing page route for "/".
+// This file should stay focused on the first-screen marketing/search experience:
+// hero copy, the landing search form, popular ticker links, and feature-card layout.
+// To change the displayed ticker pills or feature-card text, edit mock/landing.js instead
+// of changing the JSX here. Shared navigation/footer changes belong in AppFrame.jsx.
 const iconMap = { calendar: CalendarIcon, bell: BellIcon, badge: BadgeIcon }
 
 export default function Home() {
@@ -14,6 +19,10 @@ export default function Home() {
 
   function handleSearch(event) {
     event.preventDefault()
+    // Prototype-only navigation.
+    // Keeping the query in the URL makes the static mock easy to demo and share.
+    // When real search exists, this is the main place to replace with Next router
+    // navigation, debounced suggestions, or an API-backed search flow.
     window.location.href = `/search?q=${encodeURIComponent(query.trim() || "BHP")}`
   }
 

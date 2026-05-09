@@ -1,6 +1,9 @@
 import styles from "../../page.module.css"
 import { EyeIcon } from "../icons"
 
+// Visual-only field component for the auth prototype screens.
+// This deliberately avoids validation, controlled form state, and password reveal
+// behavior. Add those pieces only when the auth implementation is being connected.
 export function AuthField({
   label,
   placeholder,

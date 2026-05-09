@@ -6,6 +6,10 @@ import { TickerHeader } from "../../../components/ticker/TickerHeader"
 import { announcementCards } from "../../../mock/announcements"
 import styles from "../../../page.module.css"
 
+// Ticker brief news tab for "/ticker/[symbol]/news".
+// This reuses AnnouncementCard from the ASX announcements feed so the team only has
+// one announcement-card design to maintain. When the backend is added, filter the
+// announcement data by the active ticker symbol and pass those records into the card.
 export default function TickerNewsRoute() {
   return (
     <AppFrame active="home">

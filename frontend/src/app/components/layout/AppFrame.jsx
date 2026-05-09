@@ -1,6 +1,11 @@
 import Link from "next/link"
 import styles from "./AppFrame.module.css"
 
+// Shared app chrome for every prototype page.
+// Use this component when a page should have the standard StonksInHand nav and footer.
+// The active prop controls which nav item is underlined, and signedIn toggles the
+// watchlist/logout variant shown in the Figma prototype. Avoid placing page-specific
+// layout here, because changing this file affects every frontend route.
 export function AppFrame({
   active,
   signedIn = false,

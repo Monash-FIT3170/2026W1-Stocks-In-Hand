@@ -7,12 +7,19 @@ import { SearchIcon } from "../components/icons"
 import { searchResults } from "../mock/stocks"
 import styles from "../page.module.css"
 
+// Search results route for "/search?q=BHP".
+// This page owns the results-screen composition: the compact search bar, heading,
+// and stacked result cards. The actual placeholder companies live in mock/stocks.js.
+// When a real search API is added, replace searchResults with fetched data while
+// keeping the card markup/styles here as the presentation layer.
 export default function SearchPage({ searchParams }) {
   const query = searchParams?.q || "BHP"
   const [value, setValue] = useState(query)
 
   function handleSearch(event) {
     event.preventDefault()
+    // Keeps the prototype URL shareable while the real search service is not connected.
+    // This mirrors how the eventual route can behave once query params drive API fetches.
     window.location.href = `/search?q=${encodeURIComponent(value.trim() || "BHP")}`
   }
 

@@ -3,6 +3,11 @@ import { EyeIcon, PlusIcon } from "../components/icons"
 import { watchAlerts, watchlistStocks } from "../mock/watchlist"
 import styles from "../page.module.css"
 
+// Watchlist route for "/watchlist".
+// Surface-level mock only: OAuth, persistence, notification settings, and add/remove
+// flows are intentionally not wired. This page currently demonstrates the target
+// layout for a signed-in user's portfolio, so future work can replace watchlistStocks
+// and watchAlerts with user-specific data without changing the visual structure.
 export default function WatchlistRoute() {
   return (
     <AppFrame active="watchlist" signedIn>

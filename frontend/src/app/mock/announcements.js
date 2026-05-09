@@ -1,3 +1,8 @@
+// Placeholder announcement data for the prototype.
+// Keep the shape close to what the UI needs rather than what an API might return:
+// ticker/tag/time/title plus the three "plain English" explanation fields.
+// When the backend exists, transform API records into this shape before passing
+// them into AnnouncementCard so the presentation component stays simple.
 export const announcementCards = [
   {
     ticker: "BHP",

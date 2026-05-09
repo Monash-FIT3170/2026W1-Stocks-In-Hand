@@ -3,6 +3,10 @@ import { AuthField } from "../components/auth/AuthField"
 import { AppFrame } from "../components/layout/AppFrame"
 import styles from "../page.module.css"
 
+// Static sign-up screen from the Figma prototype.
+// Keep validation, password policy, account creation, and onboarding persistence out
+// of this mock until the auth/database story is decided. The current link to /watchlist
+// exists only so the prototype can be clicked through during demos.
 export default function SignUpRoute() {
   return (
     <AppFrame>

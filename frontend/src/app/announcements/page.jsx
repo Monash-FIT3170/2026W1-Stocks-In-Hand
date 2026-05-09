@@ -5,6 +5,11 @@ import { EmergingThemes } from "../components/ticker/EmergingThemes"
 import { announcementCards } from "../mock/announcements"
 import styles from "../page.module.css"
 
+// Announcements route for "/announcements".
+// This file is intentionally a composition layer: it decides which feed cards and
+// sidebar modules appear together, while AnnouncementCard, TrendingStocks, and
+// EmergingThemes own the reusable pieces. Filtering buttons are visual only for now;
+// future filter state/API calls should be added here or extracted into a small client component.
 export default function AnnouncementsRoute() {
   return (
     <AppFrame active="announcements">

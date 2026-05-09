@@ -1,3 +1,7 @@
+// Placeholder ticker brief data shared by Summary, News, and Deep Dive screens.
+// These values are intentionally static until company/event APIs are introduced.
+// marketClaims drives the right sidebar, themes drives the themes panels, and
+// timelineItems drives the Deep Dive chronology.
 export const marketClaims = {
   confirmed: [
     "Jansen Potash Stage 2 investment approved for $4.9B.",

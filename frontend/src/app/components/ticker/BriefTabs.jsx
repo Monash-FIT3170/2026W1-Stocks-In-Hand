@@ -1,6 +1,10 @@
 import Link from "next/link"
 import styles from "../../page.module.css"
 
+// Tab navigation for the ticker brief pages.
+// The active prop is controlled by each route file. Hrefs are hard-coded to BHP for
+// the prototype; once route params are used, pass the current symbol into this component
+// and build the links from that symbol instead.
 export function BriefTabs({ active }) {
   return (
     <div className={styles.tabBar}>

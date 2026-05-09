@@ -1,3 +1,9 @@
+/*
+  Shared design tokens for the prototype shell.
+  AppFrame wraps every route, so these CSS custom properties are available to the
+  page CSS module through the appShell ancestor. If the team wants to adjust the
+  overall palette, shadows, or typography colors, start here before editing pages.
+*/
 .appShell {
   --bg: #f8f9fb;
   --panel: #f1f3f5;
@@ -43,6 +49,12 @@
   stroke-width: 2;
 }
 
+/*
+  Sticky top navigation.
+  AppFrame.jsx owns which links render; this section only controls layout, active
+  underline treatment, and the sign-in/logout pill. Keep it shared so page teams do
+  not each create slightly different nav bars.
+*/
 .topNav {
   background: rgba(255, 255, 255, 0.88);
   border-bottom: 1px solid var(--line);
@@ -108,6 +120,11 @@
   padding: 10px 24px;
 }
 
+/*
+  Shared footer.
+  Footer content is static placeholder copy for now. When real About/Terms/Data
+  Sources pages exist, update the hrefs in AppFrame.jsx and keep this styling shared.
+*/
 .footer {
   align-items: flex-end;
   border-top: 1px solid var(--line);
@@ -139,6 +156,11 @@
   gap: 32px;
 }
 
+/*
+  Shell responsiveness.
+  The nav becomes two rows on narrower screens and the footer stacks on mobile.
+  Page-specific responsive rules belong in page.module.css, not here.
+*/
 @media (max-width: 980px) {
   .navInner {
     grid-template-columns: 1fr auto;

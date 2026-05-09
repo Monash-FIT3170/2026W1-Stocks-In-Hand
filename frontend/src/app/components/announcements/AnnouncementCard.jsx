@@ -2,6 +2,11 @@ import Link from "next/link"
 import styles from "../../page.module.css"
 import { BookmarkIcon } from "../icons"
 
+// Shared announcement summary card.
+// Used by both the global announcements feed and the ticker news tab. Keep the data
+// shape simple here: each card expects an item with ticker, tag, time, title, about,
+// changed, and matters fields. The real ASX filing URL can replace the placeholder
+// "View original ASX filing" href later.
 export function AnnouncementCard({ item }) {
   return (
     <article className={styles.announcementCard}>

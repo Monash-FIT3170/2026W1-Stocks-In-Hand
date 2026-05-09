@@ -1,6 +1,10 @@
 import styles from "../../page.module.css"
 import { MetricCard } from "../ui/MetricCard"
 
+// Shared header for ticker brief pages.
+// Displays the company identity, sentiment timestamp, and price cards used across
+// all ticker tabs. The values are placeholders until company profile and market data
+// are available; keep the layout here and move data fetching up into the route later.
 export function TickerHeader() {
   return (
     <div className={styles.tickerHeader}>
