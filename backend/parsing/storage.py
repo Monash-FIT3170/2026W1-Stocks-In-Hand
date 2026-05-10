@@ -24,6 +24,41 @@ if TYPE_CHECKING:
     from scrapers.base import Announcement
     from classifier import ReportCategory
 
+def compute_content_hash(text: str) -> str:
+    """Generate SHA256 hash for deduplication"""
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+def get_or_create_ticker(db, ticker_symbol: str) -> Ticker:
+    """Get existing ticker or create new one"""
+    ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
+    
+    if not ticker:
+        from app.schemas.ticker import TickerCreate
+        ticker_data = TickerCreate(
+            symbol=ticker_symbol,
+            company_name=ticker_symbol,
+            exchange="ASX"
+        )
+        ticker = ticker_crud.create_ticker(db, ticker_data)
+        print(f"[STORAGE] Created new ticker: {ticker_symbol}")
+    
+    return ticker
+
+def get_or_create_platform(db, platform_name: str = "ASX") -> InformationPlatform:
+    """Get existing platform or create new one"""
+    platform = platform_crud.get_platform_by_name(db, platform_name)
+    
+    if not platform:
+        from app.schemas.information_platform import InformationPlatformCreate
+        platform_data = InformationPlatformCreate(
+            name=platform_name,
+            platform_type="asx_announcements",
+            scrape_enabled=True
+        )
+        platform = platform_crud.create_platform(db, platform_data)
+        print(f"[STORAGE] Created new platform: {platform_name}")
+    
+    return platform
 
 def store(
     announcement: "Announcement",
