@@ -50,7 +50,7 @@ def process_announcement(announcement: Announcement, groq_client: Groq) -> Proce
         else {}
     )
 
-    store(announcement, category, extracted_data)
+    store(announcement, category, extracted_data, text)
 
     return ProcessedReport(
         announcement=announcement,

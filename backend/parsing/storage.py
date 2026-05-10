@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
+import traceback
 from typing import TYPE_CHECKING
 
 # Make app modules importable from parsing directory
@@ -64,6 +65,56 @@ def store(
     announcement: "Announcement",
     category: "type[ReportCategory] | None",
     extracted_data: dict,
+    raw_text: str,
 ) -> None:
-    # TODO: implement database storage based on report category
-    pass
+    """
+    Store announcement with raw text and metadata to database.
+    
+    Args:
+        announcement: The scraped announcement with metadata
+        category: The classified report category (if any)
+        extracted_data: Structured data extracted from the announcement
+        raw_text: The extracted text content (passed from pipeline)
+    """
+    print(f"[STORAGE] Storing: {announcement.title[:50]}... ({len(raw_text)} chars)")
+
+    db = SessionLocal()
+    try:
+        ticker = get_or_create_ticker(db, announcement.ticker)
+        platform = get_or_create_platform(db, "ASX")
+        content_hash = compute_content_hash(raw_text)
+
+        existing = db.query(Artifact).filter_by(content_hash=content_hash).first()
+        if existing:
+            print(f"[STORAGE] Duplicate found for: {announcement.title[:50]}... Skipping storage.")
+            return
+        
+        metadata = {
+            "pdf_url": announcement.pdf_url,
+            "source_url": announcement.source_url,
+            "category": category.__name__ if category else "UNKNOWN",
+            "extracted_data": extracted_data,
+            **announcement.metadata
+        }
+
+        artifact_data = ArtifactCreate(
+            ticker_id=ticker.id,
+            platform_id=platform.id,
+            artifact_type="asx_announcement",
+            title=announcement.title,
+            url=announcement.source_url,
+            raw_text=raw_text,
+            artifact_metadata=metadata,
+            published_at=announcement.date,
+            content_hash=content_hash
+        )
+
+        artifact = artifact_crud.create_artifact(db, artifact_data)
+        print(f"[STORAGE] Stored artifact (ID: {artifact.id}): {announcement.title[:50]}...")
+
+    except Exception as e:
+        db.rollback()
+        print(f"[STORAGE] Error storing artifact: {e}")
+        traceback.print_exc()
+    finally:
+        db.close()
