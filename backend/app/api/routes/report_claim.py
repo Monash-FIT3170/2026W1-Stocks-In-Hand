@@ -26,4 +26,5 @@ def get_claims_by_report(report_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No claims found for this report")
     return claims
 
-@router.delete("/{report_id}/{claim_id}")
+# @router.delete("/{report_id}/{claim_id}")
+# TODO: Implement delete endpoint
