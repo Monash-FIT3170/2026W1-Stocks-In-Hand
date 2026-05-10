@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy import Column, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.database.base import Base
@@ -18,3 +19,15 @@ class Claim(Base):
     confidence_score = Column(Numeric, nullable=True)
     generated_by_model = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    ticker = relationship("Ticker", backref="claims")
+    report_claims = relationship(
+        "ReportClaim",
+        back_populates="claim",
+        cascade="all, delete-orphan",
+    )
+    claim_sources = relationship(
+        "ClaimSource",
+        back_populates="claim",
+        cascade="all, delete-orphan",
+    )

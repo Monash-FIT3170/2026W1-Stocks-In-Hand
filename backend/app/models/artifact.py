@@ -31,3 +31,4 @@ class Artifact(Base):
     ticker = relationship("Ticker", backref="artifacts")
     platform = relationship("InformationPlatform", backref="artifacts")
     duplicate_of = relationship("Artifact", remote_side="Artifact.id", foreign_keys=[duplicate_of_id])
+    claim_sources = relationship("ClaimSource", back_populates="artifact")
