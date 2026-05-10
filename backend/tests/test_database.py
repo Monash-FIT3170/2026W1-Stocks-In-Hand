@@ -278,3 +278,53 @@ def test_database_can_create_table_insert_and_read_result(tmp_path: Path) -> Non
 
     assert saved_result.label == "positive"
     assert saved_result.score == 0.95
+
+def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
+    """Verify a Reddit post artifact can be written and read back.
+
+    Mirrors how POST /reddit/scrape stores posts: an Artifact with
+    artifact_type='reddit_post', a content_hash, and artifact_metadata JSONB.
+    """
+    from app.models.information_platform import InformationPlatform
+    from datetime import datetime, timezone
+
+    platform = InformationPlatform(
+        name="Reddit-Test",
+        platform_type="social",
+        base_url="https://reddit.com",
+        scrape_enabled=True,
+    )
+    db_session.add(platform)
+    db_session.flush()
+
+    artifact = Artifact(
+        platform_id=platform.id,
+        artifact_type="reddit_post",
+        title="Test ASX post",
+        url="https://reddit.com/r/ASX/comments/test",
+        author="testuser",
+        raw_text="Some post body",
+        published_at=datetime(2026, 5, 10, tzinfo=timezone.utc),
+        content_hash=f"reddit-test-{uuid.uuid4()}",
+        artifact_metadata={
+            "reddit_id": "test123",
+            "score": 42,
+            "upvote_ratio": 0.95,
+            "num_comments": 5,
+            "flair": "Discussion",
+            "is_self": True,
+            "external_url": None,
+            "subreddit": "ASX",
+        },
+    )
+    db_session.add(artifact)
+    db_session.commit()
+
+    saved = db_session.execute(
+        select(Artifact).where(Artifact.id == artifact.id)
+    ).scalar_one()
+
+    assert saved.artifact_type == "reddit_post"
+    assert saved.author == "testuser"
+    assert saved.artifact_metadata["score"] == 42
+    assert saved.artifact_metadata["subreddit"] == "ASX"
