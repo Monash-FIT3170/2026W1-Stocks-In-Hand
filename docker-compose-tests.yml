@@ -20,7 +20,7 @@ services:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
       - "8000:8000"
-    command: ["sh", "-c", "python -m alembic upgrade head && sh tests.sh"]
+    command: ["sh", "-c", "python -m alembic upgrade head && bash tests.sh"]
     depends_on:
       db:
         condition: service_healthy
