@@ -13,5 +13,7 @@ class Settings:
         "DATABASE_URL",
         "postgresql://user:password@localhost:5432/spike"
     )
+    REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
+    REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
 
 settings = Settings()
