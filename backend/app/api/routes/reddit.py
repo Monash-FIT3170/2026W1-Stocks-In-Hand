@@ -1,7 +1,14 @@
 import praw
-from fastapi import APIRouter
+import hashlib
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.database.connection import get_db
 from app.schemas.reddit import RedditPostResponse
+from app.schemas.artifact import ArtifactCreate
+from app.crud import artifact as artifact_crud
+from app.crud import information_platform as platform_crud
 
 router = APIRouter(prefix="/reddit", tags=["reddit"])
 
@@ -33,6 +40,47 @@ def _fetch_posts(subreddit_name: str, limit: int) -> list[dict]:
         })
     return posts
 
+def _content_hash(post_id: str) -> str:
+    return hashlib.sha256(f"reddit:{post_id}".encode()).hexdigest()
+
 @router.get("/", response_model=list[RedditPostResponse])
 def list_reddit_posts(subreddit: str = "ASX", limit: int = 10):
     return _fetch_posts(subreddit, limit)
+
+@router.post("/scrape")
+def scrape_and_store(subreddit: str = "ASX", limit: int = 10, db: Session = Depends(get_db)):
+    platform = platform_crud.get_platform_by_name(db, name="Reddit")
+    if not platform:
+        raise HTTPException(
+            status_code=404,
+            detail="Seed the Reddit platform first via POST /information-platforms/"
+        )
+
+    saved, skipped = 0, 0
+    for post in _fetch_posts(subreddit, limit):
+        chash = _content_hash(post["id"])
+        if artifact_crud.get_artifact_by_hash(db, chash):
+            skipped += 1
+            continue
+        artifact_crud.create_artifact(db=db, artifact=ArtifactCreate(
+            platform_id=platform.id,
+            artifact_type="reddit_post",
+            title=post["title"],
+            url=post["url"],
+            author=post["author"],
+            raw_text=post["body"],
+            published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc),
+            content_hash=chash,
+            artifact_metadata={
+                "reddit_id":    post["id"],
+                "score":        post["score"],
+                "upvote_ratio": post["upvote_ratio"],
+                "num_comments": post["num_comments"],
+                "flair":        post["flair"],
+                "is_self":      post["is_self"],
+                "external_url": post["external_url"],
+                "subreddit":    post["subreddit"],
+            },
+        ))
+        saved += 1
+    return {"saved": saved, "skipped_duplicates": skipped}
