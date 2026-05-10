@@ -11,11 +11,11 @@ router = APIRouter(prefix="/llm-runs", tags=["llm-runs"])
 def create_llm_run(llm_run: LLMRunCreate, db: Session = Depends(get_db)):
     return crud.create_llm_run(db=db, llm_run=llm_run)
 
-@router.get("/artifact/{artifact_id}", response_model=list[LLMRunResponse])
-def get_llm_runs_by_artifact(artifact_id: UUID, db: Session = Depends(get_db)):
-    runs = crud.get_llm_runs_by_artifact(db, artifact_id=artifact_id)
+@router.get("/task/{task_type}", response_model=list[LLMRunResponse])
+def get_llm_runs_by_task_type(task_type: str, db: Session = Depends(get_db)):
+    runs = crud.get_llm_runs_by_task_type(db, task_type=task_type)
     if not runs:
-        raise HTTPException(status_code=404, detail="No LLM runs found for this artifact")
+        raise HTTPException(status_code=404, detail="No LLM runs found for this task type")
     return runs
 
 @router.get("/{llm_run_id}", response_model=LLMRunResponse)

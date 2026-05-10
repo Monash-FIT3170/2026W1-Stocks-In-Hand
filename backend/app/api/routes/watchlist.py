@@ -34,4 +34,8 @@ def update_watchlist(watchlist_id: UUID, data: dict, db: Session = Depends(get_d
 
 @router.delete("/{watchlist_id}")
 def delete_watchlist(watchlist_id: UUID, db: Session = Depends(get_db)):
-    watchlist = crud.get_watch
+    watchlist = crud.get_watchlist(db, watchlist_id=watchlist_id)
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    crud.delete_watchlist(db=db, watchlist_id=watchlist_id)
+    return {"message": "Watchlist deleted successfully"}

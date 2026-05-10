@@ -6,8 +6,8 @@ from app.schemas.llm_run import LLMRunCreate
 def get_llm_run(db: Session, llm_run_id: UUID):
     return db.query(LLMRun).filter(LLMRun.id == llm_run_id).first()
 
-def get_llm_runs_by_artifact(db: Session, artifact_id: UUID):
-    return db.query(LLMRun).filter(LLMRun.artifact_id == artifact_id).all()
+def get_llm_runs_by_task_type(db: Session, task_type: str):
+    return db.query(LLMRun).filter(LLMRun.task_type == task_type).all()
 
 def create_llm_run(db: Session, llm_run: LLMRunCreate):
     db_run = LLMRun(**llm_run.model_dump())
