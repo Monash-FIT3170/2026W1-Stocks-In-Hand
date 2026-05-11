@@ -152,5 +152,5 @@ class CBAScraper(BaseScraper):
 
     async def scrape(self) -> list[Announcement]:
         # Override scrape() to skip the base class fetch→download loop
-        # since ANZScraper handles both in a single browser session
+        # since CBAScraper handles both in a single browser session
         return await self.fetch_announcements()

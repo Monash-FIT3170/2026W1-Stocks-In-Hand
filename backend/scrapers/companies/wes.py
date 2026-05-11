@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
 
-from playwright.async_api import async_playwright, BrowserContext
+from playwright.async_api import async_playwright, Page
 
 from ..base import BaseScraper, Announcement
 
@@ -24,12 +24,33 @@ class WESScraper(BaseScraper):
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--headless=new",
+                ],
             )
-            context = await browser.new_context()
+
+            context = await browser.new_context(
+                accept_downloads=True,
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1366, "height": 768},
+                locale="en-AU",
+                ignore_https_errors=True,
+            )
+
             page = await context.new_page()
 
-            await page.goto(self.source_url, wait_until="networkidle")
+            await page.goto(
+                self.source_url,
+                wait_until="domcontentloaded",
+                timeout=60000,
+            )
+
             await page.wait_for_selector(
                 "article.asx-announce div.asx-results li",
                 timeout=15000,
@@ -38,6 +59,7 @@ class WESScraper(BaseScraper):
             rows = await page.query_selector_all(
                 "article.asx-announce div.asx-results li"
             )
+
             print(f"[WES] Found {len(rows)} announcement rows")
 
             for row in rows:
@@ -54,64 +76,66 @@ class WESScraper(BaseScraper):
                 if not date_str or not title or not href:
                     continue
 
+                try:
+                    parsed_date = datetime.strptime(date_str, "%d.%m.%y")
+                except ValueError:
+                    print(f"[WES] Could not parse date: {date_str}")
+                    continue
+
                 pdf_url = href if href.startswith("http") else urljoin(self.source_url, href)
 
-                announcements.append(
-                    Announcement(
-                        ticker=self.ticker,
-                        title=title,
-                        date=datetime.strptime(date_str, "%d.%m.%y"),
-                        pdf_url=pdf_url,
-                        source_url=self.source_url,
-                        metadata={"raw_href": href, "raw_date": date_str},
-                    )
+                ann = Announcement(
+                    ticker=self.ticker,
+                    title=title,
+                    date=parsed_date,
+                    pdf_url=pdf_url,
+                    source_url=self.source_url,
+                    metadata={"raw_href": href, "raw_date": date_str},
                 )
 
-            # Single listing page load, click each link and intercept the PDF request
-            for ann in announcements:
                 try:
-                    ann.local_path = await self._download_via_browser(context, ann)
+                    ann.local_path = await self._download_by_click(page, link, ann)
                 except Exception as e:
                     print(f"[WES] Failed to download '{ann.title}': {e}")
+
+                announcements.append(ann)
 
             await browser.close()
 
         return announcements
 
-    async def _download_via_browser(
-        self, context: BrowserContext, announcement: Announcement
+    async def _download_by_click(
+        self,
+        page: Page,
+        link,
+        announcement: Announcement,
     ) -> Path:
         date_str = announcement.date.strftime("%Y-%m-%d")
         clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
         filename = f"{date_str}_{clean_title}.pdf"
         dest = self.output_dir / filename
 
-        response = await context.request.get(
-            announcement.pdf_url,  # already has auth_token from the href
-            headers={"Referer": self.source_url},
-        )
+        print(f"[WES] Clicking document link: {announcement.title}")
 
-        if not response.ok:
-            raise Exception(f"HTTP {response.status} for {announcement.pdf_url}")
+        async with page.expect_download(timeout=120000) as download_info:
+            await link.click(modifiers=["Alt"])
 
-        body = await response.body()
-        if body[:4] != b"%PDF":
-            raise Exception(f"Response is not a PDF: {body[:50]}")
+        download = await download_info.value
+        await download.save_as(dest)
 
-        dest.write_bytes(body)
+        if not dest.exists() or dest.stat().st_size == 0:
+            raise Exception("Downloaded file is empty")
+
         print(f"[WES] Saved: {dest}")
         return dest
 
     async def download_pdf(self, announcement: Announcement) -> Path:
-        # download_pdf is called by BaseScraper.scrape() but for WES we
-        # handle downloading inside fetch_announcements to reuse the browser
-        # context. This method is a no-op fallback.
         if announcement.local_path:
             return announcement.local_path
+
         raise NotImplementedError(
-            "WES downloads are handled inside fetch_announcements via browser context"
+            "WES downloads are handled inside fetch_announcements via browser click"
         )
-    
 
     async def scrape(self) -> list[Announcement]:
         return await self.fetch_announcements()
