@@ -1,7 +1,6 @@
 # 2026W1-Stocks-In-Hand
 
 ## People
-hello
 * Arv Surana
 * Mahissh Pranav Surendhar Rajasudha
 * Christian Rogan
