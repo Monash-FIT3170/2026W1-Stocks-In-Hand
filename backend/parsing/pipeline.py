@@ -21,7 +21,8 @@ if str(_BACKEND_DIR) not in sys.path:
 from groq import Groq
 from pypdf import PdfReader
 
-from classifier import ReportCategory, classify
+from categories import ReportCategory
+from classifier import classify
 from storage import store
 from scrapers.base import Announcement
 
@@ -45,7 +46,7 @@ def process_announcement(announcement: Announcement, groq_client: Groq) -> Proce
     category, confidence, method = classify(announcement.title, text, groq_client)
 
     extracted_data = (
-        category.get_output(announcement.title, text, groq_client)
+        category.extract(announcement.title, text, groq_client)
         if category is not None
         else {}
     )
