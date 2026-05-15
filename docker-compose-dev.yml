@@ -11,6 +11,9 @@ services:
       retries: 5
 
   backend:
+    # Contains api key for groq usage
+    env_file:
+      - ./backend/.env
     build:
       context: ./backend
       target: production
@@ -30,6 +33,7 @@ services:
       start_period: 10s
     volumes:
       - ./backend/_data:/data
+      - ./output:/app/output
 
   frontend:
     build:
@@ -37,9 +41,6 @@ services:
       target: dev
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app          # mount your local files into the container
-      - /app/node_modules        # but keep node_modules from the container, not your machine
     command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
     depends_on:
       backend:
