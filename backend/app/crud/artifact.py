@@ -18,3 +18,10 @@ def create_artifact(db: Session, artifact: ArtifactCreate):
     db.commit()
     db.refresh(db_artifact)
     return db_artifact
+
+def get_artifact_by_hash(db: Session, content_hash: str):
+    return db.query(Artifact).filter(Artifact.content_hash == content_hash).first()
+
+def get_platform_by_name(db: Session, name: str):
+    from app.models.information_platform import InformationPlatform
+    return db.query(InformationPlatform).filter(InformationPlatform.name == name).first()
