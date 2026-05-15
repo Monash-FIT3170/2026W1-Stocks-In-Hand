@@ -7,6 +7,10 @@ from app.crud import artifact as crud
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
+@router.get("/", response_model=list[ArtifactResponse])
+def list_artifacts(limit: int = 200, offset: int = 0, db: Session = Depends(get_db)):
+    return crud.get_all_artifacts(db, limit=limit, offset=offset)
+
 @router.post("/", response_model=ArtifactResponse)
 def create_artifact(artifact: ArtifactCreate, db: Session = Depends(get_db)):
     return crud.create_artifact(db=db, artifact=artifact)
