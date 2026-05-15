@@ -11,6 +11,7 @@ class Artifact(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"), nullable=True)
     platform_id = Column(UUID(as_uuid=True), ForeignKey("information_platforms.id"), nullable=True)
+    source_type = Column(String, nullable=True)
     artifact_type = Column(String, nullable=False)
     title = Column(String, nullable=True)
     url = Column(String, nullable=True)
