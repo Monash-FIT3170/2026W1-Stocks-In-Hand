@@ -8,14 +8,6 @@ from app.crud import report_claim as crud
 router = APIRouter(prefix="/report-claims", tags=["report-claims"])
 
 @router.post("/", response_model=ReportClaimResponse)
-
-def get_report_claim(db, report_id, claim_id):
-    return db.query(ReportClaim).filter(
-        ReportClaim.report_id == report_id,
-        ReportClaim.claim_id == claim_id,
-    ).first()
-
-
 def create_report_claim(report_claim: ReportClaimCreate, db: Session = Depends(get_db)):
     return crud.create_report_claim(db=db, report_claim=report_claim)
 
@@ -26,5 +18,16 @@ def get_claims_by_report(report_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No claims found for this report")
     return claims
 
-# @router.delete("/{report_id}/{claim_id}")
-# TODO: Implement delete endpoint
+@router.get("/{report_id}/{claim_id}", response_model=ReportClaimResponse)
+def get_report_claim(report_id: UUID, claim_id: UUID, db: Session = Depends(get_db)):
+    report_claim = crud.get_report_claim(db, report_id=report_id, claim_id=claim_id)
+    if not report_claim:
+        raise HTTPException(status_code=404, detail="Report claim not found")
+    return report_claim
+
+@router.delete("/{report_id}/{claim_id}")
+def delete_report_claim(report_id: UUID, claim_id: UUID, db: Session = Depends(get_db)):
+    report_claim = crud.delete_report_claim(db, report_id=report_id, claim_id=claim_id)
+    if not report_claim:
+        raise HTTPException(status_code=404, detail="Report claim not found")
+    return {"message": "Report claim deleted successfully"}

@@ -10,7 +10,7 @@ from transformers import pipeline
 from playwright.async_api import async_playwright
 from pathlib import Path
 
-# Import from app structure (from INCOMING/main branch)
+# Import from app structure
 from app.api.routes import (
     investor,
     ticker,
@@ -31,18 +31,19 @@ from app.api.routes import (
     scrape_run,
     market_data,
     information_platform,
-    topic
+    topic,
+    reddit
 )
 from app.database.connection import SessionLocal
 from app.models.result import Result
 
-# Import scrapers (from CURRENT/your branch)
+# Import scrapers
 from scrapers.registry import scrape, available_tickers
 
 app = FastAPI(title="Spike API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Register all database routes (from INCOMING)
+# Register all database routes
 app.include_router(investor.router)
 app.include_router(ticker.router)
 app.include_router(watchlist.router)
@@ -63,6 +64,7 @@ app.include_router(scrape_run.router)
 app.include_router(market_data.router)
 app.include_router(information_platform.router)
 app.include_router(topic.router)
+app.include_router(reddit.router)
 
 OUTPUT_DIR = Path("/app/output")
 
