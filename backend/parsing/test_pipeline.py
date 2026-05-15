@@ -2,6 +2,8 @@
 Full pipeline integration test: scrape → classify/extract → store.
 
 Run in Docker (from spike/ directory):
+    docker compose up --build backend
+
     docker compose exec backend python parsing/test_pipeline.py
 
 Optionally pass a ticker (default: ANZ):
@@ -21,7 +23,6 @@ if str(_BACKEND_DIR) not in sys.path:
 import env
 env.load_env()
 
-from groq import Groq
 from scrapers.registry import scrape
 from pipeline import process_announcement
 
@@ -34,11 +35,9 @@ async def main() -> None:
     announcements = await scrape(TICKER, OUTPUT_DIR)
     print(f"      {len(announcements)} announcements downloaded\n")
 
-    client = Groq(api_key=os.environ["GROQ_API_KEY"])
-
     print("[2/3] Classifying, extracting, and storing...\n")
     for ann in announcements:
-        report = process_announcement(ann, client)
+        report = process_announcement(ann)
         category_name = report.category.name if report.category else "UNKNOWN"
         print(f"  {ann.title[:60]}")
         print(f"    category={category_name}  confidence={report.confidence:.2f}  method={report.method}")

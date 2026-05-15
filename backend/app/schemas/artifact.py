@@ -55,6 +55,8 @@ class ArtifactResponse(BaseModel):
     is_duplicate: bool
     duplicate_of_id: Optional[UUID]
     credibility_label: Optional[str]
+    artifact_metadata: Optional[dict[str, Any]] = None
+    raw_text: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

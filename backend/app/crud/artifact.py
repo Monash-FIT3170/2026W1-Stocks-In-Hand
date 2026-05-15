@@ -12,6 +12,9 @@ def get_artifacts_by_ticker(db: Session, ticker_id: UUID):
 def get_artifacts_by_platform(db: Session, platform_id: UUID):
     return db.query(Artifact).filter(Artifact.platform_id == platform_id).all()
 
+def get_all_artifacts(db: Session, limit: int = 200, offset: int = 0):
+    return db.query(Artifact).order_by(Artifact.published_at.desc()).offset(offset).limit(limit).all()
+
 def create_artifact(db: Session, artifact: ArtifactCreate):
     db_artifact = Artifact(**artifact.model_dump())
     db.add(db_artifact)

@@ -4,6 +4,7 @@ main python file which creates database connection, connects to finBERT, and run
 import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from transformers import pipeline
 from playwright.async_api import async_playwright
@@ -79,6 +80,10 @@ def root():
 def health() -> dict:
     """Returns the health status of the server"""
     return {"status": "ok"}
+
+@app.get("/viewer", response_class=HTMLResponse)
+def viewer():
+    return (Path(__file__).parent / "viewer.html").read_text(encoding="utf-8")
 
 # --- HuggingFace: FinBERT ---
 sentiment = pipeline("text-classification", model="/app/finbert")
