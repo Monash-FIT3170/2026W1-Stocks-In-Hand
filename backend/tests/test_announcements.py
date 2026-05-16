@@ -2,12 +2,17 @@
 
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.crud.announcement import _announcement_from_artifact, _sydney_day_bounds
+from app.crud.announcement import (
+    _announcement_from_artifact,
+    _sydney_date_end,
+    _sydney_date_start,
+    _sydney_day_bounds,
+)
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 
@@ -71,3 +76,11 @@ def test_sydney_day_bounds_match_melbourne_calendar_day() -> None:
 
     assert start.isoformat() == "2026-05-17T00:00:00+10:00"
     assert end.isoformat() == "2026-05-18T00:00:00+10:00"
+
+
+def test_custom_date_bounds_use_sydney_calendar_days() -> None:
+    start = _sydney_date_start(date(2026, 5, 1))
+    end = _sydney_date_end(date(2026, 5, 16))
+
+    assert start.isoformat() == "2026-05-01T00:00:00+10:00"
+    assert end.isoformat() == "2026-05-17T00:00:00+10:00"
