@@ -37,6 +37,40 @@ def get_recent_compiled_artifacts(
         .all()
     )
 
+def build_recent_artifact_chunk(
+    db: Session,
+    days: int = 30,
+    limit: int = 200,
+    offset: int = 0,
+):
+    artifacts = get_recent_compiled_artifacts(
+        db=db,
+        days=days,
+        limit=limit,
+        offset=offset,
+    )
+
+    sections = []
+
+    for artifact in artifacts:
+
+        if not artifact.raw_text:
+            continue
+
+        section = f"""
+SOURCE: {artifact.source_type}
+ARTIFACT_TYPE: {artifact.artifact_type}
+TITLE: {artifact.title or "N/A"}
+URL: {artifact.url or "N/A"}
+PUBLISHED_AT: {artifact.published_at or "N/A"}
+
+CONTENT:
+{artifact.raw_text}
+""".strip()
+
+        sections.append(section)
+
+    return "\n\n---\n\n".join(sections)
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
     db_artifact = Artifact(**artifact.model_dump())
