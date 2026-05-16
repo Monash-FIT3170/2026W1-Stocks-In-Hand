@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
@@ -56,6 +56,14 @@ def _sydney_day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]
     return start, start + timedelta(days=1)
 
 
+def _sydney_date_start(value: date) -> datetime:
+    return datetime.combine(value, time.min, tzinfo=_SYDNEY_TZ)
+
+
+def _sydney_date_end(value: date) -> datetime:
+    return _sydney_date_start(value) + timedelta(days=1)
+
+
 def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     title = _clean_text(artifact.title) or "Untitled ASX announcement"
@@ -92,6 +100,8 @@ def get_announcements(
     offset: int = 0,
     today: bool = False,
     sector: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> list[AnnouncementResponse]:
     date_value = func.coalesce(Artifact.published_at, Artifact.created_at)
     query = (
@@ -101,7 +111,14 @@ def get_announcements(
         .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
     )
 
-    if today:
+    has_custom_range = start_date is not None or end_date is not None
+
+    if has_custom_range:
+        if start_date:
+            query = query.filter(date_value >= _sydney_date_start(start_date))
+        if end_date:
+            query = query.filter(date_value < _sydney_date_end(end_date))
+    elif today:
         start, end = _sydney_day_bounds()
         query = query.filter(date_value >= start).filter(date_value < end)
 
