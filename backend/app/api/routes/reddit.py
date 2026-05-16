@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database.connection import get_db
 from app.schemas.reddit import RedditPostResponse
-from app.schemas.artifact import ArtifactCreate
+from app.schemas.artifact import ArtifactCreate, SourceType, ArtifactType
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
 
@@ -63,8 +63,10 @@ def scrape_and_store(subreddit: str = "ASX", limit: int = 10, db: Session = Depe
             skipped += 1
             continue
         artifact_crud.create_artifact(db=db, artifact=ArtifactCreate(
+            source_type=SourceType.REDDIT,
             platform_id=platform.id,
-            artifact_type="reddit_post",
+            artifact_type=ArtifactType.REDDIT_POST,
+
             title=post["title"],
             url=post["url"],
             author=post["author"],

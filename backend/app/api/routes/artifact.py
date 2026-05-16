@@ -29,6 +29,20 @@ def get_artifacts_by_platform(platform_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No artifacts found for this platform")
     return artifacts
 
+@router.get("/compiled/recent", response_model=list[ArtifactResponse])
+def get_recent_compiled_artifacts(
+    days: int = 30,
+    limit: int = 200,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    return crud.get_recent_compiled_artifacts(
+        db=db,
+        days=days,
+        limit=limit,
+        offset=offset,
+    )
+
 @router.get("/{artifact_id}", response_model=ArtifactResponse)
 def get_artifact(artifact_id: UUID, db: Session = Depends(get_db)):
     artifact = crud.get_artifact(db, artifact_id=artifact_id)

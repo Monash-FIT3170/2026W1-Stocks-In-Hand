@@ -1,7 +1,8 @@
 from sqlalchemy.orm import Session
 from uuid import UUID
 from app.models.artifact import Artifact
-from app.schemas.artifact import ArtifactCreate
+from app.schemas.artifact import ArtifactCreate, SourceType
+from datetime import datetime, timezone, timedelta
 
 def get_artifact(db: Session, artifact_id: UUID):
     return db.query(Artifact).filter(Artifact.id == artifact_id).first()
@@ -14,6 +15,28 @@ def get_artifacts_by_platform(db: Session, platform_id: UUID):
 
 def get_all_artifacts(db: Session, limit: int = 200, offset: int = 0):
     return db.query(Artifact).order_by(Artifact.published_at.desc()).offset(offset).limit(limit).all()
+
+def get_recent_compiled_artifacts(
+    db: Session,
+    days: int = 30,
+    limit: int = 200,
+    offset: int = 0,
+):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    return (
+        db.query(Artifact)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(Artifact.source_type.in_([
+            SourceType.REDDIT.value,
+            SourceType.ASX_ANNOUNCEMENT.value,
+        ]))
+        .order_by(Artifact.published_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
     db_artifact = Artifact(**artifact.model_dump())
