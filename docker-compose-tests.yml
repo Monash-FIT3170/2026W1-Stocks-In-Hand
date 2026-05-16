@@ -11,11 +11,12 @@ services:
       retries: 5
 
   backend:
+    # Contains api key for groq usage
+    env_file:
+      - ./backend/.env
     build:
       context: ./backend
       target: testing
-    volumes:
-      - ./backend/_test_output:/test_output
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
     ports:
@@ -24,6 +25,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - ./backend/_test_output:/test_output
 
   frontend:
     build:
