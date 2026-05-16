@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.crud.announcement import _announcement_from_artifact
+from app.crud.announcement import _announcement_from_artifact, _sydney_day_bounds
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 
@@ -62,3 +62,12 @@ def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
     assert result.changed == "No change summary available yet."
     assert result.matters == "No impact summary available yet."
     assert result.url == "https://example.test/file.pdf"
+
+
+def test_sydney_day_bounds_match_melbourne_calendar_day() -> None:
+    now = datetime(2026, 5, 16, 14, 30, tzinfo=timezone.utc)
+
+    start, end = _sydney_day_bounds(now)
+
+    assert start.isoformat() == "2026-05-17T00:00:00+10:00"
+    assert end.isoformat() == "2026-05-18T00:00:00+10:00"
