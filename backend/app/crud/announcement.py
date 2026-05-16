@@ -1,14 +1,18 @@
 import re
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.artifact import Artifact
+from app.models.ticker import Ticker
 from app.schemas.announcement import AnnouncementResponse
 
 
 _WHITESPACE = re.compile(r"\s+")
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+_SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 
 
 def _clean_text(value: object) -> str | None:
@@ -46,6 +50,12 @@ def _format_label(value: object, fallback: str) -> str:
     return label.title()
 
 
+def _sydney_day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
+    local_now = now.astimezone(_SYDNEY_TZ) if now else datetime.now(_SYDNEY_TZ)
+    start = datetime.combine(local_now.date(), time.min, tzinfo=_SYDNEY_TZ)
+    return start, start + timedelta(days=1)
+
+
 def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     title = _clean_text(artifact.title) or "Untitled ASX announcement"
@@ -76,16 +86,27 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
     )
 
 
-def get_announcements(db: Session, limit: int = 50, offset: int = 0) -> list[AnnouncementResponse]:
-    artifacts = (
+def get_announcements(
+    db: Session,
+    limit: int = 50,
+    offset: int = 0,
+    today: bool = False,
+    sector: str | None = None,
+) -> list[AnnouncementResponse]:
+    date_value = func.coalesce(Artifact.published_at, Artifact.created_at)
+    query = (
         db.query(Artifact)
         .options(joinedload(Artifact.ticker))
         .filter(Artifact.source_type == "asx_announcement")
         .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
-        .order_by(func.coalesce(Artifact.published_at, Artifact.created_at).desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
     )
-    return [_announcement_from_artifact(artifact) for artifact in artifacts]
 
+    if today:
+        start, end = _sydney_day_bounds()
+        query = query.filter(date_value >= start).filter(date_value < end)
+
+    if sector:
+        query = query.join(Artifact.ticker).filter(Ticker.sector == sector)
+
+    artifacts = query.order_by(date_value.desc()).offset(offset).limit(limit).all()
+    return [_announcement_from_artifact(artifact) for artifact in artifacts]

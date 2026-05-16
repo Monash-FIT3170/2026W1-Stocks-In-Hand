@@ -10,6 +10,11 @@ router = APIRouter(prefix="/announcements", tags=["announcements"])
 
 
 @router.get("/", response_model=list[AnnouncementResponse])
-def list_announcements(limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
-    return crud.get_announcements(db, limit=limit, offset=offset)
-
+def list_announcements(
+    limit: int = 50,
+    offset: int = 0,
+    today: bool = False,
+    sector: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return crud.get_announcements(db, limit=limit, offset=offset, today=today, sector=sector)
