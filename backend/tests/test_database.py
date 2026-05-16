@@ -19,10 +19,13 @@ real database verification path.
 
 import sys
 import uuid
+from http.cookies import SimpleCookie
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from fastapi import Request
+from starlette.responses import Response
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
@@ -143,6 +146,7 @@ def test_migrated_database_has_expected_tables() -> None:
         "artifact_sentiments",
         "artifact_summaries",
         "artifact_topics",
+        "auth_sessions",
         "claim_sources",
         "claims",
         "extracted_facts",
@@ -161,6 +165,215 @@ def test_migrated_database_has_expected_tables() -> None:
     }
 
     assert expected_tables.issubset(table_names)
+
+
+def test_password_hashing_verifies_and_rejects_wrong_password() -> None:
+    """Password hashes should verify only the original password."""
+    from app.core.security import hash_password, verify_password
+
+    password_hash = hash_password("correct-password")
+
+    assert verify_password("correct-password", password_hash)
+    assert not verify_password("wrong-password", password_hash)
+
+
+def test_auth_schema_rejects_invalid_email() -> None:
+    """Auth schemas should require a real email address."""
+    from pydantic import ValidationError
+
+    from app.schemas.auth import SignUpRequest
+
+    with pytest.raises(ValidationError):
+        SignUpRequest(name="Jane Doe", email="not-an-email", password="password123")
+
+
+def test_sign_up_sets_session_cookie_and_me_loads_investor(db_session: Session) -> None:
+    """Signing up creates a DB session and exposes it through an httpOnly cookie."""
+    from app.api.deps import get_current_investor
+    from app.api.routes.auth import sign_up
+    from app.core.config import settings
+    from app.models.auth_session import AuthSession
+    from app.schemas.auth import SignUpRequest
+
+    unique_email = f"auth-{uuid.uuid4().hex}@example.com"
+    response = Response()
+
+    result = sign_up(
+        body=SignUpRequest(
+            name="Auth Test",
+            email=unique_email,
+            password="password123",
+        ),
+        response=response,
+        db=db_session,
+    )
+
+    cookie = SimpleCookie(response.headers["set-cookie"])
+    session_cookie = cookie[settings.SESSION_COOKIE_NAME]
+
+    assert session_cookie["httponly"]
+    assert result["investor"].email == unique_email
+    assert (
+        db_session.query(AuthSession)
+        .filter(AuthSession.investor_id == result["investor"].id)
+        .count()
+        == 1
+    )
+
+    current_investor = get_current_investor(
+        session_token=session_cookie.value,
+        db=db_session,
+    )
+
+    assert current_investor.email == unique_email
+
+
+def test_sign_out_deletes_session(db_session: Session) -> None:
+    """Signing out removes the matching DB session."""
+    from app.api.routes.auth import sign_out, sign_up
+    from app.core.config import settings
+    from app.models.auth_session import AuthSession
+    from app.schemas.auth import SignUpRequest
+
+    response = Response()
+    result = sign_up(
+        body=SignUpRequest(
+            name="Sign Out Test",
+            email=f"signout-{uuid.uuid4().hex}@example.com",
+            password="password123",
+        ),
+        response=response,
+        db=db_session,
+    )
+    cookie = SimpleCookie(response.headers["set-cookie"])
+    session_token = cookie[settings.SESSION_COOKIE_NAME].value
+
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (
+                    b"cookie",
+                    f"{settings.SESSION_COOKIE_NAME}={session_token}".encode("utf-8"),
+                )
+            ],
+        }
+    )
+    sign_out(request=request, response=Response(), db=db_session)
+
+    assert (
+        db_session.query(AuthSession)
+        .filter(AuthSession.investor_id == result["investor"].id)
+        .count()
+        == 0
+    )
+
+
+def test_sign_in_accepts_valid_credentials_and_rejects_invalid_password(
+    db_session: Session,
+) -> None:
+    """Signing in should validate stored password hashes."""
+    from fastapi import HTTPException
+
+    from app.api.routes.auth import sign_in, sign_up
+    from app.core.config import settings
+    from app.models.auth_session import AuthSession
+    from app.schemas.auth import SignInRequest, SignUpRequest
+
+    email = f"signin-{uuid.uuid4().hex}@example.com"
+    sign_up(
+        body=SignUpRequest(
+            name="Sign In Test",
+            email=email,
+            password="password123",
+        ),
+        response=Response(),
+        db=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        sign_in(
+            body=SignInRequest.model_validate(
+                {"email": email, "password": "wrong-password"}
+            ),
+            response=Response(),
+            db=db_session,
+        )
+
+    assert exc_info.value.status_code == 401
+
+    response = Response()
+    result = sign_in(
+        body=SignInRequest(email=email, password="password123"),
+        response=response,
+        db=db_session,
+    )
+    cookie = SimpleCookie(response.headers["set-cookie"])
+    session_token = cookie[settings.SESSION_COOKIE_NAME].value
+
+    assert result["investor"].email == email
+    assert (
+        db_session.query(AuthSession)
+        .filter(AuthSession.token_hash.isnot(None))
+        .count()
+        >= 1
+    )
+    assert session_token
+
+
+def test_auth_me_rejects_missing_session_cookie(db_session: Session) -> None:
+    """The auth identity dependency should reject requests without a session."""
+    from fastapi import HTTPException
+
+    from app.api.deps import get_current_investor
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_investor(session_token=None, db=db_session)
+
+    assert exc_info.value.status_code == 401
+
+
+def test_watchlist_and_alert_contracts_keep_investor_id_and_old_crud_signature(
+    db_session: Session,
+) -> None:
+    """Shared watchlist/alert contracts should remain backward-compatible."""
+    from app.crud import alert as alert_crud
+    from app.crud import investor as investor_crud
+    from app.crud import watchlist as watchlist_crud
+    from app.schemas.alert import AlertCreate
+    from app.schemas.investor import InvestorCreate
+    from app.schemas.watchlist import WatchlistCreate
+
+    investor = investor_crud.create_investor(
+        db_session,
+        InvestorCreate(
+            email=f"contract-{uuid.uuid4().hex}@example.com",
+            username="Contract Test",
+        ),
+    )
+
+    ticker = Ticker(
+        symbol=f"C{uuid.uuid4().hex[:8].upper()}",
+        company_name="Contract Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    watchlist_payload = WatchlistCreate(investor_id=investor.id, name="MVP Watchlist")
+    alert_payload = AlertCreate(
+        investor_id=investor.id,
+        ticker_id=ticker.id,
+        alert_type="price",
+        title="Contract alert",
+        message="Still accepts investor_id",
+    )
+
+    watchlist = watchlist_crud.create_watchlist(db_session, watchlist_payload)
+    alert = alert_crud.create_alert(db_session, alert_payload)
+
+    assert watchlist.investor_id == investor.id
+    assert alert.investor_id == investor.id
 
 
 def test_database_can_persist_report_claim_relationships(
