@@ -1,19 +1,30 @@
 import styles from "../../page.module.css"
 import { EyeIcon } from "../icons"
 
-// Visual-only field component for the auth prototype screens.
-// This deliberately avoids validation, controlled form state, and password reveal
-// behavior. Add those pieces only when the auth implementation is being connected.
+// Shared auth input used by the sign-in and sign-up forms.
 export function AuthField({
   label,
+  name,
   placeholder,
   password = false,
+  value,
+  onChange,
+  required = false,
+  autoComplete,
 }) {
   return (
     <label className={styles.field}>
       <span>{label}</span>
       <div>
-        <input placeholder={placeholder} type={password ? "password" : "text"} />
+        <input
+          autoComplete={autoComplete}
+          name={name}
+          onChange={onChange}
+          placeholder={placeholder}
+          required={required}
+          type={password ? "password" : "text"}
+          value={value}
+        />
         {password && <EyeIcon />}
       </div>
     </label>
