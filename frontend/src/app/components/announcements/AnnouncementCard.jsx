@@ -5,9 +5,10 @@ import { BookmarkIcon } from "../icons"
 // Shared announcement summary card.
 // Used by both the global announcements feed and the ticker news tab. Keep the data
 // shape simple here: each card expects an item with ticker, tag, time, title, about,
-// changed, and matters fields. The real ASX filing URL can replace the placeholder
-// "View original ASX filing" href later.
+// changed, matters, and url fields.
 export function AnnouncementCard({ item }) {
+  const filingUrl = item.url || "#"
+
   return (
     <article className={styles.announcementCard}>
       <div className={styles.cardTopLine}>
@@ -23,8 +24,8 @@ export function AnnouncementCard({ item }) {
         <div><span>Why it matters</span><p>{item.matters}</p></div>
       </div>
       <div className={styles.cardActions}>
-        <Link href="/ticker/BHP/news">Read full summary</Link>
-        <a href="#">View original ASX filing</a>
+        <Link href={`/ticker/${item.ticker}/news`}>Read full summary</Link>
+        <a href={filingUrl}>View original ASX filing</a>
       </div>
     </article>
   )
