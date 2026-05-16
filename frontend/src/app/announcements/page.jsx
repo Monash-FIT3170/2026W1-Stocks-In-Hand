@@ -34,9 +34,11 @@ export default async function AnnouncementsRoute({ searchParams }) {
   let errorMessage = ""
   const today = searchParams?.today === "true"
   const sector = typeof searchParams?.sector === "string" ? searchParams.sector : ""
+  const startDate = typeof searchParams?.start_date === "string" ? searchParams.start_date : ""
+  const endDate = typeof searchParams?.end_date === "string" ? searchParams.end_date : ""
 
   try {
-    announcementCards = await getAnnouncementCards({ today, sector })
+    announcementCards = await getAnnouncementCards({ today, sector, startDate, endDate })
   } catch {
     errorMessage = "Announcements are unavailable right now. Please try again once the backend is running."
   }
@@ -49,7 +51,7 @@ export default async function AnnouncementsRoute({ searchParams }) {
             <h1>ASX Announcements</h1>
             <p>Real-time intelligence from the Australian Securities Exchange. Decoded by AI to give you the signal within the noise.</p>
           </div>
-          <AnnouncementFilters sector={sector} today={today} />
+          <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
         </div>
         <div className={styles.twoColumn}>
           <div className={styles.announcementList}>
