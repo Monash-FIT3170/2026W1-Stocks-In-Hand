@@ -1,11 +1,16 @@
 """
 main python file which creates database connection, connects to finBERT, and runs a FastAPI server
 """
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from transformers import pipeline
 from playwright.async_api import async_playwright
+from pathlib import Path
+
+# Import from app structure
 from app.api.routes import (
     investor,
     ticker,
@@ -28,11 +33,15 @@ from app.api.routes import (
     information_platform,
     topic,
     auth,
-    reddit
+    reddit,
+    announcement,
 )
 from app.database.connection import SessionLocal
 from app.core.config import settings
 from app.models.result import Result
+
+# Import scrapers
+from scrapers.registry import scrape, available_tickers
 
 app = FastAPI(title="Spike API")
 app.add_middleware(
@@ -43,7 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routes for database
+# Register all database routes
 app.include_router(investor.router)
 app.include_router(ticker.router)
 app.include_router(watchlist.router)
@@ -66,6 +75,9 @@ app.include_router(information_platform.router)
 app.include_router(topic.router)
 app.include_router(auth.router)
 app.include_router(reddit.router)
+app.include_router(announcement.router)
+
+OUTPUT_DIR = Path("/app/output")
 
 @app.get("/")
 def root():
@@ -74,13 +86,17 @@ def root():
         "frontend": "http://localhost:3000",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": ["/analyse", "/headlines", "/results"],
+        "endpoints": ["/analyse", "/headlines", "/results", "/scrape/{ticker}", "/tickers"],
     }
 
 @app.get("/health")
 def health() -> dict:
     """Returns the health status of the server"""
     return {"status": "ok"}
+
+@app.get("/viewer", response_class=HTMLResponse)
+def viewer():
+    return (Path(__file__).parent / "viewer.html").read_text(encoding="utf-8")
 
 # --- HuggingFace: FinBERT ---
 sentiment = pipeline("text-classification", model="/app/finbert")
@@ -146,3 +162,23 @@ def results() -> list[dict]:
 async def headlines() -> list[str]:
     """Returns a list of headlines from Yahoo for the default ticker"""
     return await scrape_yahoo_headlines()
+
+@app.post("/scrape/{ticker}")
+async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
+    """
+    Trigger an ASX announcement scrape for a given ticker.
+    Runs in the background — returns immediately.
+    PDFs are saved to /app/output/{ticker}/
+    """
+    if ticker.upper() not in available_tickers():
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{ticker.upper()}' not implemented. Available: {available_tickers()}"
+        )
+    background_tasks.add_task(scrape, ticker, OUTPUT_DIR)
+    return {"status": "queued", "ticker": ticker.upper()}
+
+@app.get("/tickers")
+def tickers():
+    """Return all implemented ASX tickers."""
+    return {"tickers": available_tickers()}

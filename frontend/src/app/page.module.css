@@ -8,6 +8,8 @@
 .popularRow a,
 .primaryAction,
 .filterPills button,
+.filterPills a,
+.filterPills select,
 .tabButton,
 .activeTab,
 .selectedChip,
@@ -158,6 +160,8 @@
 
 .popularRow a,
 .filterPills button,
+.filterPills a,
+.filterPills select,
 .filterTabs button {
   background: #e7e9eb;
   border-radius: 999px;
@@ -411,6 +415,27 @@
 .filterPills {
   display: flex;
   gap: 12px;
+}
+
+.filterPills a,
+.filterPills select {
+  border: 0;
+  font: inherit;
+}
+
+.filterPills a {
+  display: inline-flex;
+}
+
+.filterPills select {
+  appearance: none;
+  cursor: pointer;
+  min-width: 164px;
+}
+
+.filterPills .activeFilter {
+  background: var(--green);
+  color: white;
 }
 
 .twoColumn,

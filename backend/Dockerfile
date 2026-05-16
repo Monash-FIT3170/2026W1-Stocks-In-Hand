@@ -16,6 +16,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     curl \
     chromium \
+    wget \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copying HuggingFace model from the "download" stage into this stage
@@ -27,6 +29,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY requirements.txt .
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV UV_LINK_MODE=copy
 
 # Use uv to install requirements (improves parallelism)
 # Using cache to reduce build time incase requirements change

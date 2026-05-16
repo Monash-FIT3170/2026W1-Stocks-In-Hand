@@ -5,6 +5,9 @@ psycopg2-binary==2.9.9
 transformers==4.41.0
 torch==2.3.0
 playwright==1.44.0
+httpx
+groq==1.1.1
+pypdf==4.2.0
 alembic==1.13.1
 pydantic==2.7.1
 pytest==8.3.4

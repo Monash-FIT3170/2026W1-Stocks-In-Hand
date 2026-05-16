@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DB Viewer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px; background: #0d1117; color: #e6edf3; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+header { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #161b22; border-bottom: 1px solid #30363d; }
+header h1 { font-size: 14px; color: #58a6ff; white-space: nowrap; }
+header .sep { color: #30363d; }
+#search { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 4px 10px; border-radius: 6px; font: inherit; width: 220px; }
+#search:focus { outline: none; border-color: #58a6ff; }
+#typeFilter { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 4px 8px; border-radius: 6px; font: inherit; }
+#count { color: #8b949e; font-size: 11px; margin-left: auto; white-space: nowrap; }
+.pg { display: flex; gap: 4px; align-items: center; }
+.pg button { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 3px 10px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 12px; }
+.pg button:hover:not(:disabled) { background: #30363d; }
+.pg button:disabled { opacity: 0.3; cursor: default; }
+#pageInfo { color: #8b949e; font-size: 11px; min-width: 60px; text-align: center; }
+
+.body { flex: 1; display: flex; overflow: hidden; }
+
+nav { width: 170px; flex-shrink: 0; border-right: 1px solid #30363d; overflow-y: auto; padding: 8px 0; }
+nav .section { padding: 4px 12px 2px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: #484f58; }
+nav a { display: flex; justify-content: space-between; align-items: center; padding: 5px 14px; color: #8b949e; cursor: pointer; border-left: 2px solid transparent; font-size: 12px; }
+nav a:hover { color: #e6edf3; background: #161b22; }
+nav a.active { color: #58a6ff; border-left-color: #58a6ff; background: #161b22; }
+nav a .cnt { font-size: 10px; color: #484f58; background: #21262d; padding: 0 5px; border-radius: 8px; min-width: 20px; text-align: center; }
+nav a.active .cnt { color: #8b949e; }
+
+.table-pane { flex: 1; overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th { position: sticky; top: 0; z-index: 1; background: #161b22; padding: 7px 10px; text-align: left; color: #8b949e; border-bottom: 1px solid #30363d; white-space: nowrap; font-weight: normal; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer; user-select: none; }
+thead th:hover { color: #e6edf3; }
+thead th.asc::after { content: " ↑"; color: #58a6ff; }
+thead th.desc::after { content: " ↓"; color: #58a6ff; }
+tbody tr { border-bottom: 1px solid #161b22; cursor: pointer; }
+tbody tr:hover { background: #161b22; }
+tbody tr.selected { background: #1f3453 !important; }
+td { padding: 6px 10px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c9d1d9; }
+td.mono { font-size: 11px; color: #8b949e; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; }
+.bt { background: #1c3a5f; color: #79c0ff; }
+.bs { background: #1a3a1a; color: #56d364; }
+
+.detail-pane { width: 410px; flex-shrink: 0; border-left: 1px solid #30363d; overflow-y: auto; background: #0d1117; }
+.placeholder { color: #484f58; padding: 40px 20px; text-align: center; line-height: 2; }
+.di { padding: 14px; }
+.dt { font-size: 13px; color: #e6edf3; font-weight: bold; margin-bottom: 14px; line-height: 1.4; word-break: break-word; }
+.f { margin-bottom: 10px; }
+.fl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: #484f58; margin-bottom: 3px; }
+.fv { color: #c9d1d9; word-break: break-all; line-height: 1.5; }
+.fv a { color: #58a6ff; text-decoration: none; }
+.fv a:hover { text-decoration: underline; }
+.fv.muted { color: #484f58; font-style: italic; }
+.json-block { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px; margin-top: 4px; white-space: pre; overflow-x: auto; font-size: 11px; line-height: 1.6; color: #a5d6ff; max-height: 280px; overflow-y: auto; }
+.text-block { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px; margin-top: 4px; white-space: pre-wrap; font-size: 11px; line-height: 1.6; color: #8b949e; max-height: 260px; overflow-y: auto; word-break: break-word; }
+hr.div { border: none; border-top: 1px solid #21262d; margin: 12px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DB Viewer</h1>
+  <span class="sep">|</span>
+  <input id="search" type="text" placeholder="Search..." oninput="applyFilter()">
+  <select id="typeFilter" onchange="applyFilter()" style="display:none">
+    <option value="">All types</option>
+  </select>
+  <div class="pg">
+    <button id="prevBtn" onclick="changePage(-1)" disabled>‹</button>
+    <span id="pageInfo">—</span>
+    <button id="nextBtn" onclick="changePage(1)" disabled>›</button>
+  </div>
+  <span id="count"></span>
+</header>
+
+<div class="body">
+  <nav id="nav">
+    <div class="section">Tables</div>
+    <a id="nav-artifacts"  onclick="loadTable('artifacts')"  class="active">Artifacts  <span class="cnt" id="cnt-artifacts">…</span></a>
+    <a id="nav-tickers"    onclick="loadTable('tickers')">Tickers    <span class="cnt" id="cnt-tickers">…</span></a>
+    <a id="nav-platforms"  onclick="loadTable('platforms')">Platforms  <span class="cnt" id="cnt-platforms">…</span></a>
+    <a id="nav-topics"     onclick="loadTable('topics')">Topics     <span class="cnt" id="cnt-topics">…</span></a>
+    <a id="nav-investors"  onclick="loadTable('investors')">Investors  <span class="cnt" id="cnt-investors">…</span></a>
+  </nav>
+
+  <div class="table-pane">
+    <table>
+      <thead id="thead"></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div id="empty" style="display:none; color:#484f58; padding:40px; text-align:center;">No records found.</div>
+  </div>
+
+  <div class="detail-pane">
+    <div id="detail"><div class="placeholder">← Select a row<br>to see all fields</div></div>
+  </div>
+</div>
+
+<script>
+const TABLES = {
+  artifacts: {
+    endpoint: '/artifacts/?limit=500',
+    columns: [
+      { key: 'title',         label: 'Title' },
+      { key: 'artifact_type', label: 'Type',      render: v => badge(v, 'bt') },
+      { key: 'source_type',   label: 'Source',    render: v => v ? badge(v, 'bs') : '—' },
+      { key: '_ticker',       label: 'Ticker' },
+      { key: 'published_at',  label: 'Published', render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
+      { key: 'is_duplicate',  label: 'Dup',       render: v => v ? '<span style="color:#f0883e">Yes</span>' : 'No', cls: 'mono' },
+    ],
+    filterKey: 'artifact_type',
+    searchKeys: ['title','artifact_type','source_type'],
+  },
+  tickers: {
+    endpoint: '/tickers/',
+    columns: [
+      { key: 'symbol',        label: 'Symbol' },
+      { key: 'company_name',  label: 'Company' },
+      { key: 'exchange',      label: 'Exchange', cls: 'mono' },
+      { key: 'sector',        label: 'Sector' },
+      { key: 'market_cap',    label: 'Mkt Cap',  cls: 'mono' },
+      { key: 'created_at',    label: 'Created',  render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
+    ],
+    searchKeys: ['symbol','company_name','sector'],
+  },
+  platforms: {
+    endpoint: '/information-platforms',
+    columns: [
+      { key: 'name',              label: 'Name' },
+      { key: 'platform_type',     label: 'Type',       cls: 'mono' },
+      { key: 'base_url',          label: 'Base URL' },
+      { key: 'scrape_enabled',    label: 'Scraping',   render: v => v ? '<span style="color:#56d364">Yes</span>' : 'No' },
+      { key: 'credibility_score', label: 'Credibility', cls: 'mono' },
+    ],
+    searchKeys: ['name','platform_type'],
+  },
+  topics: {
+    endpoint: '/topics',
+    columns: [
+      { key: 'name',       label: 'Name' },
+      { key: 'created_at', label: 'Created', render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
+    ],
+    searchKeys: ['name'],
+  },
+  investors: {
+    endpoint: '/investors',
+    columns: [
+      { key: 'email',      label: 'Email' },
+      { key: 'username',   label: 'Username' },
+      { key: 'role',       label: 'Role', cls: 'mono' },
+      { key: 'created_at', label: 'Created', render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
+    ],
+    searchKeys: ['email','username','role'],
+  },
+};
+
+let currentTable = 'artifacts';
+let allRows = [], filtered = [], pageRows = [];
+let tickerMap = {};
+let sortCol = null, sortDir = 1;
+const PAGE = 50;
+let page = 0;
+
+/* ── Boot: fetch all tables concurrently for counts ── */
+async function boot() {
+  // Load ticker names for display
+  try {
+    const r = await fetch('/tickers');
+    if (r.ok) (await r.json()).forEach(t => tickerMap[t.id] = t.symbol);
+  } catch(e) {}
+
+  // Fetch counts for sidebar (fire and forget)
+  fetchCounts();
+
+  // Load default table
+  await loadTable('artifacts');
+}
+
+async function fetchCounts() {
+  const entries = Object.entries(TABLES);
+  await Promise.allSettled(entries.map(async ([name, def]) => {
+    try {
+      const r = await fetch(def.endpoint);
+      if (r.ok) {
+        const data = await r.json();
+        const el = document.getElementById('cnt-' + name);
+        if (el) el.textContent = Array.isArray(data) ? data.length : '?';
+      }
+    } catch(e) {}
+  }));
+}
+
+/* ── Load a table ── */
+async function loadTable(name) {
+  currentTable = name;
+  sortCol = null; sortDir = 1; page = 0;
+  document.getElementById('search').value = '';
+  document.getElementById('detail').innerHTML = '<div class="placeholder">← Select a row<br>to see all fields</div>';
+
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById('nav-' + name).classList.add('active');
+
+  const sel = document.getElementById('typeFilter');
+  sel.style.display = TABLES[name].filterKey ? '' : 'none';
+  sel.innerHTML = '<option value="">All types</option>';
+
+  const def = TABLES[name];
+  let data = [];
+  try {
+    const r = await fetch(def.endpoint);
+    if (r.ok) { data = await r.json(); if (!Array.isArray(data)) data = []; }
+  } catch(e) {}
+
+  if (name === 'artifacts') {
+    data = data.map(a => ({ ...a, _ticker: tickerMap[a.ticker_id] || (a.ticker_id ? a.ticker_id.slice(0,8)+'…' : '—') }));
+    const types = [...new Set(data.map(a => a.artifact_type).filter(Boolean))].sort();
+    types.forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; sel.appendChild(o); });
+  }
+
+  allRows = data;
+  applyFilter();
+  renderHeader();
+}
+
+/* ── Filter → sort → paginate ── */
+function applyFilter() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const typeVal = document.getElementById('typeFilter').value;
+  const def = TABLES[currentTable];
+
+  filtered = allRows.filter(row => {
+    const matchQ    = !q       || def.searchKeys.some(k => (row[k] ?? '').toString().toLowerCase().includes(q));
+    const matchType = !typeVal || row[def.filterKey] === typeVal;
+    return matchQ && matchType;
+  });
+
+  if (sortCol) {
+    filtered.sort((a, b) => {
+      const av = a[sortCol] ?? '', bv = b[sortCol] ?? '';
+      return av < bv ? -sortDir : av > bv ? sortDir : 0;
+    });
+  }
+
+  page = 0;
+  renderPage();
+}
+
+function renderHeader() {
+  document.getElementById('thead').innerHTML = '<tr>' +
+    TABLES[currentTable].columns.map(c =>
+      `<th onclick="sortBy('${c.key}')" class="${sortCol===c.key ? (sortDir===1?'asc':'desc') : ''}">${c.label}</th>`
+    ).join('') + '</tr>';
+}
+
+function sortBy(key) {
+  sortDir = sortCol === key ? sortDir * -1 : 1;
+  sortCol = key;
+  renderHeader();
+  renderPage();
+}
+
+function renderPage() {
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE));
+  if (page >= totalPages) page = totalPages - 1;
+  pageRows = filtered.slice(page * PAGE, page * PAGE + PAGE);
+
+  document.getElementById('count').textContent = `${total} row${total !== 1 ? 's' : ''}`;
+  document.getElementById('pageInfo').textContent = `${page+1} / ${totalPages}`;
+  document.getElementById('prevBtn').disabled = page === 0;
+  document.getElementById('nextBtn').disabled = page >= totalPages - 1;
+
+  const def = TABLES[currentTable];
+  if (pageRows.length === 0) {
+    document.getElementById('tbody').innerHTML = '';
+    document.getElementById('empty').style.display = '';
+    return;
+  }
+  document.getElementById('empty').style.display = 'none';
+
+  // Use data-idx to avoid embedding raw data in HTML attributes (avoids quote escaping bugs)
+  document.getElementById('tbody').innerHTML = pageRows.map((row, i) =>
+    `<tr data-idx="${i}" onclick="selectRow(this)">` +
+    def.columns.map(c => {
+      const raw = row[c.key];
+      const rendered = (raw === null || raw === undefined)
+        ? '<span style="color:#484f58">—</span>'
+        : c.render ? c.render(raw) : esc(String(raw));
+      return `<td class="${c.cls||''}" title="${esc(String(raw??''))}">${rendered}</td>`;
+    }).join('') + '</tr>'
+  ).join('');
+}
+
+function changePage(d) { page += d; renderPage(); }
+
+/* ── Detail panel ── */
+function selectRow(tr) {
+  document.querySelectorAll('tbody tr').forEach(r => r.classList.remove('selected'));
+  tr.classList.add('selected');
+  const row = pageRows[parseInt(tr.dataset.idx)];
+  currentTable === 'artifacts' ? renderArtifact(row) : renderGeneric(row);
+}
+
+function renderArtifact(a) {
+  const meta      = a.artifact_metadata || {};
+  const extracted = meta.extracted_data  || {};
+  const hasExt    = Object.keys(extracted).length > 0;
+
+  set('detail', `<div class="di">
+    <div class="dt">${esc(a.title || 'Untitled')}</div>
+
+    <div class="f"><div class="fl">Type / Source</div>
+      <div class="fv">${badge(a.artifact_type,'bt')} ${a.source_type ? badge(a.source_type,'bs') : ''}</div></div>
+
+    <div class="f"><div class="fl">Ticker</div><div class="fv">${esc(a._ticker||'—')}</div></div>
+
+    <div class="f"><div class="fl">Published</div>
+      <div class="fv">${a.published_at ? a.published_at.slice(0,10) : '—'}</div></div>
+
+    <div class="f"><div class="fl">Scraped</div>
+      <div class="fv">${a.scraped_at ? a.scraped_at.slice(0,19).replace('T',' ') : '—'}</div></div>
+
+    <div class="f"><div class="fl">Duplicate</div>
+      <div class="fv">${a.is_duplicate ? '<span style="color:#f0883e">Yes</span>' : 'No'}</div></div>
+
+    <div class="f"><div class="fl">Credibility</div>
+      <div class="fv ${!a.credibility_label?'muted':''}">${esc(a.credibility_label||'none')}</div></div>
+
+    <div class="f"><div class="fl">URL</div>
+      <div class="fv">${a.url ? `<a href="${esc(a.url)}" target="_blank">${esc(a.url)}</a>` : '<span class="muted">none</span>'}</div></div>
+
+    ${meta.pdf_url ? `<div class="f"><div class="fl">PDF URL</div>
+      <div class="fv"><a href="${esc(meta.pdf_url)}" target="_blank">${esc(meta.pdf_url)}</a></div></div>` : ''}
+
+    <hr class="div">
+
+    ${hasExt ? `<div class="f"><div class="fl">Extracted Data</div>
+      <div class="json-block">${esc(JSON.stringify(extracted,null,2))}</div></div>` : ''}
+
+    ${meta.category ? `<div class="f"><div class="fl">Classifier Category</div>
+      <div class="fv">${esc(meta.category)}</div></div>` : ''}
+
+    <hr class="div">
+
+    <div class="f"><div class="fl">Raw Text</div>
+      <div class="text-block">${a.raw_text
+        ? esc(a.raw_text.slice(0,8000)) + (a.raw_text.length > 8000 ? '\n\n[truncated…]' : '')
+        : '<span class="muted">empty</span>'
+      }</div></div>
+
+    <hr class="div">
+
+    <div class="f"><div class="fl">Artifact ID</div><div class="fv" style="font-size:11px;color:#484f58">${a.id}</div></div>
+    <div class="f"><div class="fl">Ticker ID</div><div class="fv" style="font-size:11px;color:#484f58">${a.ticker_id||'—'}</div></div>
+    <div class="f"><div class="fl">Platform ID</div><div class="fv" style="font-size:11px;color:#484f58">${a.platform_id||'—'}</div></div>
+  </div>`);
+}
+
+function renderGeneric(row) {
+  const title = row.name || row.symbol || row.email || row.title || 'Record';
+  const fields = Object.entries(row).map(([k, v]) => {
+    if (v === null || v === undefined)
+      return field(k, '<span class="muted">null</span>');
+    if (typeof v === 'object')
+      return `<div class="f"><div class="fl">${esc(k)}</div><div class="json-block">${esc(JSON.stringify(v,null,2))}</div></div>`;
+    return field(k, esc(String(v)));
+  }).join('');
+  set('detail', `<div class="di"><div class="dt">${esc(title)}</div>${fields}</div>`);
+}
+
+/* ── Helpers ── */
+function field(label, html) { return `<div class="f"><div class="fl">${esc(label)}</div><div class="fv">${html}</div></div>`; }
+function badge(v, cls) { return `<span class="badge ${cls}">${esc(v||'')}</span>`; }
+function set(id, html) { document.getElementById(id).innerHTML = html; }
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+boot();
+</script>
+</body>
+</html>

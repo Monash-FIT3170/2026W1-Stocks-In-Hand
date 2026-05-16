@@ -1,8 +1,12 @@
 # This file contains the Python, Nodejs and Nextjs sample .gitignore files provided from this repository:
 # https://github.com/github/gitignore/tree/main
 
+
+## Our custom ignores
 **/_data
 **/_test_output
+output
+discover.py
 
 ####################################################################################################
 ########################################## PYTHON DEFAULT ##########################################
@@ -418,4 +422,4 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
+**/next-env.d.ts
