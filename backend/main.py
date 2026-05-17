@@ -32,7 +32,8 @@ from app.api.routes import (
     market_data,
     information_platform,
     topic,
-    reddit
+    reddit,
+    gemini
 )
 from app.database.connection import SessionLocal
 from app.models.result import Result
@@ -65,6 +66,7 @@ app.include_router(market_data.router)
 app.include_router(information_platform.router)
 app.include_router(topic.router)
 app.include_router(reddit.router)
+app.include_router(gemini.router)
 
 OUTPUT_DIR = Path("/app/output")
 

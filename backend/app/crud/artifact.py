@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from uuid import UUID
 from app.models.artifact import Artifact
+from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
 from datetime import datetime, timezone, timedelta
 
@@ -21,33 +23,43 @@ def get_recent_compiled_artifacts(
     days: int = 30,
     limit: int = 200,
     offset: int = 0,
+    ticker_symbol: str | None = None,
 ):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    return (
+    query = (
         db.query(Artifact)
         .filter(Artifact.published_at >= cutoff)
         .filter(Artifact.source_type.in_([
             SourceType.REDDIT.value,
             SourceType.ASX_ANNOUNCEMENT.value,
         ]))
-        .order_by(Artifact.published_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
     )
+
+    if ticker_symbol:
+        ticker = (
+            db.query(Ticker)
+            .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+            .first()
+        )
+        query = query.filter(Artifact.source_type == SourceType.ASX_ANNOUNCEMENT.value)
+        query = query.filter(Artifact.ticker_id == ticker.id if ticker else False)
+
+    return query.order_by(Artifact.published_at.desc()).offset(offset).limit(limit).all()
 
 def build_recent_artifact_chunk(
     db: Session,
     days: int = 30,
     limit: int = 200,
     offset: int = 0,
+    ticker_symbol: str | None = None,
 ):
     artifacts = get_recent_compiled_artifacts(
         db=db,
         days=days,
         limit=limit,
         offset=offset,
+        ticker_symbol=ticker_symbol,
     )
 
     sections = []

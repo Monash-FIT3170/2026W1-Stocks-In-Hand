@@ -34,6 +34,7 @@ def get_recent_compiled_artifacts(
     days: int = 30,
     limit: int = 200,
     offset: int = 0,
+    ticker: str | None = None,
     db: Session = Depends(get_db),
 ):
     return crud.get_recent_compiled_artifacts(
@@ -41,6 +42,7 @@ def get_recent_compiled_artifacts(
         days=days,
         limit=limit,
         offset=offset,
+        ticker_symbol=ticker,
     )
 
 
@@ -49,6 +51,7 @@ def get_recent_artifact_chunk(
     days: int = 30,
     limit: int = 200,
     offset: int = 0,
+    ticker: str | None = None,
     db: Session = Depends(get_db),
 ):
     chunk = crud.build_recent_artifact_chunk(
@@ -56,6 +59,7 @@ def get_recent_artifact_chunk(
         days=days,
         limit=limit,
         offset=offset,
+        ticker_symbol=ticker,
     )
 
     if not chunk:
