@@ -1,3 +1,5 @@
+from sqlalchemy import Integer, cast, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from uuid import UUID
@@ -5,6 +7,13 @@ from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
 from datetime import datetime, timezone, timedelta
+
+def create_artifact(db: Session, artifact: ArtifactCreate):
+    db_artifact = Artifact(**artifact.model_dump())
+    db.add(db_artifact)
+    db.commit()
+    db.refresh(db_artifact)
+    return db_artifact
 
 def get_artifact(db: Session, artifact_id: UUID):
     return db.query(Artifact).filter(Artifact.id == artifact_id).first()
@@ -17,6 +26,13 @@ def get_artifacts_by_platform(db: Session, platform_id: UUID):
 
 def get_all_artifacts(db: Session, limit: int = 200, offset: int = 0):
     return db.query(Artifact).order_by(Artifact.published_at.desc()).offset(offset).limit(limit).all()
+
+def get_artifact_by_hash(db: Session, content_hash: str):
+    return db.query(Artifact).filter(Artifact.content_hash == content_hash).first()
+
+def get_platform_by_name(db: Session, name: str):
+    from app.models.information_platform import InformationPlatform
+    return db.query(InformationPlatform).filter(InformationPlatform.name == name).first()
 
 def get_recent_compiled_artifacts(
     db: Session,
@@ -84,16 +100,28 @@ CONTENT:
 
     return "\n\n---\n\n".join(sections)
 
-def create_artifact(db: Session, artifact: ArtifactCreate):
-    db_artifact = Artifact(**artifact.model_dump())
-    db.add(db_artifact)
-    db.commit()
-    db.refresh(db_artifact)
-    return db_artifact
+def get_reddit_posts_for_ticker(
+    db: Session,
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+) -> list[Artifact]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    keyword = f"%{ticker_symbol.upper()}%"
 
-def get_artifact_by_hash(db: Session, content_hash: str):
-    return db.query(Artifact).filter(Artifact.content_hash == content_hash).first()
-
-def get_platform_by_name(db: Session, name: str):
-    from app.models.information_platform import InformationPlatform
-    return db.query(InformationPlatform).filter(InformationPlatform.name == name).first()
+    return (
+        db.query(Artifact)
+        .filter(Artifact.source_type == SourceType.REDDIT.value)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(
+            or_(
+                Artifact.title.ilike(keyword),
+                Artifact.raw_text.ilike(keyword),
+            )
+        )
+        .order_by(
+            Artifact.artifact_metadata["score"].as_integer().desc().nullslast()
+        )
+        .limit(limit)
+        .all()
+    )

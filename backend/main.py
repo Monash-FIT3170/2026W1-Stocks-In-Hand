@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from transformers import pipeline
 from playwright.async_api import async_playwright
+from app.models.information_platform import InformationPlatform
 from pathlib import Path
 
 # Import from app structure
@@ -41,7 +42,7 @@ from app.models.result import Result
 # Import scrapers
 from scrapers.registry import scrape, available_tickers
 
-app = FastAPI(title="Spike API")
+app = FastAPI(title="StonksInHand API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Register all database routes
@@ -67,6 +68,21 @@ app.include_router(information_platform.router)
 app.include_router(topic.router)
 app.include_router(reddit.router)
 app.include_router(gemini.router)
+
+@app.on_event("startup")
+def seed_platforms():
+    with SessionLocal() as db:
+        exists = db.query(InformationPlatform).filter(
+            InformationPlatform.name == "Reddit"
+        ).first()
+        if not exists:
+            db.add(InformationPlatform(
+                name="Reddit",
+                platform_type="social",
+                base_url="https://reddit.com",
+                scrape_enabled=True,
+            ))
+            db.commit()
 
 OUTPUT_DIR = Path("/app/output")
 

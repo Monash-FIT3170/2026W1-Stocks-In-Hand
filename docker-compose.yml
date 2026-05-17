@@ -21,6 +21,7 @@ services:
       DATABASE_URL: postgresql://user:password@db:5432/spike
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}  # make sure to create the .env in the base directory and paste the tokens from discord in it
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
+      GROQ_API_KEY: ${GROQ_API_KEY}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]

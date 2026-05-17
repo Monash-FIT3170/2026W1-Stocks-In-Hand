@@ -1,5 +1,7 @@
 import praw
 import hashlib
+import json
+from groq import Groq
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -42,6 +44,60 @@ def _fetch_posts(subreddit_name: str, limit: int) -> list[dict]:
 
 def _content_hash(post_id: str) -> str:
     return hashlib.sha256(f"reddit:{post_id}".encode()).hexdigest()
+def _get_groq_client() -> Groq:
+    return Groq(api_key=settings.GROQ_API_KEY)
+
+
+def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict]) -> dict:
+    if not posts:
+        return {
+            "summary": "No relevant Reddit posts found.",
+            "post_count": 0,
+        }
+
+    post_block = ""
+    for i, p in enumerate(posts, 1):
+        post_block += f"{i}. [{p['score']} upvotes] {p['title']}\n"
+        if p["body"]:
+            post_block += f"   {p['body'][:300]}\n"
+        post_block += "\n"
+
+    prompt = f"""You are a financial analyst reading Reddit posts about ASX-listed company {ticker_symbol}.
+
+Here are the most relevant recent Reddit posts (ordered by upvotes):
+
+{post_block[:12000]}
+
+Write a short 2-3 sentence summary of what retail investors are saying about {ticker_symbol}.
+Focus on: overall sentiment, key concerns or excitement, any recurring themes.
+Be objective and concise and do not use —. Do not invent facts not present in the posts.
+
+Return JSON only, no explanation:
+{{
+  "summary": "2-3 sentence summary here",
+  "dominant_sentiment": "bullish | bearish | mixed | neutral",
+  "key_themes": ["theme1", "theme2"]
+}}"""
+
+    response = _get_groq_client().chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+    )
+
+    raw = response.choices[0].message.content or ""
+    # strip markdown fences Groq sometimes wraps around JSON
+    clean = raw.strip()
+    if clean.startswith("```"):
+        clean = clean.split("```")[1]          # get content between fences
+        if clean.startswith("json"):
+            clean = clean[4:]                  # strip the "json" language tag
+        clean = clean.strip()
+    try:
+        result = json.loads(clean)
+    except json.JSONDecodeError:
+        result = {"summary": raw, "dominant_sentiment": "unknown", "key_themes": []}
+    return result
 
 @router.get("/", response_model=list[RedditPostResponse])
 def list_reddit_posts(subreddit: str = "ASX", limit: int = 10):
@@ -86,3 +142,56 @@ def scrape_and_store(subreddit: str = "ASX", limit: int = 10, db: Session = Depe
         ))
         saved += 1
     return {"saved": saved, "skipped_duplicates": skipped}
+
+@router.get("/ticker-sentiment/{ticker_symbol}")
+def reddit_ticker_sentiment(
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    posts = artifact_crud.get_reddit_posts_for_ticker(
+        db=db,
+        ticker_symbol=ticker_symbol.upper(),
+        days=days,
+        limit=limit,
+    )
+
+    if not posts:
+        return {
+            "ticker":             ticker_symbol.upper(),
+            "post_count":         0,
+            "summary":            "No Reddit posts mentioning this ticker in the last 30 days.",
+            "dominant_sentiment": "neutral",
+            "key_themes":         [],
+            "posts_used":         [],
+        }
+
+    post_dicts = [
+        {
+            "title": a.title or "",
+            "body":  a.raw_text or "",
+            "score": (a.artifact_metadata or {}).get("score", 0),
+            "url":   a.url or "",
+        }
+        for a in posts
+    ]
+
+    result = _summarise_reddit_posts(
+        ticker_symbol=ticker_symbol.upper(),
+        posts=post_dicts,
+    )
+
+    return {
+        "ticker":        ticker_symbol.upper(),
+        "days_searched": days,
+        **result,
+        "posts_used": [
+            {
+                "title": a.title,
+                "url":   a.url,
+                "score": (a.artifact_metadata or {}).get("score", 0),
+            }
+            for a in posts
+        ],
+    }

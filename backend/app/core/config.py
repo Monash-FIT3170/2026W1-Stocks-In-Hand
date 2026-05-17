@@ -17,5 +17,6 @@ class Settings:
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    
 settings = Settings()
