@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,16 @@ def list_announcements(
     offset: int = 0,
     today: bool = False,
     sector: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
     db: Session = Depends(get_db),
 ):
-    return crud.get_announcements(db, limit=limit, offset=offset, today=today, sector=sector)
+    return crud.get_announcements(
+        db,
+        limit=limit,
+        offset=offset,
+        today=today,
+        sector=sector,
+        start_date=start_date,
+        end_date=end_date,
+    )

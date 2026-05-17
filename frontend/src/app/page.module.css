@@ -10,6 +10,7 @@
 .filterPills button,
 .filterPills a,
 .filterPills select,
+.dateRangeFilters input,
 .tabButton,
 .activeTab,
 .selectedChip,
@@ -162,6 +163,7 @@
 .filterPills button,
 .filterPills a,
 .filterPills select,
+.dateRangeFilters input,
 .filterTabs button {
   background: #e7e9eb;
   border-radius: 999px;
@@ -414,11 +416,19 @@
 
 .filterPills {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
+.filterPanel {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+
 .filterPills a,
-.filterPills select {
+.filterPills select,
+.dateRangeFilters input {
   border: 0;
   font: inherit;
 }
@@ -436,6 +446,38 @@
 .filterPills .activeFilter {
   background: var(--green);
   color: white;
+}
+
+.dateRangeFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.dateRangeFilters label {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.dateRangeFilters span {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.dateRangeFilters input {
+  min-width: 152px;
+}
+
+.dateRangeSummary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
 }
 
 .twoColumn,
