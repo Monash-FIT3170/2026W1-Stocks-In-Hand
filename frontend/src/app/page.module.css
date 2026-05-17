@@ -538,6 +538,51 @@
   text-decoration: none;
 }
 
+.citationList {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.citationList > span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.citationList a {
+  align-items: center;
+  background: rgba(10, 82, 60, 0.08);
+  border-radius: 999px;
+  color: var(--green);
+  display: inline-flex;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  text-decoration: none;
+}
+
+.citationList a strong,
+.citationList a em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citationList a strong {
+  font-size: 13px;
+}
+
+.citationList a em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
 .announcementsAside {
   display: grid;
   align-content: start;

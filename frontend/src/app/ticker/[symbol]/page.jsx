@@ -2,6 +2,7 @@ import { AppFrame } from "../../components/layout/AppFrame"
 import { SparkIcon } from "../../components/icons"
 import { BriefAside } from "../../components/ticker/BriefAside"
 import { BriefTabs } from "../../components/ticker/BriefTabs"
+import { CitationLinks } from "../../components/ticker/CitationLinks"
 import { TickerHeader } from "../../components/ticker/TickerHeader"
 import styles from "../../page.module.css"
 
@@ -35,6 +36,7 @@ export default async function TickerSummaryRoute({ params }) {
                 </div>
                 <p>{data.story}</p>
                 <strong>AI Insight verified by {data.sources_count} official sources</strong>
+                <CitationLinks sources={data.sources} />
               </article>
               <article className={styles.sentimentCard}>
                 <h2>{data.sentiment_label}</h2>
