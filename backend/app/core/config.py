@@ -18,5 +18,6 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     
 settings = Settings()

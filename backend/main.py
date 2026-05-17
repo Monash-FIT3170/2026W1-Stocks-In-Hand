@@ -1,15 +1,14 @@
 """
 main python file which creates database connection, connects to finBERT, and runs a FastAPI server
 """
-import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from transformers import pipeline
 from playwright.async_api import async_playwright
 from app.models.information_platform import InformationPlatform
 from pathlib import Path
+from app.services import sentiment as sentiment_service
 
 # Import from app structure
 from app.api.routes import (
@@ -34,7 +33,8 @@ from app.api.routes import (
     information_platform,
     topic,
     reddit,
-    gemini
+    gemini,
+    category_sentiment,
 )
 from app.database.connection import SessionLocal
 from app.models.result import Result
@@ -68,6 +68,7 @@ app.include_router(information_platform.router)
 app.include_router(topic.router)
 app.include_router(reddit.router)
 app.include_router(gemini.router)
+app.include_router(category_sentiment.router)
 
 @app.on_event("startup")
 def seed_platforms():
@@ -93,7 +94,7 @@ def root():
         "frontend": "http://localhost:3000",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": ["/analyse", "/headlines", "/results", "/scrape/{ticker}", "/tickers"],
+        "endpoints": ["/analyse", "/sentiment/{ticker}", "/headlines", "/results", "/scrape/{ticker}", "/tickers",],
     }
 
 @app.get("/health")
@@ -104,9 +105,6 @@ def health() -> dict:
 @app.get("/viewer", response_class=HTMLResponse)
 def viewer():
     return (Path(__file__).parent / "viewer.html").read_text(encoding="utf-8")
-
-# --- HuggingFace: FinBERT ---
-sentiment = pipeline("text-classification", model="/app/finbert")
 
 # --- Playwright scraper ---
 async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
@@ -150,9 +148,13 @@ class AnalyseRequest(BaseModel):
 @app.post("/analyse")
 def analyse(body: AnalyseRequest) -> dict:
     """Analyses the sentiment of a headline passed in as an AnalyseRequest"""
-    out = sentiment(body.text[:512])[0]
+    out = sentiment_service.analyse_text(body.text)
     with SessionLocal() as db:
-        row = Result(text=body.text, label=out["label"].lower(), score=round(out["score"], 4))
+        row = Result(
+            text=body.text,
+            label=out["sentiment_label"],
+            score=out["score"],
+        )
         db.add(row)
         db.commit()
         db.refresh(row)

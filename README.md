@@ -65,6 +65,7 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 |---|---|---|
 | GET | `/health` | Health check |
 | POST | `/analyse` | Run FinBERT on `{ "text": "..." }` |
+| POST | `/sentiment/{ticker}` | Run FinBERT on ASX/Gemini categories and Reddit/Groq `user_discussion` for a ticker |
 | GET | `/results` | Last 10 saved results |
 | GET | `/headlines` | Scrape Yahoo Finance headlines |
 
