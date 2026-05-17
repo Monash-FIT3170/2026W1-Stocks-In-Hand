@@ -95,7 +95,7 @@ class BHPScraper(BaseScraper):
             await browser.close()
 
         return announcements
-    
+
     async def _extract_article_links(self, page) -> list[dict]:
         items = []
 
@@ -151,7 +151,7 @@ class BHPScraper(BaseScraper):
         ]
 
         return any(term in url_lower or term in text_lower for term in useful_terms)
-    
+
     async def _extract_pdf_from_article(
         self,
         context: Any,
@@ -200,8 +200,8 @@ class BHPScraper(BaseScraper):
 
     def _looks_like_pdf(self, url: str) -> bool:
         return ".pdf" in url.lower()
-    
-    
+
+
     async def _extract_nearby_date(self, link) -> datetime | None:
 
         container = await link.evaluate_handle(
@@ -214,7 +214,7 @@ class BHPScraper(BaseScraper):
             text = await container.evaluate("el => el.innerText")
         except Exception:
             return None
-        
+
         date_patterns = [
             r"\b\d{1,2}\s+[A-Za-z]+\s+\d{4}\b",   # 7 May 2026
             r"\b\d{1,2}/\d{1,2}/\d{4}\b",         # 07/05/2026
@@ -235,7 +235,7 @@ class BHPScraper(BaseScraper):
                     pass
 
         return None
-    
+
     async def _download_via_browser(self, context, announcement: Announcement) -> Path:
         date_str = announcement.date.strftime("%Y-%m-%d")
         clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
@@ -249,7 +249,7 @@ class BHPScraper(BaseScraper):
 
         if not response.ok:
             raise Exception(f"Failed to download PDF: {response.status} {response.status_text}")
-        
+
         content_type = response.headers.get("Content-Type", "")
 
         if "pdf" not in content_type.lower():
@@ -262,10 +262,10 @@ class BHPScraper(BaseScraper):
     async def download_pdf(self, announcement: Announcement) -> Path:
         if announcement.local_path:
             return announcement.local_path
-        
+
         raise NotImplementedError(
             "BHP downloads are handled inside fetch_announcements via browser context"
         )
-    
+
     async def scrape(self) -> list[Announcement]:
         return await self.fetch_announcements()

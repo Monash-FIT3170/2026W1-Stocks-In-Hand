@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 
-# Just loads files from .env 
+# Just loads files from .env
 # Used for loading API key for groq
 def load_env(path=None):
     env_path = Path(path) if path else Path(__file__).parent.parent / ".env"
@@ -14,4 +14,3 @@ def load_env(path=None):
             if line and not line.startswith("#"):
                 key, _, value = line.partition("=")
                 os.environ[key.strip()] = value.strip()
-

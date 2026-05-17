@@ -15,4 +15,3 @@ class AnnouncementResponse(BaseModel):
     changed: str
     matters: str
     url: Optional[str]
-

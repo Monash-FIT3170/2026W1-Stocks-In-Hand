@@ -1121,9 +1121,8 @@
 
 /*
   Auth screens.
-  Shared styles for sign-in and sign-up. These are visual-only forms; validation,
-  OAuth redirects, and session handling should be added in the route/component logic,
-  not by encoding behavior into CSS.
+  Shared styles for sign-in and sign-up. Validation, fetch state, and session
+  handling live in the route/component logic rather than in CSS.
 */
 .authPage {
   background:
@@ -1184,12 +1183,25 @@
 }
 
 .authSubmit {
+  cursor: pointer;
   display: block;
   font-size: 16px;
   margin-top: 2px;
   padding: 18px 24px;
   text-decoration: none;
   width: 100%;
+}
+
+.authSubmit:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.authError {
+  color: #b42318;
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin: 0;
 }
 
 .authSwap {

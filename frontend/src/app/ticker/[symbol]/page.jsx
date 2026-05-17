@@ -10,24 +10,39 @@ import styles from "../../page.module.css"
 // the rendered prototype currently uses BHP placeholder content. TickerHeader,
 // BriefTabs, and BriefAside are shared with the other ticker tabs; keep tab-specific
 // summary content in this file unless it becomes reusable across multiple tabs.
-export default function TickerSummaryRoute() {
+async function fetchOverview(symbol) {
+  const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })
+  if (!res.ok) throw new Error("Failed to load overview data")
+  return res.json()
+}
+
+export default async function TickerSummaryRoute({ params }) {
+  const symbol = params.symbol
+  const data = await fetchOverview(symbol)
+
   return (
     <AppFrame active="home">
       <section className={styles.contentPage}>
         <div className={styles.briefShell}>
           <div className={styles.briefMain}>
-            <TickerHeader />
-            <BriefTabs active="summary" />
+            <TickerHeader data={data} />
+            <BriefTabs active="summary" symbol={symbol} />
             <div className={styles.briefContent}>
               <article className={styles.storyCard}>
-                <div className={styles.storyHeading}><h2><SparkIcon /> What&apos;s the story?</h2><span>Daily</span></div>
-                <p>BHP had a strong quarter with iron ore production up 8%. Analysts from major institutions are cautiously optimistic about the maintained full-year guidance, though there&apos;s growing chatter regarding persistent labor cost pressures in Western Australia. The strategic pivot toward copper and potash continues with the Jansen project progressing ahead of schedule.</p>
-                <strong>AI Insight verified by 12 official sources</strong>
+                <div className={styles.storyHeading}>
+                  <h2><SparkIcon /> What&apos;s the story?</h2>
+                  <span>Daily</span>
+                </div>
+                <p>{data.story}</p>
+                <strong>AI Insight verified by {data.sources_count} official sources</strong>
               </article>
               <article className={styles.sentimentCard}>
-                <h2>Positive Sentiment</h2>
-                <p>Today&apos;s announcements suggest a strong rebound in the mining sector, countered by cautious capital management in financials.</p>
-                <div className={styles.sentimentBar}><span>Public Sentiment</span><strong>68%</strong></div>
+                <h2>{data.sentiment_label}</h2>
+                <p>Current announcements indicate healthy progression, balancing minor macroeconomic shifts seen across related sectors.</p>
+                <div className={styles.sentimentBar}>
+                  <span>Public Sentiment</span>
+                  <strong>{data.public_sentiment_pct}</strong>
+                </div>
               </article>
             </div>
           </div>

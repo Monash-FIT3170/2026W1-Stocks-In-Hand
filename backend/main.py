@@ -32,17 +32,25 @@ from app.api.routes import (
     market_data,
     information_platform,
     topic,
+    auth,
     reddit,
-    announcement
+    announcement,
 )
 from app.database.connection import SessionLocal
+from app.core.config import settings
 from app.models.result import Result
 
 # Import scrapers
 from scrapers.registry import scrape, available_tickers
 
 app = FastAPI(title="Spike API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Register all database routes
 app.include_router(investor.router)
@@ -65,6 +73,7 @@ app.include_router(scrape_run.router)
 app.include_router(market_data.router)
 app.include_router(information_platform.router)
 app.include_router(topic.router)
+app.include_router(auth.router)
 app.include_router(reddit.router)
 app.include_router(announcement.router)
 

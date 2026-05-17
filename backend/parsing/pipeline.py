@@ -11,7 +11,7 @@ import platform
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from pprint import pprint 
+from pprint import pprint
 
 
 # Make scrapers importable regardless of working directory
