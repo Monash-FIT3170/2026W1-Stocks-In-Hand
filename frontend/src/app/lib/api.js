@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://backend:8000"
 
 export async function fetchAnnouncements(filters = {}) {
   const params = new URLSearchParams()
@@ -9,6 +9,14 @@ export async function fetchAnnouncements(filters = {}) {
 
   if (filters.sector) {
     params.set("sector", filters.sector)
+  }
+
+  if (filters.startDate) {
+    params.set("start_date", filters.startDate)
+  }
+
+  if (filters.endDate) {
+    params.set("end_date", filters.endDate)
   }
 
   const query = params.toString()

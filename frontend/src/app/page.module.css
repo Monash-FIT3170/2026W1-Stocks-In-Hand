@@ -737,12 +737,30 @@
   gap: 32px;
 }
 
+.sideCardTitle {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.sideCardTitle span {
+  background: #dfe5e7;
+  border-radius: 999px;
+  color: #53615b;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.8px;
+  padding: 5px 10px;
+  text-transform: uppercase;
+}
+
 .sideCardWhite {
   background: white;
   padding: 28px 24px;
 }
 
-.sideCard div {
+.sideCard > div:not(.sideCardTitle) {
   align-items: center;
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -750,7 +768,7 @@
   padding: 24px 0;
 }
 
-.sideCard div:last-child {
+.sideCard > div:not(.sideCardTitle):last-child {
   border-bottom: 0;
   padding-bottom: 0;
 }

@@ -6,10 +6,8 @@ import { TickerHeader } from "../../components/ticker/TickerHeader"
 import styles from "../../page.module.css"
 
 // Ticker brief summary tab for "/ticker/[symbol]".
-// The folder is dynamic so the app structure is ready for different tickers, but
-// the rendered prototype currently uses BHP placeholder content. TickerHeader,
-// BriefTabs, and BriefAside are shared with the other ticker tabs; keep tab-specific
-// summary content in this file unless it becomes reusable across multiple tabs.
+// This route renders only DB-backed ticker overview data so missing data is visible
+// during MVP testing.
 async function fetchOverview(symbol) {
   const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })
   if (!res.ok) throw new Error("Failed to load overview data")

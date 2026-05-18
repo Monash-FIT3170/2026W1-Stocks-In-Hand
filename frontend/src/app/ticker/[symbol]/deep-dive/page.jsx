@@ -2,13 +2,10 @@ import { AppFrame } from "../../../components/layout/AppFrame"
 import { BriefAside } from "../../../components/ticker/BriefAside"
 import { BriefTabs } from "../../../components/ticker/BriefTabs"
 import { TickerHeader } from "../../../components/ticker/TickerHeader"
-// import { timelineItems } from "../../../mock/ticker"
 import styles from "../../../page.module.css"
 
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
-// The filter chips are static visual controls for now. Timeline entries come from
-// mock/ticker.js and can later be replaced by company event history data, keeping
-// this page responsible for the timeline layout and interaction state.
+// Timeline entries come from DB-backed ticker artifacts.
 async function fetchDeepDive(symbol) {
   const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/deep-dive-timeline`, { cache: 'no-store' })
   const overview = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })

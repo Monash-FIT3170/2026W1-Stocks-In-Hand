@@ -37,10 +37,11 @@ export function AppFrame({
   signedIn = false,
   children,
 }) {
-  const [hasSession, setHasSession] = useState(() => signedIn || hasStoredSession())
+  const [hasSession, setHasSession] = useState(signedIn)
 
   useEffect(() => {
     let cancelled = false
+    setHasSession(signedIn || hasStoredSession())
 
     async function loadSession() {
       try {

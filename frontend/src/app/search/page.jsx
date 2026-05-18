@@ -1,26 +1,118 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { AppFrame } from "../components/layout/AppFrame"
 import { SearchIcon } from "../components/icons"
-import { searchResults } from "../mock/stocks"
 import styles from "../page.module.css"
 
-// Search results route for "/search?q=BHP".
-// This page owns the results-screen composition: the compact search bar, heading,
-// and stacked result cards. The actual placeholder companies live in mock/stocks.js.
-// When a real search API is added, replace searchResults with fetched data while
-// keeping the card markup/styles here as the presentation layer.
-export default function SearchPage({ searchParams }) {
-  const query = searchParams?.q || "BHP"
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+function formatMarketCap(value) {
+  if (!value) {
+    return "N/A"
+  }
+
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) {
+    return "N/A"
+  }
+
+  if (amount >= 1_000_000_000) {
+    return `$${(amount / 1_000_000_000).toFixed(1)}B`
+  }
+
+  return `$${amount.toLocaleString()}`
+}
+
+function matchesQuery(ticker, query) {
+  const search = query.trim().toLowerCase()
+  if (!search) {
+    return true
+  }
+
+  return [ticker.symbol, ticker.company_name, ticker.sector, ticker.industry]
+    .filter(Boolean)
+    .some((value) => value.toLowerCase().includes(search))
+}
+
+function normalizeTickers(data) {
+  if (Array.isArray(data)) {
+    return data
+  }
+
+  if (Array.isArray(data?.tickers)) {
+    return data.tickers
+  }
+
+  return []
+}
+
+export default function SearchPage() {
+  const router = useRouter()
+  const [query, setQuery] = useState("BHP")
   const [value, setValue] = useState(query)
+  const [tickers, setTickers] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTickers() {
+      setIsLoading(true)
+      setError("")
+
+      try {
+        const response = await fetch(`${API_URL}/tickers/?limit=100`, { cache: "no-store" })
+        if (!response.ok) {
+          throw new Error("Could not load companies from the database")
+        }
+        const data = await response.json()
+        const nextTickers = normalizeTickers(data)
+        if (!cancelled) {
+          setTickers(nextTickers)
+          if (nextTickers.length === 0) {
+            setError("No companies were returned by the database.")
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message)
+          setTickers([])
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    loadTickers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const nextQuery = params.get("q") || "BHP"
+    setQuery(nextQuery)
+    setValue(nextQuery)
+  }, [])
+
+  const results = useMemo(
+    () => normalizeTickers(tickers).filter((ticker) => matchesQuery(ticker, query)),
+    [tickers, query]
+  )
 
   function handleSearch(event) {
     event.preventDefault()
-    // Keeps the prototype URL shareable while the real search service is not connected.
-    // This mirrors how the eventual route can behave once query params drive API fetches.
-    window.location.href = `/search?q=${encodeURIComponent(value.trim() || "BHP")}`
+    const nextQuery = value.trim() || "BHP"
+    setQuery(nextQuery)
+    router.push(`/search?q=${encodeURIComponent(nextQuery)}`)
   }
 
   return (
@@ -32,22 +124,24 @@ export default function SearchPage({ searchParams }) {
         </form>
         <div className={styles.searchHeader}>
           <h1>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></h1>
-          <p>We found 3 companies matching your search.</p>
+          <p>{isLoading ? "Loading companies from the database." : `We found ${results.length} companies matching your search.`}</p>
         </div>
+        {error ? <p className={styles.authError}>{error}</p> : null}
         <div className={styles.resultsStack}>
-          {searchResults.map((result) => (
-            <Link className={`${styles.resultCard} ${styles[result.accent]}`} key={result.name} href="/ticker/BHP">
+          {results.map((result) => (
+            <Link className={styles.resultCard} key={result.id} href={`/ticker/${result.symbol}`}>
               <div className={styles.resultContent}>
-                <div className={styles.resultMeta}><span>{result.ticker}</span><strong>{result.sector}</strong></div>
-                <h2>{result.name}</h2>
-                <p>{result.description}</p>
+                <div className={styles.resultMeta}><span>{result.symbol}</span><strong>{result.sector || result.exchange}</strong></div>
+                <h2>{result.company_name}</h2>
+                <p>{result.industry || "Company profile loaded from the StonksInHand database."}</p>
                 <div className={styles.resultStats}>
-                  <div><span>Price</span><strong>{result.price}</strong></div>
-                  <div><span>Sentiment</span><strong className={result.sentiment === "Uncertain" ? styles.warningText : styles.positiveText}>{result.sentiment === "Uncertain" ? "->" : "~"} {result.sentiment}</strong></div>
+                  <div><span>Exchange</span><strong>{result.exchange}</strong></div>
+                  <div><span>Market cap</span><strong>{formatMarketCap(result.market_cap)}</strong></div>
                 </div>
               </div>
             </Link>
           ))}
+          {!isLoading && results.length === 0 ? <p>No matching companies are currently in the database.</p> : null}
         </div>
       </section>
     </AppFrame>
