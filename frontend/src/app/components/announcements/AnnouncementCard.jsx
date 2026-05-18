@@ -1,6 +1,7 @@
 import Link from "next/link"
 import styles from "../../page.module.css"
 import { BookmarkIcon } from "../icons"
+import { CitationLinks } from "../ticker/CitationLinks"
 
 // Shared announcement summary card.
 // Used by both the global announcements feed and the ticker news tab. Keep the data
@@ -27,6 +28,7 @@ export function AnnouncementCard({ item }) {
         <Link href={`/ticker/${item.ticker}/news`}>Read full summary</Link>
         <a href={filingUrl}>View original ASX filing</a>
       </div>
+      <CitationLinks sources={item.sources} />
     </article>
   )
 }

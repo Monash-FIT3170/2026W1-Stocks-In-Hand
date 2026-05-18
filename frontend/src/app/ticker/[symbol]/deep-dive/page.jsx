@@ -1,6 +1,7 @@
 import { AppFrame } from "../../../components/layout/AppFrame"
 import { BriefAside } from "../../../components/ticker/BriefAside"
 import { BriefTabs } from "../../../components/ticker/BriefTabs"
+import { CitationLinks } from "../../../components/ticker/CitationLinks"
 import { TickerHeader } from "../../../components/ticker/TickerHeader"
 import styles from "../../../page.module.css"
 
@@ -47,7 +48,7 @@ export default async function TickerDeepDiveRoute({ params }) {
                         </div>
                       )}
                       <p>{item.detail}</p>
-                      <a href="#">View source</a>
+                      <CitationLinks sources={item.sources} />
                     </div>
                   </article>
                 ))}

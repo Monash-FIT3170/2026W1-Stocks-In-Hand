@@ -1,13 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
+
+from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.models.claim import Claim
+from app.models.claim_source import ClaimSource
 from app.models.market_data import MarketData
 from app.schemas.ticker import TickerCreate, TickerResponse
-from app.crud import ticker as crud
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -47,9 +50,25 @@ def _sentiment_label(value: str | None) -> str:
     return labels.get((value or "").lower(), "Neutral")
 
 
+def _clean_text(value):
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())
+    return cleaned or None
+
+
+def _preview(value, max_length=220):
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return None
+    if len(cleaned) <= max_length:
+        return cleaned
+    return f"{cleaned[:max_length].rstrip()}..."
+
+
 def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
     metadata = artifact.artifact_metadata or {}
-    return metadata.get(key) or fallback
+    return _clean_text(metadata.get(key)) or fallback
 
 
 def _format_announcement_time(artifact: Artifact) -> str:
@@ -58,10 +77,85 @@ def _format_announcement_time(artifact: Artifact) -> str:
     return "Recently"
 
 
+def _format_month(value):
+    if not value:
+        return "Recent"
+    return value.strftime("%b %Y")
+
+
+def _format_label(value, fallback):
+    cleaned = _clean_text(value) or fallback
+    return cleaned.replace("_", " ").replace("-", " ").title()
+
+
+def _source_from_values(label, title, url, published_at=None, evidence_text=None):
+    cleaned_url = _clean_text(url)
+    if not cleaned_url:
+        return None
+    return {
+        "label": label,
+        "title": _clean_text(title) or label,
+        "url": cleaned_url,
+        "published_at": published_at.isoformat() if published_at else None,
+        "evidence_text": _preview(evidence_text, 180),
+    }
+
+
+def _source_from_claim_source(source: ClaimSource):
+    artifact = source.artifact
+    return _source_from_values(
+        label=_format_label(artifact.source_type if artifact else None, "Source"),
+        title=(artifact.title if artifact else None) or source.evidence_text,
+        url=source.url or (artifact.url if artifact else None),
+        published_at=source.published_at or (artifact.published_at if artifact else None),
+        evidence_text=source.evidence_text,
+    )
+
+
+def _sources_for_ticker(db: Session, ticker_id: UUID, limit: int = 4):
+    sources = (
+        db.query(ClaimSource)
+        .join(Claim, ClaimSource.claim_id == Claim.id)
+        .options(joinedload(ClaimSource.artifact))
+        .filter(Claim.ticker_id == ticker_id)
+        .order_by(ClaimSource.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [item for item in (_source_from_claim_source(source) for source in sources) if item]
+
+
+def _sources_for_artifact(artifact: Artifact):
+    sources = [
+        item
+        for item in (
+            _source_from_claim_source(source)
+            for source in sorted(
+                artifact.claim_sources,
+                key=lambda source: source.published_at or source.created_at,
+                reverse=True,
+            )
+        )
+        if item
+    ]
+    artifact_source = _source_from_values(
+        label=_format_label(artifact.source_type, "Source"),
+        title=artifact.title,
+        url=artifact.url,
+        published_at=artifact.published_at or artifact.created_at,
+        evidence_text=artifact.raw_text,
+    )
+    if artifact_source and not any(source["url"] == artifact_source["url"] for source in sources):
+        sources.append(artifact_source)
+    return sources
+
+
 def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Artifact]:
     return (
         db.query(Artifact)
+        .options(joinedload(Artifact.claim_sources).joinedload(ClaimSource.artifact))
         .filter(Artifact.ticker_id == ticker_id)
+        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
         .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
         .limit(limit)
         .all()
@@ -75,9 +169,11 @@ def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Ticker symbol already exists")
     return crud.create_ticker(db=db, ticker=ticker)
 
+
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_tickers(db, skip=skip, limit=limit)
+
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
@@ -86,6 +182,7 @@ def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Ticker not found")
     return ticker
 
+
 @router.get("/{ticker_id}", response_model=TickerResponse)
 def get_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
@@ -93,12 +190,14 @@ def get_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Ticker not found")
     return ticker
 
+
 @router.patch("/{ticker_id}", response_model=TickerResponse)
 def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
     return crud.update_ticker(db=db, ticker_id=ticker_id, data=data)
+
 
 @router.get("/symbol/{symbol}/overview")
 def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
@@ -120,13 +219,16 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
         )
 
     story = (
-        _metadata_value(latest_artifact, "about", latest_artifact.raw_text[:240])
+        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
         if latest_artifact and latest_artifact.raw_text
         else (
             f"{ticker.symbol} is tracked from the StonksInHand database. "
             "Add announcements and analysis data to enrich this brief."
         )
     )
+    sources = _sources_for_ticker(db, ticker.id)
+    if not sources and latest_artifact:
+        sources = _sources_for_artifact(latest_artifact)
 
     return {
         "symbol": ticker.symbol,
@@ -143,13 +245,15 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
         "current_price": _money(latest_price),
         "day_change": _day_change(market_rows),
         "story": story,
-        "sources_count": len(artifacts),
+        "sources_count": len(sources) if sources else len(artifacts),
         "public_sentiment_pct": (
             f"{round(float(latest_sentiment.confidence_score or 0) * 100)}%"
             if latest_sentiment
             else "N/A"
-        )
+        ),
+        "sources": sources,
     }
+
 
 @router.get("/symbol/{symbol}/news-feed")
 def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
@@ -162,24 +266,29 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
         {
             "id": str(artifact.id),
             "ticker": ticker.symbol,
-            "tag": _metadata_value(
-                artifact,
-                "category",
-                artifact.source_type or artifact.artifact_type,
+            "tag": _format_label(
+                _metadata_value(
+                    artifact,
+                    "category",
+                    artifact.source_type or artifact.artifact_type,
+                ),
+                artifact.artifact_type,
             ),
             "time": _format_announcement_time(artifact),
             "title": artifact.title or f"{ticker.symbol} announcement",
             "about": _metadata_value(
                 artifact,
                 "about",
-                artifact.raw_text[:160] if artifact.raw_text else "No summary available yet.",
+                _preview(artifact.raw_text, 160) or "No summary available yet.",
             ),
             "changed": _metadata_value(artifact, "changed", "No change summary available yet."),
             "matters": _metadata_value(artifact, "matters", "No investment impact summary available yet."),
             "url": artifact.url,
+            "sources": _sources_for_artifact(artifact),
         }
         for artifact in artifacts
     ]
+
 
 @router.get("/symbol/{symbol}/deep-dive-timeline")
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
@@ -198,25 +307,25 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
         )
         timeline.append(
             {
-                "month": (
-                    artifact.published_at.strftime("%b %Y")
-                    if artifact.published_at
-                    else "Recent"
+                "month": _format_month(artifact.published_at),
+                "tag": _format_label(
+                    _metadata_value(artifact, "category", artifact.artifact_type),
+                    artifact.artifact_type,
                 ),
-                "tag": _metadata_value(artifact, "category", artifact.artifact_type),
                 "title": artifact.title or f"{ticker.symbol} update",
                 "date": _format_announcement_time(artifact),
                 "detail": (
                     summary.summary_text
                     if summary
                     else (
-                        artifact.raw_text[:240]
+                        _preview(artifact.raw_text, 240)
                         if artifact.raw_text
                         else "No detail available yet."
                     )
                 ),
                 "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
                 "tone": "green" if artifact.credibility_label == "official" else "orange",
+                "sources": _sources_for_artifact(artifact),
             }
         )
 
@@ -234,6 +343,7 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
                 "but no announcement timeline has been loaded yet."
             ),
             "metrics": [ticker.exchange],
-            "tone": "green"
+            "tone": "green",
+            "sources": [],
         }
     ]
