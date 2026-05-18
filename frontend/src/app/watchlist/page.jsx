@@ -359,6 +359,7 @@ export default function WatchlistRoute() {
   }
 
   const investorName = state.investor?.username || state.investor?.email
+  const investorName = state.investor?.username || state.investor?.email
 
   return (
     <AppFrame active="watchlist" signedIn={Boolean(state.investorId)}>
