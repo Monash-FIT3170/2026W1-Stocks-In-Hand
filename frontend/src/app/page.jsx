@@ -1,0 +1,60 @@
+"use client"
+
+import Link from "next/link"
+import { useState } from "react"
+import { AppFrame } from "./components/layout/AppFrame"
+import { BadgeIcon, BellIcon, CalendarIcon, SearchIcon } from "./components/icons"
+import { features, popularStocks } from "./mock/landing"
+import styles from "./page.module.css"
+
+// Landing page route for "/".
+// This file should stay focused on the first-screen marketing/search experience:
+// hero copy, the landing search form, popular ticker links, and feature-card layout.
+// To change the displayed ticker pills or feature-card text, edit mock/landing.js instead
+// of changing the JSX here. Shared navigation/footer changes belong in AppFrame.jsx.
+const iconMap = { calendar: CalendarIcon, bell: BellIcon, badge: BadgeIcon }
+
+export default function Home() {
+  const [query, setQuery] = useState("BHP")
+
+  function handleSearch(event) {
+    event.preventDefault()
+    // Prototype-only navigation.
+    // Keeping the query in the URL makes the static mock easy to demo and share.
+    // When real search exists, this is the main place to replace with Next router
+    // navigation, debounced suggestions, or an API-backed search flow.
+    window.location.href = `/search?q=${encodeURIComponent(query.trim() || "BHP")}`
+  }
+
+  return (
+    <AppFrame active="home">
+      <section className={styles.homePage}>
+        <div className={styles.hero}>
+          <h1>Understand any ASX stock<span>in <em>60 seconds</em></span></h1>
+          <p>We read every announcement, news article, and investor forum so you don&apos;t have to. Real-time clarity for the modern investor.</p>
+          <form className={styles.heroSearch} onSubmit={handleSearch}>
+            <SearchIcon />
+            <input aria-label="Search a company or ticker" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a company or ticker - e.g. BHP, CSL, CBA" />
+          </form>
+          <div className={styles.popularRow}>
+            <span>Popular:</span>
+            {popularStocks.map((ticker) => <Link key={ticker} href={`/search?q=${ticker}`}>{ticker}</Link>)}
+          </div>
+        </div>
+
+        <div className={styles.featureGrid}>
+          {features.map((feature) => {
+            const Icon = iconMap[feature.icon]
+            return (
+              <article className={`${styles.featureCard} ${feature.featured ? styles.featureCardHighlighted : ""}`} key={feature.title}>
+                <div className={`${styles.iconBubble} ${styles[feature.tone]}`}><Icon /></div>
+                <h2>{feature.title}</h2>
+                <p>{feature.body}</p>
+              </article>
+            )
+          })}
+        </div>
+      </section>
+    </AppFrame>
+  )
+}

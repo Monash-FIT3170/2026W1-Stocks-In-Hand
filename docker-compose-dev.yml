@@ -39,6 +39,8 @@ services:
     build:
       context: ./frontend
       target: dev
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
     ports:
       - "3000:3000"
     command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
