@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { AppFrame } from "../components/layout/AppFrame"
-import { EyeIcon, PlusIcon } from "../components/icons"
+import { PlusIcon } from "../components/icons"
 import styles from "../page.module.css"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
@@ -359,7 +359,6 @@ export default function WatchlistRoute() {
   }
 
   const investorName = state.investor?.username || state.investor?.email
-  const investorName = state.investor?.username || state.investor?.email
 
   return (
     <AppFrame active="watchlist" signedIn={Boolean(state.investorId)}>
@@ -368,7 +367,7 @@ export default function WatchlistRoute() {
           <div>
             <h1>Portfolio Intel</h1>
             <p>{investorName ? `Monitoring ${investorName}'s saved ASX companies for structural shifts and sentiment swings.` : "Sign in to load your saved ASX portfolio from the database."}</p>
-            <h2><EyeIcon /> Active Watchlist</h2>
+            <h2>Active Watchlist</h2>
           </div>
           <button className={styles.primaryAction} onClick={openAddCompany} type="button"><PlusIcon /> Add company</button>
         </div>
