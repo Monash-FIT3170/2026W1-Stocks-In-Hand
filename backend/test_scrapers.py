@@ -1,9 +1,9 @@
 """
 CLI tool for manually testing ASX scraper implementations.
 
-INSTRUCTIONS TO RUN: 
+INSTRUCTIONS TO RUN:
 
-- Make sure you are in the backend directory 
+- Make sure you are in the backend directory
 - Then run with docker
 
 
