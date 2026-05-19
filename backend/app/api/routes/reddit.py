@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.database.connection import get_db
-from app.schemas.reddit import RedditPostResponse
 from app.schemas.artifact import ArtifactCreate, SourceType, ArtifactType
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
@@ -98,10 +97,6 @@ Return JSON only, no explanation:
     except json.JSONDecodeError:
         result = {"summary": raw, "dominant_sentiment": "unknown", "key_themes": []}
     return result
-
-@router.get("/", response_model=list[RedditPostResponse])
-def list_reddit_posts(subreddit: str = "ASX", limit: int = 10):
-    return _fetch_posts(subreddit, limit)
 
 @router.post("/scrape")
 def scrape_and_store(subreddit: str = "ASX", limit: int = 10, db: Session = Depends(get_db)):
