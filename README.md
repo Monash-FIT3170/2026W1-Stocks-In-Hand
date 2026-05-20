@@ -58,16 +58,57 @@ Then open:
 
 First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on first run and is cached after that.
 
+## Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `REDDIT_CLIENT_ID` | Yes | From reddit.com/prefs/apps — the string under "personal use script", key for developers available on Discord. |
+| `REDDIT_CLIENT_SECRET` | Yes | The secret field from your Reddit app, key for developers available on Discord. |
+| `GEMINI_API_KEY` | Yes | From Google AI Studio (aistudio.google.com) |
+| `GROQ_API_KEY` | Yes | From console.groq.com — used for Reddit post summarisation via meta/LLaMA |
+| `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash` |
+| `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
+
 
 ## API endpoints
 
+### Core
 | Method | Path | Description |
 |---|---|---|
 | GET | `/health` | Health check |
-| POST | `/analyse` | Run FinBERT on `{ "text": "..." }` |
-| GET | `/results` | Last 10 saved results |
-| GET | `/headlines` | Scrape Yahoo Finance headlines |
+| GET | `/docs` | FastAPI auto-generated interactive API docs |
+| GET | `/tickers` | List all implemented ASX tickers |
 
+### Sentiment (FinBERT)
+| Method | Path | Description |
+|---|---|---|
+| POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
+| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts + Reddit posts for a ticker, runs Gemini categorisation, then FinBERT on each category. Returns per-category sentiment breakdown |
+
+### Reddit (PRAW)
+| Method | Path | Description |
+|---|---|---|
+| POST | `/reddit/scrape` | Fetch posts from a subreddit and store them as artifacts. Params: `subreddit` (default: ASX), `limit` (default: 10). Requires Reddit platform to exist in DB first |
+| GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Read stored Reddit posts mentioning a ticker, summarise with Groq/LLaMA, return dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
+
+### Gemini
+| Method | Path | Description |
+|---|---|---|
+| POST | `/gemini/categorise/recent` | Run Gemini on recent ASX artifacts for a ticker and classify them into financial categories (earnings, dividends, etc). Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+
+### Scraping
+| Method | Path | Description |
+|---|---|---|
+| POST | `/scrape/{ticker}` | Trigger background ASX announcement scrape for a ticker. Available tickers: BHP, CBA, ANZ, CSL, WES |
+| GET | `/headlines` | Scrape live Yahoo Finance headlines via Playwright (default ticker BHP.AX) |
+
+### Storage (direct DB access)
+| Method | Path | Description |
+|---|---|---|
+| GET | `/results` | Last 10 saved FinBERT results |
+| POST | `/artifact-sentiments/` | Manually store a sentiment record against an artifact |
+| GET | `/artifact-sentiments/artifact/{artifact_id}` | Get all sentiment records for an artifact |
+| GET | `/artifact-sentiments/{sentiment_id}` | Get a single sentiment record |
 ---
 
 ## Stopping
