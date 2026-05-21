@@ -10,7 +10,7 @@ def get_ticker_by_symbol(db: Session, symbol: str):
     return db.query(Ticker).filter(Ticker.symbol == symbol).first()
 
 def get_tickers(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(Ticker).offset(skip).limit(limit).all()
+    return db.query(Ticker).order_by(Ticker.symbol.asc()).offset(skip).limit(limit).all()
 
 def create_ticker(db: Session, ticker: TickerCreate):
     db_ticker = Ticker(**ticker.model_dump())

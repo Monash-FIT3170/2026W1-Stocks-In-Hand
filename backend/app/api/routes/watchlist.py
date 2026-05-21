@@ -7,6 +7,7 @@ from app.crud import watchlist as crud
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
+@router.post("", response_model=WatchlistResponse)
 @router.post("/", response_model=WatchlistResponse)
 def create_watchlist(watchlist: WatchlistCreate, db: Session = Depends(get_db)):
     return crud.create_watchlist(db=db, watchlist=watchlist)

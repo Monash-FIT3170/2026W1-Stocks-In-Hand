@@ -12,11 +12,64 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.claim import Claim
 from app.models.claim_source import ClaimSource
 from app.models.market_data import MarketData
+from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+DEFAULT_TICKERS = {
+    "ANZ": {
+        "company_name": "ANZ Group Holdings Limited",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Banks",
+    },
+    "BHP": {
+        "company_name": "BHP Group Limited",
+        "exchange": "ASX",
+        "sector": "Materials",
+        "industry": "Diversified Metals & Mining",
+    },
+    "CBA": {
+        "company_name": "Commonwealth Bank of Australia",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Banks",
+    },
+    "CSL": {
+        "company_name": "CSL Limited",
+        "exchange": "ASX",
+        "sector": "Health Care",
+        "industry": "Biotechnology",
+    },
+    "WES": {
+        "company_name": "Wesfarmers Limited",
+        "exchange": "ASX",
+        "sector": "Consumer Discretionary",
+        "industry": "Consumer Staples Distribution & Retail",
+    },
+}
+
+
+def _ensure_default_tickers(db: Session) -> None:
+    changed = False
+
+    for symbol, defaults in DEFAULT_TICKERS.items():
+        ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
+        if not ticker:
+            db.add(Ticker(symbol=symbol, **defaults))
+            changed = True
+            continue
+
+        for key, value in defaults.items():
+            current = getattr(ticker, key)
+            if not current or (key == "company_name" and current == symbol):
+                setattr(ticker, key, value)
+                changed = True
+
+    if changed:
+        db.commit()
 
 
 def _money(value) -> str:
@@ -235,11 +288,13 @@ def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     return crud.get_tickers(db, skip=skip, limit=limit)
 
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")

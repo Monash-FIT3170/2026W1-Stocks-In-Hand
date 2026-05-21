@@ -5,7 +5,7 @@ import asyncio
 from datetime import date, timedelta
 
 import httpx
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -43,6 +43,7 @@ from app.api.routes import (
     announcement,
 )
 from app.database.connection import SessionLocal
+from app.database.connection import get_db
 from app.core.config import settings
 from app.models.result import Result
 
@@ -285,6 +286,6 @@ async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
     return {"status": "queued", "ticker": ticker.upper()}
 
 @app.get("/tickers")
-def tickers():
-    """Return all implemented ASX tickers."""
-    return {"tickers": available_tickers()}
+def tickers(skip: int = 0, limit: int = 100, db=Depends(get_db)):
+    """Return database tickers for clients that request /tickers without a slash."""
+    return ticker.get_tickers(skip=skip, limit=limit, db=db)
