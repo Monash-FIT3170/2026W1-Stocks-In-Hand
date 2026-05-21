@@ -157,3 +157,80 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
     assert captured_categories["revenue"] == "ANZ revenue increased."
     assert captured_categories["user_discussion"] == "Retail investors are mixed on ANZ."
     assert result["categories"]["revenue"]["sentiment_label"] == "neutral"
+
+
+def test_gemini_summary_response_parser_accepts_strict_json() -> None:
+    """Gemini summary parsing should return the four fields the UI uses."""
+    from app.services.gemini import parse_summary_response
+
+    result = parse_summary_response(
+        """
+        {
+          "summary": "The company announced an updated dividend timetable.",
+          "about": "The filing explains the dividend key dates.",
+          "changed": "The payment date was confirmed.",
+          "matters": "Investors can use the dates to plan income expectations."
+        }
+        """
+    )
+
+    assert result == {
+        "summary": "The company announced an updated dividend timetable.",
+        "about": "The filing explains the dividend key dates.",
+        "changed": "The payment date was confirmed.",
+        "matters": "Investors can use the dates to plan income expectations.",
+    }
+
+
+def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
+    """Incomplete Gemini JSON should fail before storage uses it."""
+    import pytest
+
+    from app.services.gemini import parse_summary_response
+
+    with pytest.raises(ValueError, match="missing keys"):
+        parse_summary_response('{"summary": "Only one field"}')
+
+
+def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
+    """Manual summary backfill should update artifact metadata and create a row."""
+    import uuid
+
+    from app.api.routes import gemini
+
+    artifact = MagicMock()
+    artifact.id = uuid.uuid4()
+    artifact.title = "Dividend update"
+    artifact.artifact_type = "dividend_announcement"
+    artifact.raw_text = "The company confirmed a dividend payment date."
+    artifact.artifact_metadata = {
+        "category": "DividendAnnouncement",
+        "extracted_data": {"payment_date": "2040-01-02"},
+    }
+    db = MagicMock()
+
+    with patch.object(
+        gemini.artifact_crud,
+        "get_artifact",
+        return_value=artifact,
+    ), patch.object(
+        gemini.gemini_service,
+        "summarise_announcement",
+        return_value={
+            "summary": "The company confirmed its dividend timetable.",
+            "about": "The filing explains dividend timing.",
+            "changed": "The payment date was confirmed.",
+            "matters": "Investors can plan income timing.",
+        },
+    ):
+        result = gemini.summarise_artifact(
+            artifact_id=artifact.id,
+            db=db,
+        )
+
+    assert artifact.artifact_metadata["about"] == "The filing explains dividend timing."
+    assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
+    assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
+    assert result["summary"] == "The company confirmed its dividend timetable."
+    db.add.assert_called_once()
+    db.commit.assert_called_once()

@@ -1,4 +1,25 @@
 import os
+from pathlib import Path
+
+
+def _load_local_env() -> None:
+    """Load backend/.env for local runs without overriding real env vars."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_local_env()
 
 class Settings:
     """Application configuration loaded from environment variables.
@@ -29,5 +50,14 @@ class Settings:
     SESSION_EXPIRE_DAYS: int = int(os.getenv("SESSION_EXPIRE_DAYS", "7"))
     SESSION_COOKIE_SECURE: bool = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
     SESSION_COOKIE_SAMESITE: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax")
+
+    # Comma-separated list of ASX ticker symbols to scrape and summarise on
+    # first boot when the database has no artifacts (e.g. "ANZ,CBA,BHP").
+    # Leave empty to disable auto-seeding.
+    SEED_TICKERS: list[str] = [
+        t.strip().upper()
+        for t in os.getenv("SEED_TICKERS", "").split(",")
+        if t.strip()
+    ]
 
 settings = Settings()

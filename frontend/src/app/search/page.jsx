@@ -5,9 +5,8 @@ import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { AppFrame } from "../components/layout/AppFrame"
 import { SearchIcon } from "../components/icons"
+import { fetchTickers } from "../lib/api"
 import styles from "../page.module.css"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 function formatMarketCap(value) {
   if (!value) {
@@ -65,11 +64,7 @@ export default function SearchPage() {
       setError("")
 
       try {
-        const response = await fetch(`${API_URL}/tickers/?limit=100`, { cache: "no-store" })
-        if (!response.ok) {
-          throw new Error("Could not load companies from the database")
-        }
-        const data = await response.json()
+        const data = await fetchTickers({ limit: 100 })
         const nextTickers = normalizeTickers(data)
         if (!cancelled) {
           setTickers(nextTickers)

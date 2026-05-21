@@ -1,4 +1,30 @@
-const API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://backend:8000"
+const SERVER_API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
+
+function apiBaseUrl() {
+  return typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL
+}
+
+export async function apiFetch(path, options = {}) {
+  const baseUrl = apiBaseUrl().replace(/\/$/, "")
+  const apiPath = path.startsWith("/") ? path : `/${path}`
+  return fetch(`${baseUrl}${apiPath}`, options)
+}
+
+export async function fetchJson(path, options = {}) {
+  const response = await apiFetch(path, {
+    cache: "no-store",
+    ...options,
+  })
+
+  const data = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(data?.detail || "Failed to fetch API data")
+  }
+
+  return data
+}
 
 export async function fetchAnnouncements(filters = {}) {
   const params = new URLSearchParams()
@@ -20,13 +46,35 @@ export async function fetchAnnouncements(filters = {}) {
   }
 
   const query = params.toString()
-  const response = await fetch(`${API_URL}/announcements/${query ? `?${query}` : ""}`, {
-    cache: "no-store",
-  })
+  return fetchJson(`/announcements/${query ? `?${query}` : ""}`)
+}
 
-  if (!response.ok) {
-    throw new Error("Failed to fetch announcements")
-  }
+export async function fetchTrendingAnnouncements({ days = 7, limit = 4 } = {}) {
+  const params = new URLSearchParams()
+  params.set("days", String(days))
+  params.set("limit", String(limit))
+  return fetchJson(`/announcements/trending?${params.toString()}`)
+}
 
-  return response.json()
+export async function fetchTickers({ limit = 100, skip = 0 } = {}) {
+  const params = new URLSearchParams()
+  params.set("skip", String(skip))
+  params.set("limit", String(limit))
+  return fetchJson(`/tickers/?${params.toString()}`)
+}
+
+export async function fetchTickerOverview(symbol) {
+  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/overview`)
+}
+
+export async function fetchTickerBriefAside(symbol) {
+  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/brief-aside`)
+}
+
+export async function fetchTickerNews(symbol) {
+  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/news-feed`)
+}
+
+export async function fetchTickerDeepDive(symbol) {
+  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/deep-dive-timeline`)
 }

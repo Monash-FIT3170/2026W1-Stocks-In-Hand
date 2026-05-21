@@ -47,6 +47,27 @@ def test_announcement_mapping_uses_metadata_and_ticker_symbol() -> None:
     assert result.url == "https://example.test/asx/bhp"
 
 
+def test_announcement_mapping_uses_summary_metadata_as_about_fallback() -> None:
+    artifact = Artifact(
+        id=uuid.uuid4(),
+        source_type="asx_announcement",
+        artifact_type="asx_announcement_other",
+        title="Trading update",
+        raw_text="Raw announcement text",
+        artifact_metadata={
+            "summary": "The company released a concise generated summary.",
+            "changed": "No material change identified.",
+            "matters": "Investors can use this as a quick filing overview.",
+        },
+    )
+
+    result = _announcement_from_artifact(artifact)
+
+    assert result.about == "The company released a concise generated summary."
+    assert result.changed == "No material change identified."
+    assert result.matters == "Investors can use this as a quick filing overview."
+
+
 def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
     artifact = Artifact(
         id=uuid.uuid4(),

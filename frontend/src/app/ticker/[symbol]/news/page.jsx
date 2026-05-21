@@ -3,20 +3,37 @@ import { AppFrame } from "../../../components/layout/AppFrame"
 import { BriefAside } from "../../../components/ticker/BriefAside"
 import { BriefTabs } from "../../../components/ticker/BriefTabs"
 import { TickerHeader } from "../../../components/ticker/TickerHeader"
+import { fetchTickerBriefAside, fetchTickerNews, fetchTickerOverview } from "../../../lib/api"
 import styles from "../../../page.module.css"
 
 // Ticker brief news tab for "/ticker/[symbol]/news".
 // This reuses AnnouncementCard and renders only DB-backed ticker announcements.
 async function fetchNews(symbol) {
-  const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/news-feed`, { cache: 'no-store' })
-  const overview = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })
-  if (!res.ok || !overview.ok) throw new Error("Failed to load data")
-  return { news: await res.json(), overview: await overview.json() }
+  const [news, overview, aside] = await Promise.all([
+    fetchTickerNews(symbol),
+    fetchTickerOverview(symbol),
+    fetchTickerBriefAside(symbol),
+  ])
+  return { news, overview, aside }
 }
 
 export default async function TickerNewsRoute({ params }) {
   const symbol = params.symbol
-  const { news, overview } = await fetchNews(symbol)
+  let news, overview, aside
+  try {
+    ;({ news, overview, aside } = await fetchNews(symbol))
+  } catch {
+    return (
+      <AppFrame active="home">
+        <section className={styles.contentPage}>
+          <div className={styles.emptyCard}>
+            <h3>{symbol} not found</h3>
+            <p>This ticker is not in the database yet. It will appear once the data pipeline has run.</p>
+          </div>
+        </section>
+      </AppFrame>
+    )
+  }
 
   return (
     <AppFrame active="home">
@@ -31,7 +48,7 @@ export default async function TickerNewsRoute({ params }) {
               ))}
             </div>
           </div>
-          <BriefAside />
+          <BriefAside data={aside} />
         </div>
       </section>
     </AppFrame>

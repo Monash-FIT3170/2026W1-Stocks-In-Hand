@@ -19,6 +19,7 @@ real database verification path.
 
 import sys
 import uuid
+from datetime import date, datetime, timezone
 from http.cookies import SimpleCookie
 from collections.abc import Iterator
 from pathlib import Path
@@ -39,6 +40,7 @@ from app.database.base import Base
 from app.models.artifact import Artifact
 from app.models.claim import Claim
 from app.models.claim_source import ClaimSource
+from app.models.market_data import MarketData
 from app.models.report import Report
 from app.models.report_claim import ReportClaim
 from app.models.result import Result
@@ -541,3 +543,166 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.author == "testuser"
     assert saved.artifact_metadata["score"] == 42
     assert saved.artifact_metadata["subreddit"] == "ASX"
+
+
+def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
+    db_session: Session,
+) -> None:
+    """Announcement APIs should count only non-duplicate ASX artifacts."""
+    from app.api.routes.announcement import (
+        list_announcements,
+        list_trending_announcements,
+    )
+
+    symbol = f"A{uuid.uuid4().hex[:8].upper()}"
+    ticker = Ticker(
+        symbol=symbol,
+        company_name="Announcement API Test Limited",
+        exchange="ASX",
+        sector="Materials",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    published_at = datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc)
+    visible = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="dividend_announcement",
+        title="Visible dividend update",
+        raw_text="Dividend announcement body",
+        published_at=published_at,
+        content_hash=f"visible-{uuid.uuid4()}",
+        is_duplicate=False,
+    )
+    duplicate = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="dividend_announcement",
+        title="Duplicate dividend update",
+        raw_text="Duplicate announcement body",
+        published_at=published_at,
+        content_hash=f"duplicate-{uuid.uuid4()}",
+        is_duplicate=True,
+    )
+    reddit = Artifact(
+        ticker_id=ticker.id,
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="Non ASX source",
+        raw_text="Reddit post body",
+        published_at=published_at,
+        content_hash=f"reddit-{uuid.uuid4()}",
+        is_duplicate=False,
+    )
+    db_session.add_all([visible, duplicate, reddit])
+    db_session.commit()
+
+    announcements = list_announcements(
+        start_date=date(2040, 1, 1),
+        end_date=date(2040, 1, 3),
+        db=db_session,
+    )
+    announcement_ids = {item.id for item in announcements}
+
+    assert visible.id in announcement_ids
+    assert duplicate.id not in announcement_ids
+    assert reddit.id not in announcement_ids
+
+    trending = list_trending_announcements(days=1, limit=10, db=db_session)
+    trend = next(item for item in trending if item.symbol == symbol)
+
+    assert trend.count == 1
+
+
+def test_ticker_brief_aside_returns_empty_database_state(
+    db_session: Session,
+) -> None:
+    """The ticker sidebar API should not fall back to mocked values."""
+    from app.api.routes.ticker import get_ticker_brief_aside
+
+    symbol = f"E{uuid.uuid4().hex[:8].upper()}"
+    ticker = Ticker(
+        symbol=symbol,
+        company_name="Empty Sidebar Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.commit()
+
+    result = get_ticker_brief_aside(symbol.lower(), db=db_session)
+
+    assert result["key_numbers"] == [
+        {"label": "Current price", "value": "N/A"},
+        {"label": "Day change", "value": "N/A"},
+        {"label": "Latest filing", "value": "No filings yet"},
+        {"label": "Latest type", "value": "No filings yet"},
+    ]
+    assert result["market_intelligence"] == {"confirmed": [], "rumoured": []}
+    assert result["themes"] == []
+
+
+def test_ticker_brief_aside_uses_market_artifact_and_claim_data(
+    db_session: Session,
+) -> None:
+    """The ticker sidebar API should derive values from persisted records."""
+    from app.api.routes.ticker import get_ticker_brief_aside
+
+    symbol = f"B{uuid.uuid4().hex[:8].upper()}"
+    ticker = Ticker(
+        symbol=symbol,
+        company_name="Brief Sidebar Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    db_session.add_all([
+        MarketData(
+            ticker_id=ticker.id,
+            price_date=date(2040, 1, 1),
+            close_price=10,
+        ),
+        MarketData(
+            ticker_id=ticker.id,
+            price_date=date(2040, 1, 2),
+            close_price=11,
+        ),
+    ])
+
+    artifact = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="dividend_announcement",
+        title="Dividend update",
+        raw_text="Dividend announcement body",
+        published_at=datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc),
+        content_hash=f"brief-{uuid.uuid4()}",
+        artifact_metadata={"category": "DividendAnnouncement"},
+        is_duplicate=False,
+    )
+    claim = Claim(
+        ticker_id=ticker.id,
+        claim_text="The dividend was increased.",
+        claim_type="financial",
+        reliability_label="high",
+    )
+    db_session.add_all([artifact, claim])
+    db_session.flush()
+    db_session.add(ClaimSource(
+        claim_id=claim.id,
+        artifact_id=artifact.id,
+        evidence_text="The dividend was increased.",
+        url="https://example.test/dividend",
+    ))
+    db_session.commit()
+
+    result = get_ticker_brief_aside(symbol, db=db_session)
+
+    assert {"label": "Current price", "value": "$11.00"} in result["key_numbers"]
+    assert {"label": "Day change", "value": "+10.00%"} in result["key_numbers"]
+    assert {"label": "Latest filing", "value": "Jan 2040"} in result["key_numbers"]
+    assert {"label": "Latest type", "value": "Dividend Announcement"} in result["key_numbers"]
+    assert result["market_intelligence"]["confirmed"] == ["The dividend was increased."]
+    assert result["market_intelligence"]["rumoured"] == []
+    assert result["themes"] == ["Dividend Announcement activity"]

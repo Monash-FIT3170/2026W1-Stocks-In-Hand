@@ -1,22 +1,39 @@
 import { AppFrame } from "../../../components/layout/AppFrame"
 import { BriefAside } from "../../../components/ticker/BriefAside"
 import { BriefTabs } from "../../../components/ticker/BriefTabs"
-import { CitationLinks } from "../../../components/ticker/CitationLinks"
+import { DeepDiveTimeline } from "../../../components/ticker/DeepDiveTimeline"
 import { TickerHeader } from "../../../components/ticker/TickerHeader"
+import { fetchTickerBriefAside, fetchTickerDeepDive, fetchTickerOverview } from "../../../lib/api"
 import styles from "../../../page.module.css"
 
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
 // Timeline entries come from DB-backed ticker artifacts.
 async function fetchDeepDive(symbol) {
-  const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/deep-dive-timeline`, { cache: 'no-store' })
-  const overview = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })
-  if (!res.ok || !overview.ok) throw new Error("Failed to load data")
-  return { timeline: await res.json(), overview: await overview.json() }
+  const [timeline, overview, aside] = await Promise.all([
+    fetchTickerDeepDive(symbol),
+    fetchTickerOverview(symbol),
+    fetchTickerBriefAside(symbol),
+  ])
+  return { timeline, overview, aside }
 }
 
 export default async function TickerDeepDiveRoute({ params }) {
   const symbol = params.symbol
-  const { timeline, overview } = await fetchDeepDive(symbol)
+  let timeline, overview, aside
+  try {
+    ;({ timeline, overview, aside } = await fetchDeepDive(symbol))
+  } catch {
+    return (
+      <AppFrame active="home">
+        <section className={styles.contentPage}>
+          <div className={styles.emptyCard}>
+            <h3>{symbol} not found</h3>
+            <p>This ticker is not in the database yet. It will appear once the data pipeline has run.</p>
+          </div>
+        </section>
+      </AppFrame>
+    )
+  }
 
   return (
     <AppFrame active="home">
@@ -25,37 +42,9 @@ export default async function TickerDeepDiveRoute({ params }) {
           <div className={styles.briefMain}>
             <TickerHeader data={overview} />
             <BriefTabs active="deep" symbol={symbol} />
-            <div className={styles.timelineShell}>
-              <div className={styles.filterTabs}>
-                {["All", "Strategic Update", "Regulatory"].map((label, index) => (
-                  <button className={index === 0 ? styles.selectedChip : ""} key={label} type="button">{label}</button>
-                ))}
-              </div>
-              <div className={styles.timeline}>
-                {timeline.map((item) => (
-                  <article className={styles.timelineItem} key={item.title}>
-                    <span className={`${styles.timelineDot} ${styles[item.tone]}`} />
-                    <div className={styles.timelineMonth}>{item.month}</div>
-                    <div className={styles.timelineCard}>
-                      <div className={styles.timelineTop}>
-                        <span className={styles.softPill}>{item.tag}</span>
-                        <strong>{item.date}</strong>
-                      </div>
-                      <h2>{item.title}</h2>
-                      {item.metrics.length > 0 && (
-                        <div className={styles.metricGrid}>
-                          {item.metrics.map((metric) => <span key={metric}>{metric}</span>)}
-                        </div>
-                      )}
-                      <p>{item.detail}</p>
-                      <CitationLinks sources={item.sources} />
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
+            <DeepDiveTimeline timeline={timeline} />
           </div>
-          <BriefAside />
+          <BriefAside data={aside} />
         </div>
       </section>
     </AppFrame>

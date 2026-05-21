@@ -7,6 +7,8 @@ from app.core.config import settings
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "gemini-category-v1"
+SUMMARY_PROMPT_VERSION = "gemini-announcement-summary-v1"
+SUMMARY_KEYS = ("summary", "about", "changed", "matters")
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
 
@@ -41,6 +43,22 @@ def parse_category_response(text: str) -> dict[str, str]:
     return categories
 
 
+def parse_summary_response(text: str) -> dict[str, str]:
+    data = json.loads(_extract_json_text(text))
+    if not isinstance(data, dict):
+        raise ValueError("Gemini summary response must be a JSON object")
+
+    missing = [key for key in SUMMARY_KEYS if key not in data]
+    if missing:
+        raise ValueError(f"Gemini summary response missing keys: {', '.join(missing)}")
+
+    summary = {}
+    for key in SUMMARY_KEYS:
+        value = data.get(key, "")
+        summary[key] = value.strip() if isinstance(value, str) else str(value)
+    return summary
+
+
 def _build_prompt(chunk: str) -> str:
     return f"""
 You are analysing scraped ASX announcement artifacts for a financial sentiment workflow.
@@ -53,6 +71,41 @@ Do not include markdown, explanations, or extra keys.
 
 Artifact text:
 {chunk}
+""".strip()
+
+
+def _build_summary_prompt(
+    *,
+    title: str,
+    category: str,
+    extracted_data: dict,
+    raw_text: str,
+) -> str:
+    extracted_json = json.dumps(extracted_data or {}, default=str, indent=2)
+    text = raw_text[:18000]
+    return f"""
+You are summarising an official ASX announcement for retail investors.
+
+Use only the supplied announcement text and extracted fields. Do not invent facts.
+Write in clear, plain English. Avoid hype.
+
+Return strict JSON only with exactly these keys:
+summary: a concise 2-3 sentence summary.
+about: one sentence explaining what the announcement is about.
+changed: one sentence explaining what changed, or "No material change identified." if unclear.
+matters: one sentence explaining why it may matter to investors.
+
+Title:
+{title}
+
+Detected category:
+{category}
+
+Extracted fields:
+{extracted_json}
+
+Announcement text:
+{text}
 """.strip()
 
 
@@ -93,6 +146,58 @@ def categorise_chunk(chunk: str) -> dict[str, str]:
         raise ValueError("Gemini response did not include text output") from exc
 
     return parse_category_response(text)
+
+
+def summarise_announcement(
+    *,
+    title: str,
+    category: str,
+    extracted_data: dict,
+    raw_text: str,
+) -> dict[str, str]:
+    if not settings.GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": _build_summary_prompt(
+                            title=title,
+                            category=category,
+                            extracted_data=extracted_data,
+                            raw_text=raw_text,
+                        )
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2,
+        },
+    }
+
+    response = httpx.post(
+        url,
+        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+        json=payload,
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Gemini response did not include text output") from exc
+
+    return parse_summary_response(text)
 
 
 def _split_artifact_batches(chunk: str, batch_size: int) -> list[str]:

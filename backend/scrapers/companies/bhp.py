@@ -24,10 +24,12 @@ class BHPScraper(BaseScraper):
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--headless=new",
                 ],
             )
 
@@ -114,8 +116,7 @@ class BHPScraper(BaseScraper):
             if not self._looks_like_bhp_article(full_url, text):
                 continue
 
-            nearby_text = await self._get_nearby_text(link)
-            date = self._extract_date(nearby_text)
+            date = await self._extract_nearby_date(link)
 
             if not date:
                 print(f"[BHP] Skipping article because no date found: {text}")
@@ -201,6 +202,26 @@ class BHPScraper(BaseScraper):
     def _looks_like_pdf(self, url: str) -> bool:
         return ".pdf" in url.lower()
 
+
+    def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
+        seen: set[str] = set()
+        result = []
+        for item in items:
+            key = item["article_url"]
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
+    def _dedupe_announcements(self, announcements: list) -> list:
+        seen: set[str] = set()
+        result = []
+        for ann in announcements:
+            key = ann.pdf_url or ann.source_url or ann.title
+            if key not in seen:
+                seen.add(key)
+                result.append(ann)
+        return result
 
     async def _extract_nearby_date(self, link) -> datetime | None:
 

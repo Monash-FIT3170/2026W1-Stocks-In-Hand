@@ -2,8 +2,8 @@
 
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
+import { apiFetch } from "../lib/api"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const AUTH_STORAGE_KEY = "stonks_signed_in"
 
 export default function SignOutRoute() {
@@ -12,7 +12,7 @@ export default function SignOutRoute() {
   useEffect(() => {
     async function signOut() {
       try {
-        await fetch(`${API_URL}/auth/sign-out`, {
+        await apiFetch("/auth/sign-out", {
           method: "POST",
           credentials: "include",
         })

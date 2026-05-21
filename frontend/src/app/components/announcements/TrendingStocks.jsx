@@ -1,15 +1,16 @@
-import { trendingStocks } from "../../mock/announcements"
 import styles from "../../page.module.css"
 
-// Small sidebar module for the announcements page.
-// The trend badges are sourced from mock/announcements.js so the list can be replaced
-// by a market/trending endpoint without changing this component's markup.
-export function TrendingStocks() {
+export function TrendingStocks({ stocks = [] }) {
   return (
     <div className={styles.trendingBox}>
       <span>Trending stocks</span>
       <div>
-        {trendingStocks.map((ticker, index) => <b className={index === 1 ? styles.hotTicker : ""} key={ticker}>{ticker}</b>)}
+        {stocks.length > 0
+          ? stocks.map((item, index) => {
+              const symbol = typeof item === "string" ? item : item.symbol
+              return <b className={index === 0 ? styles.hotTicker : ""} key={symbol}>{symbol}</b>
+            })
+          : <b>No filings yet</b>}
       </div>
     </div>
   )

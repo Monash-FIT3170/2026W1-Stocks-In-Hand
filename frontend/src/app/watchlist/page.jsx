@@ -4,9 +4,8 @@ import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { AppFrame } from "../components/layout/AppFrame"
 import { PlusIcon } from "../components/icons"
+import { apiFetch } from "../lib/api"
 import styles from "../page.module.css"
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 function getErrorMessage(data, fallback) {
   if (Array.isArray(data.detail)) {
@@ -21,7 +20,7 @@ function getErrorMessage(data, fallback) {
 }
 
 async function fetchJson(path, fallback, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await apiFetch(path, {
     credentials: "include",
     ...options,
   })
@@ -59,6 +58,18 @@ function formatStatusLabel(value) {
 
   const label = cleaned.replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
   return label.toLowerCase().includes("sentiment") ? label : `${label} Sentiment`
+}
+
+function getStockBrief(stock) {
+  const reportText = stock.latestReport?.report_text
+  if (reportText && typeof reportText === "string") {
+    return reportText.length > 150 ? `${reportText.slice(0, 147)}...` : reportText
+  }
+  const about = stock.latestArtifact?.artifact_metadata?.about
+  if (about && typeof about === "string") {
+    return about.length > 150 ? `${about.slice(0, 147)}...` : about
+  }
+  return null
 }
 
 function getTickerStatus(ticker) {
@@ -134,7 +145,7 @@ async function findLatestSentiment(artifacts) {
 
   for (const artifact of recentArtifacts) {
     const sentiments = await fetchJson(`/artifact-sentiments/artifact/${artifact.id}`, [])
-    if (sentiments.length) {
+    if (Array.isArray(sentiments) && sentiments.length) {
       return sortByNewestDate(sentiments, (sentiment) => sentiment.created_at)[0]
     }
   }
@@ -272,8 +283,7 @@ export default function WatchlistRoute() {
   const filteredAvailableTickers = useMemo(() => {
     const query = tickerQuery.trim().toLowerCase()
 
-    return availableTickers
-      .filter((ticker) => !watchedTickerIds.has(ticker.id))
+    return (Array.isArray(availableTickers) ? availableTickers : [])
       .filter((ticker) => {
         if (!query) {
           return true
@@ -285,7 +295,7 @@ export default function WatchlistRoute() {
         )
       })
       .slice(0, 20)
-  }, [availableTickers, tickerQuery, watchedTickerIds])
+  }, [availableTickers, tickerQuery])
 
   async function openAddCompany() {
     setIsAddOpen(true)
@@ -297,7 +307,8 @@ export default function WatchlistRoute() {
 
     setIsTickerListLoading(true)
     try {
-      setAvailableTickers(await fetchJson("/tickers/?limit=500", []))
+      const result = await fetchJson("/tickers/?limit=500", [])
+      setAvailableTickers(Array.isArray(result) ? result : [])
     } catch (err) {
       setAddError(
         err instanceof TypeError
@@ -337,6 +348,14 @@ export default function WatchlistRoute() {
     return watchlist
   }
 
+  async function clearAlerts() {
+    const ids = state.alerts.map((a) => a.id)
+    setState((current) => ({ ...current, alerts: [] }))
+    await Promise.allSettled(
+      ids.map((id) => fetchJson(`/alerts/${id}`, undefined, { method: "DELETE" }))
+    )
+  }
+
   async function addCompany(ticker) {
     setAddError("")
     setAddingTickerId(ticker.id)
@@ -355,6 +374,21 @@ export default function WatchlistRoute() {
           : err.message
       )
       setAddingTickerId(null)
+    }
+  }
+
+  async function removeCompany(ticker) {
+    if (!state.watchlist) return
+    setState((current) => ({
+      ...current,
+      tickers: current.tickers.filter((t) => t.id !== ticker.id),
+    }))
+    try {
+      await fetchJson(`/watchlist-tickers/${state.watchlist.id}/${ticker.id}`, undefined, {
+        method: "DELETE",
+      })
+    } catch {
+      await loadWatchlist()
     }
   }
 
@@ -388,15 +422,26 @@ export default function WatchlistRoute() {
                 const tone = getStatusTone(status)
 
                 return (
-                  <Link className={styles.stockCard} href={`/ticker/${stock.symbol}`} key={stock.id}>
-                    <div className={styles.stockTop}>
-                      <div className={`${styles.stockAvatar} ${styles[tone]}`}>{stock.symbol[0]}</div>
-                      <div><h3>{stock.company_name}</h3><p>{stock.exchange}: {stock.symbol}</p></div>
-                      {stock.alertCount ? <span className={styles.alertBadge}>{stock.alertCount}</span> : null}
-                    </div>
-                    <div className={`${styles.stockStatus} ${styles[tone]}`}><span /> {status}</div>
-                    <div className={styles.stockFooter}><span>Last brief: {formatRelativeDate(stock.lastBriefAt)}</span><strong>&gt;</strong></div>
-                  </Link>
+                  <article className={styles.stockCard} key={stock.id}>
+                    <Link className={styles.stockCardLink} href={`/ticker/${stock.symbol}`}>
+                      <div className={styles.stockTop}>
+                        <div className={`${styles.stockAvatar} ${styles[tone]}`}>{stock.symbol[0]}</div>
+                        <div><h3>{stock.company_name}</h3><p>{stock.exchange}: {stock.symbol}</p></div>
+                        {stock.alertCount ? <span className={styles.alertBadge}>{stock.alertCount}</span> : null}
+                      </div>
+                      <div className={`${styles.stockStatus} ${styles[tone]}`}><span /> {status}</div>
+                      {getStockBrief(stock) ? <p className={styles.stockBrief}>{getStockBrief(stock)}</p> : null}
+                      <div className={styles.stockFooter}><span>Last brief: {formatRelativeDate(stock.lastBriefAt)}</span><strong>&gt;</strong></div>
+                    </Link>
+                    <button
+                      aria-label={`Remove ${stock.symbol} from watchlist`}
+                      className={styles.stockRemove}
+                      onClick={() => removeCompany(stock)}
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </article>
                 )
               })}
               {!state.isLoading && !state.error && !state.tickers.length ? (
@@ -406,7 +451,7 @@ export default function WatchlistRoute() {
             </div>
           </section>
           <aside className={styles.alertsPanel}>
-            <div className={styles.alertsHeader}><h2>Alerts Feed</h2><button type="button">Clear all</button></div>
+            <div className={styles.alertsHeader}><h2>Alerts Feed</h2><button onClick={clearAlerts} type="button">Clear all</button></div>
             <div className={styles.alertTimeline}>
               {state.isLoading ? (
                 <article className={styles.alertItem}>
@@ -430,7 +475,6 @@ export default function WatchlistRoute() {
                 </article>
               ) : null}
             </div>
-            <button className={styles.historyButton} type="button">View History</button>
           </aside>
         </div>
         {isAddOpen ? (
@@ -456,20 +500,26 @@ export default function WatchlistRoute() {
               {addError ? <p className={styles.watchlistModalError}>{addError}</p> : null}
               <div className={styles.watchlistTickerList}>
                 {isTickerListLoading ? <p>Loading companies...</p> : null}
-                {!isTickerListLoading && filteredAvailableTickers.map((ticker) => (
-                  <button
-                    className={styles.watchlistTickerOption}
-                    disabled={addingTickerId === ticker.id}
-                    key={ticker.id}
-                    onClick={() => addCompany(ticker)}
-                    type="button"
-                  >
-                    <span><strong>{ticker.symbol}</strong>{ticker.company_name}</span>
-                    <small>{addingTickerId === ticker.id ? "Adding..." : ticker.exchange}</small>
-                  </button>
-                ))}
-                {!isTickerListLoading && !filteredAvailableTickers.length ? (
-                  <p>No available companies found.</p>
+                {!isTickerListLoading && filteredAvailableTickers.map((ticker) => {
+                  const alreadyAdded = watchedTickerIds.has(ticker.id)
+                  return (
+                    <button
+                      className={styles.watchlistTickerOption}
+                      disabled={alreadyAdded || addingTickerId === ticker.id}
+                      key={ticker.id}
+                      onClick={() => addCompany(ticker)}
+                      type="button"
+                    >
+                      <span><strong>{ticker.symbol}</strong>{ticker.company_name}</span>
+                      <small>{alreadyAdded ? "Added" : addingTickerId === ticker.id ? "Adding..." : ticker.exchange}</small>
+                    </button>
+                  )
+                })}
+                {!isTickerListLoading && !filteredAvailableTickers.length && availableTickers.length === 0 ? (
+                  <p>No companies in the database yet. The data pipeline may still be running.</p>
+                ) : null}
+                {!isTickerListLoading && !filteredAvailableTickers.length && availableTickers.length > 0 ? (
+                  <p>No companies match your search.</p>
                 ) : null}
               </div>
             </section>

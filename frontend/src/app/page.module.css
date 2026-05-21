@@ -78,8 +78,8 @@
 /*
   Landing page.
   Covers the hero, large search bar, popular ticker row, and three feature cards.
-  Content changes should usually happen in mock/landing.js; spacing/visual changes
-  for the landing experience belong in this section.
+  Ticker links come from the API; spacing/visual changes for the landing
+  experience belong in this section.
 */
 .homePage,
 .contentPage {
@@ -871,9 +871,9 @@
 
 /*
   Deep dive timeline.
-  Styles the filter chips and vertical event chronology. Timeline item content comes
-  from mock/ticker.js; this section only controls the visual rhythm, dots, cards,
-  and metric blocks.
+  Styles the filter chips and vertical event chronology. Timeline item content
+  comes from the ticker deep-dive API; this section only controls the visual
+  rhythm, dots, cards, and metric blocks.
 */
 .filterTabs {
   display: flex;
@@ -1009,6 +1009,30 @@
   background: white;
   min-height: 190px;
   padding: 24px;
+  position: relative;
+}
+
+.stockCardLink {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+}
+
+.stockRemove {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+}
+
+.stockRemove:hover {
+  color: #be123c;
 }
 
 .stockTop {
@@ -1087,6 +1111,17 @@
 
 .stockStatus.red {
   color: var(--red);
+}
+
+.stockBrief {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 10px;
+  overflow: hidden;
 }
 
 .stockFooter {

@@ -5,6 +5,8 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: spike
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d spike"]
       interval: 5s
@@ -22,6 +24,7 @@ services:
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}  # make sure to create the .env in the base directory and paste the tokens from discord in it
       REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
       GROQ_API_KEY: ${GROQ_API_KEY}
+      SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
@@ -40,10 +43,14 @@ services:
       context: ./frontend
       target: production
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
+      INTERNAL_API_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: /api
     ports:
       - "3000:3000"
     command: ["npm", "run", "dev"]        # override the CMD from the Dockerfile
     depends_on:
       backend:
         condition: service_healthy
+
+volumes:
+  postgres_data:

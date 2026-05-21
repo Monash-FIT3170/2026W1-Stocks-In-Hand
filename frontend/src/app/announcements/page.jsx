@@ -1,7 +1,8 @@
 import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
 import { AnnouncementFilters } from "../components/announcements/AnnouncementFilters"
+import { TrendingStocks } from "../components/announcements/TrendingStocks"
 import { AppFrame } from "../components/layout/AppFrame"
-import { fetchAnnouncements } from "../lib/api"
+import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
 import styles from "../page.module.css"
 
 function formatAnnouncementTime(value) {
@@ -27,6 +28,7 @@ async function getAnnouncementCards(filters) {
 // integration problems immediately.
 export default async function AnnouncementsRoute({ searchParams }) {
   let announcementCards = []
+  let trendingStocks = []
   let errorMessage = ""
   const today = searchParams?.today === "true"
   const sector = typeof searchParams?.sector === "string" ? searchParams.sector : ""
@@ -34,7 +36,12 @@ export default async function AnnouncementsRoute({ searchParams }) {
   const endDate = typeof searchParams?.end_date === "string" ? searchParams.end_date : ""
 
   try {
-    announcementCards = await getAnnouncementCards({ today, sector, startDate, endDate })
+    const [cards, trending] = await Promise.all([
+      getAnnouncementCards({ today, sector, startDate, endDate }),
+      fetchTrendingAnnouncements({ days: 7, limit: 4 }),
+    ])
+    announcementCards = cards
+    trendingStocks = trending
   } catch {
     errorMessage = "Announcements are unavailable right now. Please try again once the backend is running."
   }
@@ -47,7 +54,10 @@ export default async function AnnouncementsRoute({ searchParams }) {
             <h1>ASX Announcements</h1>
             <p>Real-time intelligence from the Australian Securities Exchange. Decoded by AI to give you the signal within the noise.</p>
           </div>
-          <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
+          <div className={styles.announcementControls}>
+            <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
+            <TrendingStocks stocks={trendingStocks} />
+          </div>
         </div>
         <div className={styles.announcementList}>
           {errorMessage ? <div className={styles.emptyCard}><h3>{errorMessage}</h3></div> : null}

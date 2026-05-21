@@ -13,10 +13,7 @@ def add_ticker_to_watchlist(watchlist_id: UUID, ticker_id: UUID, db: Session = D
 
 @router.get("/{watchlist_id}", response_model=list[WatchlistTickerResponse])
 def get_watchlist_tickers(watchlist_id: UUID, db: Session = Depends(get_db)):
-    tickers = crud.get_watchlist_tickers(db, watchlist_id=watchlist_id)
-    if not tickers:
-        raise HTTPException(status_code=404, detail="No tickers found for this watchlist")
-    return tickers
+    return crud.get_watchlist_tickers(db, watchlist_id=watchlist_id) or []
 
 @router.delete("/{watchlist_id}/{ticker_id}")
 def remove_ticker_from_watchlist(watchlist_id: UUID, ticker_id: UUID, db: Session = Depends(get_db)):
