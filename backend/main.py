@@ -2,8 +2,6 @@
 main python file which creates database connection, connects to finBERT, and runs a FastAPI server
 """
 import asyncio
-import os
-import sys
 from datetime import date, timedelta
 
 import httpx
@@ -12,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
-from app.models.artifact import Artifact
 from app.models.information_platform import InformationPlatform
 from pathlib import Path
 from app.services import sentiment as sentiment_service
@@ -183,18 +180,8 @@ async def _run_seed(tickers: list[str]) -> None:
 async def auto_seed():
     if not settings.SEED_TICKERS:
         return
-    with SessionLocal() as db:
-        has_artifacts = db.query(Artifact).first() is not None
-    if has_artifacts:
-        print("[SEED] Database already has artifacts — skipping pipeline, refreshing market data.")
-        asyncio.ensure_future(_refresh_market_data(settings.SEED_TICKERS))
-    else:
-        asyncio.ensure_future(_run_seed(settings.SEED_TICKERS))
+    asyncio.ensure_future(_run_seed(settings.SEED_TICKERS))
 
-
-async def _refresh_market_data(tickers: list[str]) -> None:
-    for symbol in tickers:
-        await _fetch_market_data(symbol)
 
 OUTPUT_DIR = Path("/app/output")
 

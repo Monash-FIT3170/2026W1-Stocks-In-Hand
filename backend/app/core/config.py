@@ -39,6 +39,7 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     
     CORS_ORIGINS: list[str] = [
@@ -50,6 +51,9 @@ class Settings:
     SESSION_EXPIRE_DAYS: int = int(os.getenv("SESSION_EXPIRE_DAYS", "7"))
     SESSION_COOKIE_SECURE: bool = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
     SESSION_COOKIE_SAMESITE: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax")
+
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
     # Comma-separated list of ASX ticker symbols to scrape and summarise on
     # first boot when the database has no artifacts (e.g. "ANZ,CBA,BHP").

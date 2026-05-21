@@ -62,7 +62,7 @@ def categorise_recent_artifacts(
     return {
         "ticker": ticker.upper(),
         "days": days,
-        "model_used": gemini_service.settings.GEMINI_MODEL,
+        "model_used": gemini_service.active_model_name(),
         "batch_size": batch_size,
         "categories": categories,
     }
@@ -126,7 +126,7 @@ def summarise_ticker_artifacts(
         db_summary = ArtifactSummary(
             artifact_id=artifact.id,
             summary_text=_summary_text(artifact.title or "Untitled ASX announcement", summary),
-            model_used=gemini_service.settings.GEMINI_MODEL,
+            model_used=gemini_service.active_model_name(),
             prompt_version=gemini_service.SUMMARY_PROMPT_VERSION,
         )
         db.add(db_summary)
@@ -184,7 +184,7 @@ def summarise_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=gemini_service.settings.GEMINI_MODEL,
+        model_used=gemini_service.active_model_name(),
         prompt_version=gemini_service.SUMMARY_PROMPT_VERSION,
     )
     db.add(db_summary)

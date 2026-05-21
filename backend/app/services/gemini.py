@@ -1,5 +1,6 @@
 import json
 import re
+import time
 
 import httpx
 
@@ -109,28 +110,31 @@ Announcement text:
 """.strip()
 
 
-def categorise_chunk(chunk: str) -> dict[str, str]:
+def _call_ollama(prompt: str) -> str:
+    url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
+    payload = {
+        "model": settings.OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    response = httpx.post(url, json=payload, timeout=120)
+    response.raise_for_status()
+    return response.json()["message"]["content"]
+
+
+def _call_gemini(prompt: str) -> str:
     if not settings.GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY is not configured")
-
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
         f"{settings.GEMINI_MODEL}:generateContent"
     )
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": _build_prompt(chunk)}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "temperature": 0.2,
-        },
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
     }
-
     response = httpx.post(
         url,
         headers={"x-goog-api-key": settings.GEMINI_API_KEY},
@@ -139,13 +143,62 @@ def categorise_chunk(chunk: str) -> dict[str, str]:
     )
     response.raise_for_status()
     data = response.json()
-
     try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError("Gemini response did not include text output") from exc
 
-    return parse_category_response(text)
+
+def _call_groq(prompt: str) -> str:
+    if not settings.GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    payload = {
+        "model": settings.GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    for attempt in range(5):
+        response = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+            json=payload,
+            timeout=60,
+        )
+        if response.status_code == 429:
+            wait = int(response.headers.get("retry-after", min(2 ** attempt * 5, 60)))
+            print(f"[GROQ] Rate limited, retrying in {wait}s (attempt {attempt + 1}/5)")
+            time.sleep(wait)
+            continue
+        response.raise_for_status()
+        data = response.json()
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("Groq response did not include text output") from exc
+    raise RuntimeError("Groq rate limit exceeded after 5 retries")
+
+
+def active_model_name() -> str:
+    if settings.GROQ_API_KEY:
+        return settings.GROQ_MODEL
+    if settings.OLLAMA_BASE_URL:
+        return settings.OLLAMA_MODEL
+    return settings.GEMINI_MODEL
+
+
+def _call_llm(prompt: str) -> str:
+    """Route to Groq when GROQ_API_KEY is set, Ollama when OLLAMA_BASE_URL is set, otherwise Gemini."""
+    if settings.GROQ_API_KEY:
+        return _call_groq(prompt)
+    if settings.OLLAMA_BASE_URL:
+        return _call_ollama(prompt)
+    return _call_gemini(prompt)
+
+
+def categorise_chunk(chunk: str) -> dict[str, str]:
+    return parse_category_response(_call_llm(_build_prompt(chunk)))
 
 
 def summarise_announcement(
@@ -155,49 +208,16 @@ def summarise_announcement(
     extracted_data: dict,
     raw_text: str,
 ) -> dict[str, str]:
-    if not settings.GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.GEMINI_MODEL}:generateContent"
+    return parse_summary_response(
+        _call_llm(
+            _build_summary_prompt(
+                title=title,
+                category=category,
+                extracted_data=extracted_data,
+                raw_text=raw_text,
+            )
+        )
     )
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": _build_summary_prompt(
-                            title=title,
-                            category=category,
-                            extracted_data=extracted_data,
-                            raw_text=raw_text,
-                        )
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "temperature": 0.2,
-        },
-    }
-
-    response = httpx.post(
-        url,
-        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Gemini response did not include text output") from exc
-
-    return parse_summary_response(text)
 
 
 def _split_artifact_batches(chunk: str, batch_size: int) -> list[str]:
