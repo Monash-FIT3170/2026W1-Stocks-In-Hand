@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import time
 from pathlib import Path
 import traceback
 from typing import TYPE_CHECKING
@@ -95,11 +96,12 @@ def _summarise_and_store_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=gemini_service.settings.GEMINI_MODEL,
+        model_used=gemini_service.active_model_name(),
         prompt_version=gemini_service.SUMMARY_PROMPT_VERSION,
     ))
     db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
+    time.sleep(3)
 
 
 def compute_content_hash(text: str) -> str:
