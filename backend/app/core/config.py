@@ -36,10 +36,12 @@ class Settings:
     )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+    REDDIT_SEED_SUBREDDIT: str = os.getenv("REDDIT_SEED_SUBREDDIT", "ASX")
+    REDDIT_SEED_LIMIT: int = int(os.getenv("REDDIT_SEED_LIMIT", "50"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     
     CORS_ORIGINS: list[str] = [

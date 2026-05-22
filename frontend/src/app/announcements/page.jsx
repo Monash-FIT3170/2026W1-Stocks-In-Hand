@@ -5,21 +5,43 @@ import { AppFrame } from "../components/layout/AppFrame"
 import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
 import styles from "../page.module.css"
 
-function formatAnnouncementTime(value) {
+function formatAnnouncementTimestamp(value) {
   if (!value) {
-    return "Time unavailable"
+    return "Date unavailable"
   }
-  return new Intl.DateTimeFormat("en-AU", {
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "Date unavailable"
+  }
+
+  const datePart = new Intl.DateTimeFormat("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Australia/Sydney",
+  }).format(date)
+
+  const hasSpecificTime = /T/.test(value)
+    && !/T00:00:00(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/.test(value)
+  if (!hasSpecificTime) {
+    return datePart
+  }
+
+  const timePart = new Intl.DateTimeFormat("en-AU", {
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(value))
+    timeZone: "Australia/Sydney",
+  }).format(date)
+
+  return `${datePart}, ${timePart}`
 }
 
 async function getAnnouncementCards(filters) {
   const announcements = await fetchAnnouncements(filters)
   return announcements.map((item) => ({
     ...item,
-    time: formatAnnouncementTime(item.published_at),
+    time: formatAnnouncementTimestamp(item.published_at),
   }))
 }
 

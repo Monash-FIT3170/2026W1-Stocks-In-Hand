@@ -3,10 +3,12 @@ import hashlib
 import json
 from groq import Groq
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.database.connection import SessionLocal
 from app.database.connection import get_db
+from app.schemas.information_platform import InformationPlatformCreate
 from app.schemas.artifact import ArtifactCreate, SourceType, ArtifactType
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
@@ -43,6 +45,8 @@ def _fetch_posts(subreddit_name: str, limit: int) -> list[dict]:
 
 def _content_hash(post_id: str) -> str:
     return hashlib.sha256(f"reddit:{post_id}".encode()).hexdigest()
+
+
 def _get_groq_client() -> Groq:
     return Groq(api_key=settings.GROQ_API_KEY)
 
@@ -98,45 +102,82 @@ Return JSON only, no explanation:
         result = {"summary": raw, "dominant_sentiment": "unknown", "key_themes": []}
     return result
 
-@router.post("/scrape")
-def scrape_and_store(subreddit: str = "ASX", limit: int = 10, db: Session = Depends(get_db)):
+
+def _get_or_create_reddit_platform(db: Session):
     platform = platform_crud.get_platform_by_name(db, name="Reddit")
-    if not platform:
-        raise HTTPException(
-            status_code=404,
-            detail="Seed the Reddit platform first via POST /information-platforms/"
-        )
+    if platform:
+        return platform
+    return platform_crud.create_platform(
+        db,
+        InformationPlatformCreate(
+            name="Reddit",
+            platform_type="social",
+            base_url="https://reddit.com",
+            scrape_enabled=True,
+        ),
+    )
 
-    saved, skipped = 0, 0
-    for post in _fetch_posts(subreddit, limit):
-        chash = _content_hash(post["id"])
-        if artifact_crud.get_artifact_by_hash(db, chash):
-            skipped += 1
-            continue
-        artifact_crud.create_artifact(db=db, artifact=ArtifactCreate(
-            source_type=SourceType.REDDIT,
-            platform_id=platform.id,
-            artifact_type=ArtifactType.REDDIT_POST,
 
-            title=post["title"],
-            url=post["url"],
-            author=post["author"],
-            raw_text=post["body"],
-            published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc),
-            content_hash=chash,
-            artifact_metadata={
-                "reddit_id":    post["id"],
-                "score":        post["score"],
-                "upvote_ratio": post["upvote_ratio"],
-                "num_comments": post["num_comments"],
-                "flair":        post["flair"],
-                "is_self":      post["is_self"],
-                "external_url": post["external_url"],
-                "subreddit":    post["subreddit"],
-            },
-        ))
-        saved += 1
+def _scrape_and_store_posts(subreddit: str = "ASX", limit: int = 10) -> dict:
+    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
+        raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured")
+
+    with SessionLocal() as db:
+        platform = _get_or_create_reddit_platform(db)
+
+        saved, skipped = 0, 0
+        for post in _fetch_posts(subreddit, limit):
+            chash = _content_hash(post["id"])
+            if artifact_crud.get_artifact_by_hash(db, chash):
+                skipped += 1
+                continue
+            artifact_crud.create_artifact(db=db, artifact=ArtifactCreate(
+                source_type=SourceType.REDDIT,
+                platform_id=platform.id,
+                artifact_type=ArtifactType.REDDIT_POST,
+
+                title=post["title"],
+                url=post["url"],
+                author=post["author"],
+                raw_text=post["body"],
+                published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc),
+                content_hash=chash,
+                artifact_metadata={
+                    "reddit_id":    post["id"],
+                    "score":        post["score"],
+                    "upvote_ratio": post["upvote_ratio"],
+                    "num_comments": post["num_comments"],
+                    "flair":        post["flair"],
+                    "is_self":      post["is_self"],
+                    "external_url": post["external_url"],
+                    "subreddit":    post["subreddit"],
+                },
+            ))
+            saved += 1
+
     return {"saved": saved, "skipped_duplicates": skipped}
+
+
+def _run_reddit_scrape(subreddit: str, limit: int) -> None:
+    try:
+        result = _scrape_and_store_posts(subreddit=subreddit, limit=limit)
+        print(
+            "[REDDIT] Scrape complete "
+            f"r/{subreddit}: saved={result['saved']} skipped={result['skipped_duplicates']}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[REDDIT] Scrape failed for r/{subreddit}: {exc}")
+
+
+@router.post("/scrape")
+def scrape_and_store(background_tasks: BackgroundTasks, subreddit: str = "ASX", limit: int = 10):
+    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured",
+        )
+    background_tasks.add_task(_run_reddit_scrape, subreddit, limit)
+    return {"status": "queued", "subreddit": subreddit, "limit": limit}
 
 @router.get("/ticker-sentiment/{ticker_symbol}")
 def reddit_ticker_sentiment(

@@ -7,8 +7,8 @@ import httpx
 from app.core.config import settings
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
-PROMPT_VERSION = "gemini-category-v1"
-SUMMARY_PROMPT_VERSION = "gemini-announcement-summary-v1"
+PROMPT_VERSION = "groq-category-v1"
+SUMMARY_PROMPT_VERSION = "groq-announcement-summary-v1"
 SUMMARY_KEYS = ("summary", "about", "changed", "matters")
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
@@ -28,14 +28,14 @@ def _extract_json_text(text: str) -> str:
 def parse_category_response(text: str) -> dict[str, str]:
     data = json.loads(_extract_json_text(text))
     if not isinstance(data, dict):
-        raise ValueError("Gemini response must be a JSON object")
+        raise ValueError("Groq response must be a JSON object")
 
     missing = [key for key in CATEGORY_KEYS if key not in data]
     if missing:
-        raise ValueError(f"Gemini response missing categories: {', '.join(missing)}")
+        raise ValueError(f"Groq response missing categories: {', '.join(missing)}")
     extra = [key for key in data if key not in CATEGORY_KEYS]
     if extra:
-        raise ValueError(f"Gemini response included unexpected categories: {', '.join(extra)}")
+        raise ValueError(f"Groq response included unexpected categories: {', '.join(extra)}")
 
     categories = _empty_categories()
     for key in CATEGORY_KEYS:
@@ -47,11 +47,11 @@ def parse_category_response(text: str) -> dict[str, str]:
 def parse_summary_response(text: str) -> dict[str, str]:
     data = json.loads(_extract_json_text(text))
     if not isinstance(data, dict):
-        raise ValueError("Gemini summary response must be a JSON object")
+        raise ValueError("Groq summary response must be a JSON object")
 
     missing = [key for key in SUMMARY_KEYS if key not in data]
     if missing:
-        raise ValueError(f"Gemini summary response missing keys: {', '.join(missing)}")
+        raise ValueError(f"Groq summary response missing keys: {', '.join(missing)}")
 
     summary = {}
     for key in SUMMARY_KEYS:
@@ -110,45 +110,6 @@ Announcement text:
 """.strip()
 
 
-def _call_ollama(prompt: str) -> str:
-    url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/chat"
-    payload = {
-        "model": settings.OLLAMA_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.2},
-    }
-    response = httpx.post(url, json=payload, timeout=120)
-    response.raise_for_status()
-    return response.json()["message"]["content"]
-
-
-def _call_gemini(prompt: str) -> str:
-    if not settings.GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not configured")
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.GEMINI_MODEL}:generateContent"
-    )
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-    }
-    response = httpx.post(
-        url,
-        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
-    data = response.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise ValueError("Gemini response did not include text output") from exc
-
-
 def _call_groq(prompt: str) -> str:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
@@ -183,18 +144,14 @@ def _call_groq(prompt: str) -> str:
 def active_model_name() -> str:
     if settings.GROQ_API_KEY:
         return settings.GROQ_MODEL
-    if settings.OLLAMA_BASE_URL:
-        return settings.OLLAMA_MODEL
-    return settings.GEMINI_MODEL
+    return "groq-not-configured"
 
 
 def _call_llm(prompt: str) -> str:
-    """Route to Groq when GROQ_API_KEY is set, Ollama when OLLAMA_BASE_URL is set, otherwise Gemini."""
+    """Use Groq for LLM work; do not fall back to Gemini."""
     if settings.GROQ_API_KEY:
         return _call_groq(prompt)
-    if settings.OLLAMA_BASE_URL:
-        return _call_ollama(prompt)
-    return _call_gemini(prompt)
+    raise RuntimeError("GROQ_API_KEY is not configured")
 
 
 def categorise_chunk(chunk: str) -> dict[str, str]:

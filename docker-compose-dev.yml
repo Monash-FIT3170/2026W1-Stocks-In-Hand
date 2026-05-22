@@ -22,10 +22,6 @@ services:
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
       SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL}
-      # Set OLLAMA_BASE_URL to use a local Ollama instance instead of Gemini.
-      # If running Ollama on the host: http://host.docker.internal:11434
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]

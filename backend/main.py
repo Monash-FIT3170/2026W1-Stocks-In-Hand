@@ -177,11 +177,41 @@ async def _run_seed(tickers: list[str]) -> None:
     print("[SEED] Auto-seed finished.")
 
 
+async def _run_reddit_seed() -> None:
+    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
+        print("[REDDIT] Startup scrape skipped: Reddit credentials are not configured")
+        return
+
+    subreddit = settings.REDDIT_SEED_SUBREDDIT
+    limit = max(settings.REDDIT_SEED_LIMIT, 1)
+    print(f"[REDDIT] Startup scrape queued for r/{subreddit} (limit={limit})")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            reddit._scrape_and_store_posts,
+            subreddit,
+            limit,
+        )
+        print(
+            "[REDDIT] Startup scrape complete "
+            f"r/{subreddit}: saved={result['saved']} skipped={result['skipped_duplicates']}"
+        )
+    except Exception as exc:
+        print(f"[REDDIT] Startup scrape failed for r/{subreddit}: {exc}")
+
+
 @app.on_event("startup")
 async def auto_seed():
     if not settings.SEED_TICKERS:
         return
     asyncio.ensure_future(_run_seed(settings.SEED_TICKERS))
+
+
+@app.on_event("startup")
+async def auto_seed_reddit():
+    asyncio.ensure_future(_run_reddit_seed())
 
 
 OUTPUT_DIR = Path("/app/output")

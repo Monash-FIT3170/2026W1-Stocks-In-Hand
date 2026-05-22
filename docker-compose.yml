@@ -21,8 +21,6 @@ services:
       target: production
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
-      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID}  # make sure to create the .env in the base directory and paste the tokens from discord in it
-      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET}
       SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL}
     ports:
       - "8000:8000"

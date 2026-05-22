@@ -227,6 +227,17 @@ def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Art
     )
 
 
+def _latest_sentiment_for_ticker(db: Session, ticker_id: UUID) -> ArtifactSentiment | None:
+    return (
+        db.query(ArtifactSentiment)
+        .join(Artifact, ArtifactSentiment.artifact_id == Artifact.id)
+        .filter(Artifact.ticker_id == ticker_id)
+        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
+        .order_by(ArtifactSentiment.created_at.desc())
+        .first()
+    )
+
+
 def _claims_for_ticker(db: Session, ticker_id: UUID, limit: int = 6) -> dict[str, list[str]]:
     rows = (
         db.query(Claim)
@@ -327,14 +338,7 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
     latest_price = market_rows[0].close_price if market_rows else None
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
-    latest_sentiment = None
-    if latest_artifact:
-        latest_sentiment = (
-            db.query(ArtifactSentiment)
-            .filter(ArtifactSentiment.artifact_id == latest_artifact.id)
-            .order_by(ArtifactSentiment.created_at.desc())
-            .first()
-        )
+    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
 
     story = (
         _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
