@@ -1,9 +1,12 @@
 import re
+from datetime import date, timedelta
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 
+from app.crud import market_data as market_data_crud
 from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
@@ -86,6 +89,49 @@ def _latest_market_rows(db: Session, ticker_id: UUID) -> list[MarketData]:
         .limit(2)
         .all()
     )
+
+
+def _fetch_market_rows_if_missing(db: Session, ticker: Ticker) -> list[MarketData]:
+    rows = _latest_market_rows(db, ticker.id)
+    if rows or ticker.symbol not in DEFAULT_TICKERS:
+        return rows
+
+    yahoo_symbol = f"{ticker.symbol}.AX"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+
+    try:
+        with httpx.Client(timeout=6) as client:
+            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        result = response.json().get("chart", {}).get("result") or []
+        if not result:
+            return rows
+
+        meta = result[0].get("meta", {})
+        current_price = meta.get("regularMarketPrice")
+        previous_close = meta.get("chartPreviousClose") or meta.get(
+            "regularMarketPreviousClose"
+        )
+        if current_price is None:
+            return rows
+
+        today = date.today()
+        market_data_crud.upsert_market_data(
+            db,
+            ticker_id=ticker.id,
+            price_date=today,
+            close_price=current_price,
+        )
+        if previous_close is not None:
+            market_data_crud.upsert_market_data(
+                db,
+                ticker_id=ticker.id,
+                price_date=today - timedelta(days=1),
+                close_price=previous_close,
+            )
+        return _latest_market_rows(db, ticker.id)
+    except Exception:
+        return rows
 
 
 def _day_change(rows: list[MarketData]) -> str:
@@ -330,11 +376,12 @@ def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
 
 @router.get("/symbol/{symbol}/overview")
 def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
-    market_rows = _latest_market_rows(db, ticker.id)
+    market_rows = _fetch_market_rows_if_missing(db, ticker)
     latest_price = market_rows[0].close_price if market_rows else None
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
@@ -379,11 +426,12 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
 
 @router.get("/symbol/{symbol}/brief-aside")
 def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
-    market_rows = _latest_market_rows(db, ticker.id)
+    market_rows = _fetch_market_rows_if_missing(db, ticker)
     latest_price = market_rows[0].close_price if market_rows else None
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
