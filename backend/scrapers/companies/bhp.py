@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
@@ -163,7 +164,8 @@ class BHPScraper(BaseScraper):
         try:
             await page.goto(
                 article_url,
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
+                timeout=60000,
             )
 
             await page.wait_for_timeout(1500)
@@ -259,24 +261,33 @@ class BHPScraper(BaseScraper):
 
     async def _download_via_browser(self, context, announcement: Announcement) -> Path:
         date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
+        clean_title = re.sub(r"[^\w\-_]", "_", " ".join(announcement.title.split()))
+        clean_title = clean_title[:120].strip("_") or "announcement"
         filename = f"{date_str}_{clean_title}.pdf"
         dest = self.output_dir / filename
 
-        response = await context.request.get(
-            announcement.pdf_url,
-            headers={"Referer": self.source_url},
+        result = subprocess.run(
+            [
+                "wget",
+                "--timeout=120",
+                "--tries=2",
+                "--user-agent=Mozilla/5.0",
+                "--header",
+                f"Referer: {self.source_url}",
+                "-O",
+                str(dest),
+                announcement.pdf_url,
+            ],
+            capture_output=True,
+            text=True,
         )
 
-        if not response.ok:
-            raise Exception(f"Failed to download PDF: {response.status} {response.status_text}")
+        if result.returncode != 0:
+            raise Exception(f"Failed to download PDF with wget: {result.stderr[-500:]}")
 
-        content_type = response.headers.get("Content-Type", "")
+        if dest.read_bytes()[:4] != b"%PDF":
+            raise Exception(f"Downloaded file is not a PDF: {announcement.pdf_url}")
 
-        if "pdf" not in content_type.lower():
-            print(f"[BHP] Warning: URL {announcement.pdf_url} did not return a PDF (Content-Type: {content_type})")
-
-        dest.write_bytes(await response.body())
         print(f"[BHP] Saved: {dest}")
         return dest
 
