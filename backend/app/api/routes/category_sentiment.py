@@ -13,10 +13,57 @@ from app.services import groq as groq_service
 from app.services import sentiment as sentiment_service
 
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
+CATEGORY_SENTIMENT_KEYS = (*groq_service.CATEGORY_KEYS, "user_discussion")
+DEFAULT_SENTIMENT_DAYS = 365
+FALLBACK_CATEGORY_KEYWORDS = {
+    "revenue": (
+        "financial",
+        "guidance",
+        "revenue",
+        "earnings",
+        "profit",
+        "operational review",
+        "quarterly",
+        "half year",
+    ),
+    "strategy": (
+        "strategy",
+        "strategic",
+        "acquisition",
+        "growth",
+        "project",
+        "review",
+        "capital allocation",
+    ),
+    "risk": (
+        "risk",
+        "impairment",
+        "downgrade",
+        "decline",
+        "conflict",
+        "investigation",
+        "security",
+    ),
+    "dividend": ("dividend", "distribution", "buy-back", "buyback", "shareholder return"),
+    "organisational": (
+        "director",
+        "leadership",
+        "ceo",
+        "chair",
+        "appointment",
+        "substantial holding",
+        "organisational",
+    ),
+}
+
+
+def _empty_category_map():
+    return {key: "" for key in CATEGORY_SENTIMENT_KEYS}
 
 
 def _build_category_map(body: CategorySentimentRequest):
-    category_map: dict[str, str | None] = dict(body.categories)
+    category_map: dict[str, str | None] = _empty_category_map()
+    category_map.update(body.categories)
     if body.reddit_summary:
         category_map["user_discussion"] = body.reddit_summary.summary
     return category_map
@@ -35,6 +82,92 @@ def _run_finbert(ticker: str, category_map: dict[str, str | None],):
         "model_used": sentiment_service.model_name(),
         "categories": categories,
     }
+
+
+def _recent_asx_artifacts(ticker: str, db: Session, days: int, limit: int, offset: int):
+    ticker_row = (
+        db.query(Ticker)
+        .filter(Ticker.symbol == ticker.upper())
+        .first()
+    )
+    if not ticker_row:
+        return []
+
+    from datetime import datetime, timezone, timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return (
+        db.query(Artifact)
+        .filter(Artifact.ticker_id == ticker_row.id)
+        .filter(Artifact.source_type == "asx_announcement")
+        .filter(Artifact.published_at >= cutoff)
+        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
+        .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def _artifact_summary_text(artifact: Artifact):
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    parts = [
+        artifact.title,
+        metadata.get("about"),
+        metadata.get("changed"),
+        metadata.get("matters"),
+    ]
+    if not any(parts):
+        parts.append((artifact.raw_text or "")[:600])
+    return " ".join(str(part).strip() for part in parts if part).strip()
+
+
+def _fallback_recent_asx_categories(
+    ticker: str,
+    db: Session,
+    days: int,
+    asx_limit: int,
+    offset: int,
+):
+    categories = {key: "" for key in groq_service.CATEGORY_KEYS}
+    artifacts = _recent_asx_artifacts(
+        ticker=ticker,
+        db=db,
+        days=days,
+        limit=asx_limit,
+        offset=offset,
+    )
+
+    for artifact in artifacts:
+        text = _artifact_summary_text(artifact)
+        if not text:
+            continue
+
+        haystack = " ".join(
+            str(value or "")
+            for value in (
+                artifact.artifact_type,
+                artifact.title,
+                (artifact.artifact_metadata or {}).get("category")
+                if isinstance(artifact.artifact_metadata, dict)
+                else "",
+                text,
+            )
+        ).lower()
+        matched = [
+            category
+            for category, keywords in FALLBACK_CATEGORY_KEYWORDS.items()
+            if any(keyword in haystack for keyword in keywords)
+        ]
+        if not matched:
+            matched = ["strategy"]
+
+        for category in matched:
+            categories[category] = "\n\n".join(
+                part for part in (categories[category], text) if part
+            )
+
+    return categories
 
 
 def _aggregate_category_sentiment(categories: dict[str, dict]):
@@ -104,25 +237,37 @@ def _categorise_recent_asx(ticker: str, db: Session, days: int, asx_limit: int, 
         ticker_symbol=ticker,
     )
 
+    fallback_categories = _fallback_recent_asx_categories(
+        ticker=ticker,
+        db=db,
+        days=days,
+        asx_limit=asx_limit,
+        offset=offset,
+    )
+
     if not chunk:
-        return {}
+        return fallback_categories
 
     try:
         if batch_size > 0:
-            return groq_service.categorise_chunk_in_batches(
+            categories = groq_service.categorise_chunk_in_batches(
                 chunk,
                 batch_size,
             )
-        return groq_service.categorise_chunk(chunk)
+        else:
+            categories = groq_service.categorise_chunk(chunk)
+        if any(categories.values()):
+            return categories
+        return fallback_categories
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        print(f"[SENTIMENT] ASX categorisation fallback for {ticker}: {exc}")
+        return fallback_categories
     except ValueError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        print(f"[SENTIMENT] ASX categorisation fallback for {ticker}: {exc}")
+        return fallback_categories
     except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Groq categorisation request failed",
-        ) from exc
+        print(f"[SENTIMENT] ASX categorisation fallback for {ticker}: {exc}")
+        return fallback_categories
 
 
 def _summarise_recent_reddit(ticker: str, db: Session, days: int, reddit_limit: int,):
@@ -162,17 +307,16 @@ def _summarise_recent_reddit(ticker: str, db: Session, days: int, reddit_limit: 
         ) from exc
 
 
-@router.post("/{ticker}", response_model=CategorySentimentResponse)
-def analyse_ticker_category_sentiments(
+def build_ticker_category_sentiment(
     ticker: str,
-    body: CategorySentimentRequest | None = Body(default=None),
-    days: int = 30,
+    body: CategorySentimentRequest | None,
+    db: Session,
+    days: int = DEFAULT_SENTIMENT_DAYS,
     asx_limit: int = 200,
     reddit_limit: int = 50,
     offset: int = 0,
     batch_size: int = 0,
     persist: bool = True,
-    db: Session = Depends(get_db),
 ):
     request_body = body or CategorySentimentRequest()
     category_map = _build_category_map(request_body)
@@ -214,3 +358,28 @@ def analyse_ticker_category_sentiments(
             categories=result["categories"],
         )
     return result
+
+
+@router.post("/{ticker}", response_model=CategorySentimentResponse)
+def analyse_ticker_category_sentiments(
+    ticker: str,
+    body: CategorySentimentRequest | None = Body(default=None),
+    days: int = DEFAULT_SENTIMENT_DAYS,
+    asx_limit: int = 200,
+    reddit_limit: int = 50,
+    offset: int = 0,
+    batch_size: int = 0,
+    persist: bool = True,
+    db: Session = Depends(get_db),
+):
+    return build_ticker_category_sentiment(
+        ticker=ticker,
+        body=body,
+        days=days,
+        asx_limit=asx_limit,
+        reddit_limit=reddit_limit,
+        offset=offset,
+        batch_size=batch_size,
+        persist=persist,
+        db=db,
+    )

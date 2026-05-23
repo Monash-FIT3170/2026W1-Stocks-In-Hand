@@ -2,9 +2,10 @@ import { AppFrame } from "../../components/layout/AppFrame"
 import { SparkIcon } from "../../components/icons"
 import { BriefAside } from "../../components/ticker/BriefAside"
 import { BriefTabs } from "../../components/ticker/BriefTabs"
+import { CategorySentiment } from "../../components/ticker/CategorySentiment"
 import { CitationLinks } from "../../components/ticker/CitationLinks"
 import { TickerHeader } from "../../components/ticker/TickerHeader"
-import { fetchTickerBriefAside, fetchTickerOverview } from "../../lib/api"
+import { fetchTickerBriefAside, fetchTickerCategorySentiment, fetchTickerOverview } from "../../lib/api"
 import styles from "../../page.module.css"
 
 // Ticker brief summary tab for "/ticker/[symbol]".
@@ -12,7 +13,7 @@ import styles from "../../page.module.css"
 // during MVP testing.
 export default async function TickerSummaryRoute({ params }) {
   const symbol = params.symbol
-  let data, aside
+  let data, aside, categorySentiment
   try {
     ;[data, aside] = await Promise.all([
       fetchTickerOverview(symbol),
@@ -30,6 +31,10 @@ export default async function TickerSummaryRoute({ params }) {
       </AppFrame>
     )
   }
+  categorySentiment = await fetchTickerCategorySentiment(symbol).catch((error) => ({
+    unavailable: true,
+    message: error.message,
+  }))
 
   return (
     <AppFrame active="home">
@@ -59,6 +64,7 @@ export default async function TickerSummaryRoute({ params }) {
                   <strong>{data.public_sentiment_pct}</strong>
                 </div>
               </article>
+              <CategorySentiment sentiment={categorySentiment} />
             </div>
           </div>
           <BriefAside data={aside} />

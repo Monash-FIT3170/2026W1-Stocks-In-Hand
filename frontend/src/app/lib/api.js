@@ -78,3 +78,13 @@ export async function fetchTickerNews(symbol) {
 export async function fetchTickerDeepDive(symbol) {
   return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/deep-dive-timeline`)
 }
+
+export async function fetchTickerCategorySentiment(symbol) {
+  return fetchJson(`/sentiment/${encodeURIComponent(symbol)}?persist=false`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  })
+}

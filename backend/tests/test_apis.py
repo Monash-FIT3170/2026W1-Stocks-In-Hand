@@ -156,6 +156,14 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
     assert result["model_used"] == "test-finbert"
     assert captured_categories["revenue"] == "ANZ revenue increased."
     assert captured_categories["user_discussion"] == "Retail investors are mixed on ANZ."
+    assert set(result["categories"]) == {
+        "revenue",
+        "strategy",
+        "risk",
+        "dividend",
+        "organisational",
+        "user_discussion",
+    }
     assert result["categories"]["revenue"]["sentiment_label"] == "neutral"
 
 

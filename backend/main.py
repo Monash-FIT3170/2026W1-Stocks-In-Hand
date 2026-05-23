@@ -143,6 +143,21 @@ async def _fetch_market_data(symbol: str) -> None:
         print(f"[SEED] Market data fetch for {symbol} failed: {exc}")
 
 
+def _run_seed_sentiment(symbol: str) -> None:
+    with SessionLocal() as db:
+        try:
+            result = category_sentiment.build_ticker_category_sentiment(
+                ticker=symbol,
+                body=None,
+                db=db,
+                persist=True,
+            )
+            categories = ", ".join(result["categories"].keys())
+            print(f"[SEED] Sentiment for {symbol}: {categories}")
+        except Exception as exc:
+            print(f"[SEED] Sentiment analysis for {symbol} skipped: {exc}")
+
+
 async def _run_seed(tickers: list[str]) -> None:
     import sys as _sys
     import traceback as _traceback
@@ -156,6 +171,7 @@ async def _run_seed(tickers: list[str]) -> None:
     from pipeline import process_announcement
 
     output_dir = _Path("/app/output")
+    loop = asyncio.get_event_loop()
 
     print(f"[SEED] Auto-seeding tickers: {', '.join(tickers)}")
     for symbol in tickers:
@@ -163,7 +179,6 @@ async def _run_seed(tickers: list[str]) -> None:
         try:
             announcements = await scrape(symbol, output_dir)
             print(f"[SEED] {symbol}: {len(announcements)} announcements scraped")
-            loop = asyncio.get_event_loop()
             for ann in announcements:
                 if not ann.local_path:
                     print(f"[SEED] {symbol}: skipping '{ann.title[:50]}' — PDF not downloaded")
@@ -174,6 +189,7 @@ async def _run_seed(tickers: list[str]) -> None:
             print(f"[SEED] {symbol} failed: {exc}")
             _traceback.print_exc()
         await _fetch_market_data(symbol)
+        await loop.run_in_executor(None, _run_seed_sentiment, symbol)
     print("[SEED] Auto-seed finished.")
 
 

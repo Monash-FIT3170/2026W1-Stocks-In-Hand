@@ -1,4 +1,5 @@
 from app.services.gemini import (
+    CATEGORY_KEYS,
     PROMPT_VERSION,
     SUMMARY_PROMPT_VERSION,
     active_model_name,
