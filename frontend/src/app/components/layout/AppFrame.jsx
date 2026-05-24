@@ -99,7 +99,7 @@ export function AppFrame({
       <footer className={styles.footer}>
         <div>
           <strong>StonksInHand</strong>
-          <p>&copy; 2024 StonksInHand. Powered by AI, verified by sources.</p>
+          <p>2026 StonksInHand. Powered by AI, verified by sources.</p>
         </div>
         <nav aria-label="Footer">
           <a href="#">About</a>
