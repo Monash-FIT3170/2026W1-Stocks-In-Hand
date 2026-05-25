@@ -6,7 +6,7 @@ import { TickerHeader } from "../../../components/ticker/TickerHeader"
 import styles from "../../../page.module.css"
 
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
-// Timeline entries come from DB-backed ticker artifacts.
+// Timeline entries come from DB backed ticker artifacts.
 async function fetchDeepDive(symbol) {
   const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/deep-dive-timeline`, { cache: 'no-store' })
   const overview = await fetch(`http://backend:8000/tickers/symbol/${symbol}/overview`, { cache: 'no-store' })
@@ -14,6 +14,7 @@ async function fetchDeepDive(symbol) {
   return { timeline: await res.json(), overview: await overview.json() }
 }
 
+// 
 export default async function TickerDeepDiveRoute({ params }) {
   const symbol = params.symbol
   const { timeline, overview } = await fetchDeepDive(symbol)
@@ -61,3 +62,5 @@ export default async function TickerDeepDiveRoute({ params }) {
     </AppFrame>
   )
 }
+
+
