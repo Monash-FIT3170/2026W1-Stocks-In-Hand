@@ -5,7 +5,7 @@ import { CitationLinks } from "../../../components/ticker/CitationLinks"
 import { TickerHeader } from "../../../components/ticker/TickerHeader"
 import styles from "../../../page.module.css"
 
-// Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
+// Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive". NOTE: the ticker is to be access via page, not only direct url access
 // Timeline entries come from DB backed ticker artifacts.
 async function fetchDeepDive(symbol) {
   const res = await fetch(`http://backend:8000/tickers/symbol/${symbol}/deep-dive-timeline`, { cache: 'no-store' })
