@@ -1,7 +1,12 @@
+import re
+from datetime import date, timedelta
+
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from uuid import UUID
 
+from app.crud import market_data as market_data_crud
 from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
@@ -10,9 +15,64 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.claim import Claim
 from app.models.claim_source import ClaimSource
 from app.models.market_data import MarketData
+from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
+
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+DEFAULT_TICKERS = {
+    "ANZ": {
+        "company_name": "ANZ Group Holdings Limited",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Banks",
+    },
+    "BHP": {
+        "company_name": "BHP Group Limited",
+        "exchange": "ASX",
+        "sector": "Materials",
+        "industry": "Diversified Metals & Mining",
+    },
+    "CBA": {
+        "company_name": "Commonwealth Bank of Australia",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Banks",
+    },
+    "CSL": {
+        "company_name": "CSL Limited",
+        "exchange": "ASX",
+        "sector": "Health Care",
+        "industry": "Biotechnology",
+    },
+    "WES": {
+        "company_name": "Wesfarmers Limited",
+        "exchange": "ASX",
+        "sector": "Consumer Discretionary",
+        "industry": "Consumer Staples Distribution & Retail",
+    },
+}
+
+
+def _ensure_default_tickers(db: Session) -> None:
+    changed = False
+
+    for symbol, defaults in DEFAULT_TICKERS.items():
+        ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
+        if not ticker:
+            db.add(Ticker(symbol=symbol, **defaults))
+            changed = True
+            continue
+
+        for key, value in defaults.items():
+            current = getattr(ticker, key)
+            if not current or (key == "company_name" and current == symbol):
+                setattr(ticker, key, value)
+                changed = True
+
+    if changed:
+        db.commit()
 
 
 def _money(value) -> str:
@@ -29,6 +89,49 @@ def _latest_market_rows(db: Session, ticker_id: UUID) -> list[MarketData]:
         .limit(2)
         .all()
     )
+
+
+def _fetch_market_rows_if_missing(db: Session, ticker: Ticker) -> list[MarketData]:
+    rows = _latest_market_rows(db, ticker.id)
+    if rows or ticker.symbol not in DEFAULT_TICKERS:
+        return rows
+
+    yahoo_symbol = f"{ticker.symbol}.AX"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+
+    try:
+        with httpx.Client(timeout=6) as client:
+            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        result = response.json().get("chart", {}).get("result") or []
+        if not result:
+            return rows
+
+        meta = result[0].get("meta", {})
+        current_price = meta.get("regularMarketPrice")
+        previous_close = meta.get("chartPreviousClose") or meta.get(
+            "regularMarketPreviousClose"
+        )
+        if current_price is None:
+            return rows
+
+        today = date.today()
+        market_data_crud.upsert_market_data(
+            db,
+            ticker_id=ticker.id,
+            price_date=today,
+            close_price=current_price,
+        )
+        if previous_close is not None:
+            market_data_crud.upsert_market_data(
+                db,
+                ticker_id=ticker.id,
+                price_date=today - timedelta(days=1),
+                close_price=previous_close,
+            )
+        return _latest_market_rows(db, ticker.id)
+    except Exception:
+        return rows
 
 
 def _day_change(rows: list[MarketData]) -> str:
@@ -73,7 +176,7 @@ def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
 
 def _format_announcement_time(artifact: Artifact) -> str:
     if artifact.published_at:
-        return artifact.published_at.strftime("%b %-d, %Y")
+        return f"{artifact.published_at.strftime('%b')} {artifact.published_at.day}, {artifact.published_at.year}"
     return "Recently"
 
 
@@ -85,7 +188,15 @@ def _format_month(value):
 
 def _format_label(value, fallback):
     cleaned = _clean_text(value) or fallback
-    return cleaned.replace("_", " ").replace("-", " ").title()
+    label = cleaned.replace("_", " ").replace("-", " ")
+    label = _CAMEL_BOUNDARY.sub(" ", label)
+    return label.title()
+
+
+def _format_key_date(value):
+    if not value:
+        return "No filings yet"
+    return value.strftime("%b %Y")
 
 
 def _source_from_values(label, title, url, published_at=None, evidence_text=None):
@@ -162,6 +273,68 @@ def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Art
     )
 
 
+def _latest_sentiment_for_ticker(db: Session, ticker_id: UUID) -> ArtifactSentiment | None:
+    return (
+        db.query(ArtifactSentiment)
+        .join(Artifact, ArtifactSentiment.artifact_id == Artifact.id)
+        .filter(Artifact.ticker_id == ticker_id)
+        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
+        .order_by(ArtifactSentiment.created_at.desc())
+        .first()
+    )
+
+
+def _claims_for_ticker(db: Session, ticker_id: UUID, limit: int = 6) -> dict[str, list[str]]:
+    rows = (
+        db.query(Claim)
+        .join(ClaimSource, ClaimSource.claim_id == Claim.id)
+        .filter(Claim.ticker_id == ticker_id)
+        .order_by(Claim.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    confirmed: list[str] = []
+    rumoured: list[str] = []
+    seen: set[UUID] = set()
+    rumour_labels = {"rumoured", "rumored", "unverified", "low"}
+
+    for claim in rows:
+        if claim.id in seen:
+            continue
+        seen.add(claim.id)
+        text = _clean_text(claim.claim_text)
+        if not text:
+            continue
+        label = (claim.reliability_label or "").lower()
+        if label in rumour_labels:
+            rumoured.append(text)
+        else:
+            confirmed.append(text)
+
+    return {"confirmed": confirmed, "rumoured": rumoured}
+
+
+def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[str]:
+    themes: list[str] = []
+    seen: set[str] = set()
+
+    for artifact in artifacts:
+        metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+        label = _format_label(metadata.get("category"), artifact.artifact_type)
+        if label.lower() == "unknown":
+            label = _format_label(artifact.artifact_type, "Announcement")
+        theme = f"{label} activity"
+        key = theme.lower()
+        if key not in seen:
+            themes.append(theme)
+            seen.add(key)
+        if len(themes) >= limit:
+            break
+
+    return themes
+
+
 @router.post("/", response_model=TickerResponse)
 def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
@@ -172,11 +345,13 @@ def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     return crud.get_tickers(db, skip=skip, limit=limit)
 
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -201,22 +376,16 @@ def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
 
 @router.get("/symbol/{symbol}/overview")
 def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
-    market_rows = _latest_market_rows(db, ticker.id)
+    market_rows = _fetch_market_rows_if_missing(db, ticker)
     latest_price = market_rows[0].close_price if market_rows else None
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
-    latest_sentiment = None
-    if latest_artifact:
-        latest_sentiment = (
-            db.query(ArtifactSentiment)
-            .filter(ArtifactSentiment.artifact_id == latest_artifact.id)
-            .order_by(ArtifactSentiment.created_at.desc())
-            .first()
-        )
+    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
 
     story = (
         _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
@@ -255,6 +424,49 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/symbol/{symbol}/brief-aside")
+def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
+    _ensure_default_tickers(db)
+    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    market_rows = _fetch_market_rows_if_missing(db, ticker)
+    latest_price = market_rows[0].close_price if market_rows else None
+    artifacts = _ticker_artifacts(db, ticker.id, limit=20)
+    latest_artifact = artifacts[0] if artifacts else None
+
+    return {
+        "key_numbers": [
+            {"label": "Current price", "value": _money(latest_price)},
+            {"label": "Day change", "value": _day_change(market_rows)},
+            {
+                "label": "Latest filing",
+                "value": _format_key_date(
+                    latest_artifact.published_at if latest_artifact else None
+                ),
+            },
+            {
+                "label": "Latest type",
+                "value": (
+                    _format_label(
+                        _metadata_value(
+                            latest_artifact,
+                            "category",
+                            latest_artifact.artifact_type,
+                        ),
+                        latest_artifact.artifact_type,
+                    )
+                    if latest_artifact
+                    else "No filings yet"
+                ),
+            },
+        ],
+        "market_intelligence": _claims_for_ticker(db, ticker.id),
+        "themes": _themes_from_artifacts(artifacts),
+    }
+
+
 @router.get("/symbol/{symbol}/news-feed")
 def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
@@ -279,7 +491,11 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
             "about": _metadata_value(
                 artifact,
                 "about",
-                _preview(artifact.raw_text, 160) or "No summary available yet.",
+                _metadata_value(
+                    artifact,
+                    "summary",
+                    _preview(artifact.raw_text, 160) or "No summary available yet.",
+                ),
             ),
             "changed": _metadata_value(artifact, "changed", "No change summary available yet."),
             "matters": _metadata_value(artifact, "matters", "No investment impact summary available yet."),

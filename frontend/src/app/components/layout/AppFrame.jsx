@@ -2,9 +2,9 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
+import { apiFetch } from "../../lib/api"
 import styles from "./AppFrame.module.css"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const AUTH_STORAGE_KEY = "stonks_signed_in"
 
 function hasStoredSession() {
@@ -45,7 +45,7 @@ export function AppFrame({
 
     async function loadSession() {
       try {
-        const response = await fetch(`${API_URL}/auth/me`, {
+        const response = await apiFetch("/auth/me", {
           credentials: "include",
         })
 
@@ -99,7 +99,7 @@ export function AppFrame({
       <footer className={styles.footer}>
         <div>
           <strong>StonksInHand</strong>
-          <p>&copy; 2024 StonksInHand. Powered by AI, verified by sources.</p>
+          <p>2026 StonksInHand. Powered by AI, verified by sources.</p>
         </div>
         <nav aria-label="Footer">
           <a href="#">About</a>

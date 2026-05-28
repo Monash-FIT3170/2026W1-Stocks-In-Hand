@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.schemas.announcement import AnnouncementResponse
+from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
 
 
 _WHITESPACE = re.compile(r"\s+")
@@ -76,6 +76,7 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
         title=title,
         about=(
             _metadata_value(metadata, "about", "what_its_about", "what_it_is_about")
+            or _metadata_value(metadata, "summary")
             or _preview_text(artifact.raw_text)
             or title
         ),
@@ -127,3 +128,31 @@ def get_announcements(
 
     artifacts = query.order_by(date_value.desc()).offset(offset).limit(limit).all()
     return [_announcement_from_artifact(artifact) for artifact in artifacts]
+
+
+def get_trending_announcements(
+    db: Session,
+    days: int = 7,
+    limit: int = 4,
+) -> list[TrendingAnnouncementResponse]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
+    capped_limit = max(min(limit, 20), 1)
+    date_value = func.coalesce(Artifact.published_at, Artifact.created_at)
+    count_value = func.count(Artifact.id)
+
+    rows = (
+        db.query(Ticker.symbol, count_value.label("count"))
+        .join(Artifact, Artifact.ticker_id == Ticker.id)
+        .filter(Artifact.source_type == "asx_announcement")
+        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
+        .filter(date_value >= cutoff)
+        .group_by(Ticker.symbol)
+        .order_by(count_value.desc(), Ticker.symbol.asc())
+        .limit(capped_limit)
+        .all()
+    )
+
+    return [
+        TrendingAnnouncementResponse(symbol=symbol, count=count)
+        for symbol, count in rows
+    ]

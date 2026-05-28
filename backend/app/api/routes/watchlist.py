@@ -7,16 +7,14 @@ from app.crud import watchlist as crud
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
+@router.post("", response_model=WatchlistResponse)
 @router.post("/", response_model=WatchlistResponse)
 def create_watchlist(watchlist: WatchlistCreate, db: Session = Depends(get_db)):
     return crud.create_watchlist(db=db, watchlist=watchlist)
 
 @router.get("/investor/{investor_id}", response_model=list[WatchlistResponse])
 def get_watchlists_by_investor(investor_id: UUID, db: Session = Depends(get_db)):
-    watchlists = crud.get_watchlists_by_investor(db, investor_id=investor_id)
-    if not watchlists:
-        raise HTTPException(status_code=404, detail="No watchlists found for this investor")
-    return watchlists
+    return crud.get_watchlists_by_investor(db, investor_id=investor_id) or []
 
 @router.get("/{watchlist_id}", response_model=WatchlistResponse)
 def get_watchlist(watchlist_id: UUID, db: Session = Depends(get_db)):

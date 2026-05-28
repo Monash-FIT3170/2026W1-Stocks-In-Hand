@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
@@ -24,10 +25,12 @@ class BHPScraper(BaseScraper):
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--headless=new",
                 ],
             )
 
@@ -114,8 +117,7 @@ class BHPScraper(BaseScraper):
             if not self._looks_like_bhp_article(full_url, text):
                 continue
 
-            nearby_text = await self._get_nearby_text(link)
-            date = self._extract_date(nearby_text)
+            date = await self._extract_nearby_date(link)
 
             if not date:
                 print(f"[BHP] Skipping article because no date found: {text}")
@@ -162,7 +164,8 @@ class BHPScraper(BaseScraper):
         try:
             await page.goto(
                 article_url,
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
+                timeout=60000,
             )
 
             await page.wait_for_timeout(1500)
@@ -202,6 +205,26 @@ class BHPScraper(BaseScraper):
         return ".pdf" in url.lower()
 
 
+    def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
+        seen: set[str] = set()
+        result = []
+        for item in items:
+            key = item["article_url"]
+            if key not in seen:
+                seen.add(key)
+                result.append(item)
+        return result
+
+    def _dedupe_announcements(self, announcements: list) -> list:
+        seen: set[str] = set()
+        result = []
+        for ann in announcements:
+            key = ann.pdf_url or ann.source_url or ann.title
+            if key not in seen:
+                seen.add(key)
+                result.append(ann)
+        return result
+
     async def _extract_nearby_date(self, link) -> datetime | None:
 
         container = await link.evaluate_handle(
@@ -238,24 +261,33 @@ class BHPScraper(BaseScraper):
 
     async def _download_via_browser(self, context, announcement: Announcement) -> Path:
         date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
+        clean_title = re.sub(r"[^\w\-_]", "_", " ".join(announcement.title.split()))
+        clean_title = clean_title[:120].strip("_") or "announcement"
         filename = f"{date_str}_{clean_title}.pdf"
         dest = self.output_dir / filename
 
-        response = await context.request.get(
-            announcement.pdf_url,
-            headers={"Referer": self.source_url},
+        result = subprocess.run(
+            [
+                "wget",
+                "--timeout=120",
+                "--tries=2",
+                "--user-agent=Mozilla/5.0",
+                "--header",
+                f"Referer: {self.source_url}",
+                "-O",
+                str(dest),
+                announcement.pdf_url,
+            ],
+            capture_output=True,
+            text=True,
         )
 
-        if not response.ok:
-            raise Exception(f"Failed to download PDF: {response.status} {response.status_text}")
+        if result.returncode != 0:
+            raise Exception(f"Failed to download PDF with wget: {result.stderr[-500:]}")
 
-        content_type = response.headers.get("Content-Type", "")
+        if dest.read_bytes()[:4] != b"%PDF":
+            raise Exception(f"Downloaded file is not a PDF: {announcement.pdf_url}")
 
-        if "pdf" not in content_type.lower():
-            print(f"[BHP] Warning: URL {announcement.pdf_url} did not return a PDF (Content-Type: {content_type})")
-
-        dest.write_bytes(await response.body())
         print(f"[BHP] Saved: {dest}")
         return dest
 

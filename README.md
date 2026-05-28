@@ -64,9 +64,12 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 |---|---|---|
 | `REDDIT_CLIENT_ID` | Yes | From reddit.com/prefs/apps — the string under "personal use script", key for developers available on Discord. |
 | `REDDIT_CLIENT_SECRET` | Yes | The secret field from your Reddit app, key for developers available on Discord. |
-| `GEMINI_API_KEY` | Yes | From Google AI Studio (aistudio.google.com) |
-| `GROQ_API_KEY` | Yes | From console.groq.com — used for Reddit post summarisation via meta/LLaMA |
-| `GEMINI_MODEL` | No | Defaults to `gemini-2.5-flash` |
+| `REDDIT_SEED_SUBREDDIT` | No | Subreddit scraped on backend startup. Defaults to `ASX` |
+| `REDDIT_SEED_LIMIT` | No | Number of Reddit posts fetched on backend startup. Defaults to `50` |
+| `GROQ_API_KEY` | Yes | From console.groq.com — used for ticker categorisation and Reddit summarisation via meta/LLaMA |
+| `GROQ_MODEL` | No | Defaults to `llama-3.3-70b-versatile` |
+| `GEMINI_API_KEY` | No | Legacy setting; ticker sentiment does not use Gemini |
+| `GEMINI_MODEL` | No | Legacy Gemini model setting |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
 
 
@@ -83,18 +86,18 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
-| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts + Reddit posts for a ticker, runs Gemini categorisation, then FinBERT on each category. Returns per-category sentiment breakdown |
+| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts + Reddit posts for a ticker, runs Groq categorisation/summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact |
 
 ### Reddit (PRAW)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/reddit/scrape` | Fetch posts from a subreddit and store them as artifacts. Params: `subreddit` (default: ASX), `limit` (default: 10). Requires Reddit platform to exist in DB first |
+| POST | `/reddit/scrape` | Queue a background Reddit scrape and store posts as artifacts. Params: `subreddit` (default: ASX), `limit` (default: 10) |
 | GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Read stored Reddit posts mentioning a ticker, summarise with Groq/LLaMA, return dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
 
-### Gemini
+### Groq / legacy LLM route
 | Method | Path | Description |
 |---|---|---|
-| POST | `/gemini/categorise/recent` | Run Gemini on recent ASX artifacts for a ticker and classify them into financial categories (earnings, dividends, etc). Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/gemini/categorise/recent` | Legacy route name. Uses Groq on recent ASX artifacts for a ticker and classifies them into financial categories (earnings, dividends, etc). Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
 
 ### Scraping
 | Method | Path | Description |

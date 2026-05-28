@@ -13,10 +13,7 @@ def create_alert(alert: AlertCreate, db: Session = Depends(get_db)):
 
 @router.get("/investor/{investor_id}", response_model=list[AlertResponse])
 def get_alerts_by_investor(investor_id: UUID, db: Session = Depends(get_db)):
-    alerts = crud.get_alerts_by_investor(db, investor_id=investor_id)
-    if not alerts:
-        raise HTTPException(status_code=404, detail="No alerts found for this investor")
-    return alerts
+    return crud.get_alerts_by_investor(db, investor_id=investor_id) or []
 
 @router.get("/{alert_id}", response_model=AlertResponse)
 def get_alert(alert_id: UUID, db: Session = Depends(get_db)):

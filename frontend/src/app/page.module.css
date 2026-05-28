@@ -78,8 +78,8 @@
 /*
   Landing page.
   Covers the hero, large search bar, popular ticker row, and three feature cards.
-  Content changes should usually happen in mock/landing.js; spacing/visual changes
-  for the landing experience belong in this section.
+  Ticker links come from the API; spacing/visual changes for the landing
+  experience belong in this section.
 */
 .homePage,
 .contentPage {
@@ -776,6 +776,138 @@
   padding: 16px 18px;
 }
 
+.categorySentimentCard {
+  background: white;
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.categorySentimentHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.categorySentimentHeader span {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.categorySentimentHeader h2 {
+  font-size: 24px;
+  margin: 4px 0 0;
+}
+
+.categorySentimentHeader strong {
+  background: #eef0f2;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  padding: 8px 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.categorySentimentNotice {
+  background: #fff4df;
+  border-radius: 12px;
+  color: #8a4b00;
+  font-weight: 750;
+  line-height: 1.45;
+  margin: 0 0 20px;
+  padding: 14px 16px;
+}
+
+.categorySentimentGrid {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.categorySentimentItem {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px 18px 20px 0;
+}
+
+.categorySentimentItem:nth-child(2n) {
+  border-left: 1px solid var(--line);
+  padding-left: 18px;
+  padding-right: 0;
+}
+
+.categorySentimentTop {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.categorySentimentTop h3 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.sentimentPill {
+  background: #e6eaec;
+  border-radius: 999px;
+  color: #53615b;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 10px;
+}
+
+.sentimentPill_positive {
+  background: #c7f2da;
+  color: var(--green);
+}
+
+.sentimentPill_negative {
+  background: #ffd0d0;
+  color: #8f2222;
+}
+
+.sentimentPill_neutral {
+  background: #e6eaec;
+  color: #53615b;
+}
+
+.categorySentimentMeter {
+  background: #e6eaec;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.categorySentimentMeter span {
+  background: var(--green2);
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  min-width: 4px;
+}
+
+.categorySentimentItem p {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.categorySentimentItem strong {
+  color: var(--green);
+  font-size: 13px;
+}
+
 .briefAside {
   display: grid;
   align-content: start;
@@ -871,9 +1003,9 @@
 
 /*
   Deep dive timeline.
-  Styles the filter chips and vertical event chronology. Timeline item content comes
-  from mock/ticker.js; this section only controls the visual rhythm, dots, cards,
-  and metric blocks.
+  Styles the filter chips and vertical event chronology. Timeline item content
+  comes from the ticker deep-dive API; this section only controls the visual
+  rhythm, dots, cards, and metric blocks.
 */
 .filterTabs {
   display: flex;
@@ -1009,6 +1141,30 @@
   background: white;
   min-height: 190px;
   padding: 24px;
+  position: relative;
+}
+
+.stockCardLink {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+}
+
+.stockRemove {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px 6px;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+}
+
+.stockRemove:hover {
+  color: #be123c;
 }
 
 .stockTop {
@@ -1087,6 +1243,17 @@
 
 .stockStatus.red {
   color: var(--red);
+}
+
+.stockBrief {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 10px;
+  overflow: hidden;
 }
 
 .stockFooter {
@@ -1510,8 +1677,22 @@ button.emptyCard:hover {
   .announcementCard,
   .storyCard,
   .sentimentCard,
+  .categorySentimentCard,
   .timelineCard {
     padding: 22px;
+  }
+
+  .categorySentimentHeader {
+    flex-direction: column;
+  }
+
+  .categorySentimentGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .categorySentimentItem:nth-child(2n) {
+    border-left: 0;
+    padding-left: 0;
   }
 
   .tabBar {

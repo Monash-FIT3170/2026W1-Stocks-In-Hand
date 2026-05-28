@@ -5,9 +5,9 @@ import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { AuthField } from "../components/auth/AuthField"
 import { AppFrame } from "../components/layout/AppFrame"
+import { apiFetch } from "../lib/api"
 import styles from "../page.module.css"
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 const AUTH_STORAGE_KEY = "stonks_signed_in"
 
 function getErrorMessage(data, fallback) {
@@ -41,7 +41,7 @@ export default function SignInRoute() {
     setIsSubmitting(true)
 
     try {
-      const response = await fetch(`${API_URL}/auth/sign-in`, {
+      const response = await apiFetch("/auth/sign-in", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

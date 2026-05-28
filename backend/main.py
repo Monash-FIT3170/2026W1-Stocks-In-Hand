@@ -1,7 +1,11 @@
 """
 main python file which creates database connection, connects to finBERT, and runs a FastAPI server
 """
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+import asyncio
+from datetime import date, timedelta
+
+import httpx
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -39,6 +43,7 @@ from app.api.routes import (
     announcement,
 )
 from app.database.connection import SessionLocal
+from app.database.connection import get_db
 from app.core.config import settings
 from app.models.result import Result
 
@@ -96,6 +101,135 @@ def seed_platforms():
             ))
             db.commit()
 
+
+async def _fetch_market_data(symbol: str) -> None:
+    from app.crud import ticker as ticker_crud
+    from app.crud import market_data as market_data_crud
+
+    yahoo_symbol = f"{symbol}.AX"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code != 200:
+            print(f"[SEED] Yahoo Finance returned {resp.status_code} for {symbol}")
+            return
+        result = resp.json().get("chart", {}).get("result") or []
+        if not result:
+            print(f"[SEED] No chart data from Yahoo Finance for {symbol}")
+            return
+        meta = result[0].get("meta", {})
+        current_price = meta.get("regularMarketPrice")
+        prev_close = meta.get("chartPreviousClose") or meta.get("regularMarketPreviousClose")
+        if not current_price:
+            print(f"[SEED] Could not parse price for {symbol}")
+            return
+        today = date.today()
+        with SessionLocal() as db:
+            ticker_obj = ticker_crud.get_ticker_by_symbol(db, symbol=symbol)
+            if ticker_obj:
+                market_data_crud.upsert_market_data(
+                    db, ticker_id=ticker_obj.id, price_date=today, close_price=current_price
+                )
+                if prev_close:
+                    market_data_crud.upsert_market_data(
+                        db,
+                        ticker_id=ticker_obj.id,
+                        price_date=today - timedelta(days=1),
+                        close_price=prev_close,
+                    )
+                print(f"[SEED] Market data for {symbol}: ${current_price} (prev: ${prev_close})")
+    except Exception as exc:
+        print(f"[SEED] Market data fetch for {symbol} failed: {exc}")
+
+
+def _run_seed_sentiment(symbol: str) -> None:
+    with SessionLocal() as db:
+        try:
+            result = category_sentiment.build_ticker_category_sentiment(
+                ticker=symbol,
+                body=None,
+                db=db,
+                persist=True,
+            )
+            categories = ", ".join(result["categories"].keys())
+            print(f"[SEED] Sentiment for {symbol}: {categories}")
+        except Exception as exc:
+            print(f"[SEED] Sentiment analysis for {symbol} skipped: {exc}")
+
+
+async def _run_seed(tickers: list[str]) -> None:
+    import sys as _sys
+    import traceback as _traceback
+    from pathlib import Path as _Path
+
+    parsing_dir = str(_Path(__file__).parent / "parsing")
+    if parsing_dir not in _sys.path:
+        _sys.path.insert(0, parsing_dir)
+
+    from scrapers.registry import scrape
+    from pipeline import process_announcement
+
+    output_dir = _Path("/app/output")
+    loop = asyncio.get_event_loop()
+
+    print(f"[SEED] Auto-seeding tickers: {', '.join(tickers)}")
+    for symbol in tickers:
+        print(f"[SEED] Processing {symbol}...")
+        try:
+            announcements = await scrape(symbol, output_dir)
+            print(f"[SEED] {symbol}: {len(announcements)} announcements scraped")
+            for ann in announcements:
+                if not ann.local_path:
+                    print(f"[SEED] {symbol}: skipping '{ann.title[:50]}' — PDF not downloaded")
+                    continue
+                await loop.run_in_executor(None, process_announcement, ann)
+            print(f"[SEED] {symbol} pipeline complete.")
+        except Exception as exc:
+            print(f"[SEED] {symbol} failed: {exc}")
+            _traceback.print_exc()
+        await _fetch_market_data(symbol)
+        await loop.run_in_executor(None, _run_seed_sentiment, symbol)
+    print("[SEED] Auto-seed finished.")
+
+
+async def _run_reddit_seed() -> None:
+    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
+        print("[REDDIT] Startup scrape skipped: Reddit credentials are not configured")
+        return
+
+    subreddit = settings.REDDIT_SEED_SUBREDDIT
+    limit = max(settings.REDDIT_SEED_LIMIT, 1)
+    print(f"[REDDIT] Startup scrape queued for r/{subreddit} (limit={limit})")
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(
+            None,
+            reddit._scrape_and_store_posts,
+            subreddit,
+            limit,
+        )
+        print(
+            "[REDDIT] Startup scrape complete "
+            f"r/{subreddit}: saved={result['saved']} skipped={result['skipped_duplicates']}"
+        )
+    except Exception as exc:
+        print(f"[REDDIT] Startup scrape failed for r/{subreddit}: {exc}")
+
+
+@app.on_event("startup")
+async def auto_seed():
+    if not settings.SEED_TICKERS:
+        return
+    asyncio.ensure_future(_run_seed(settings.SEED_TICKERS))
+
+
+@app.on_event("startup")
+async def auto_seed_reddit():
+    asyncio.ensure_future(_run_reddit_seed())
+
+
 OUTPUT_DIR = Path("/app/output")
 
 @app.get("/")
@@ -132,8 +266,7 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            executable_path="/usr/bin/chromium",
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--headless=new"],
         )
         page = await browser.new_page()
         await page.goto(url, timeout=15000)
@@ -199,6 +332,6 @@ async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
     return {"status": "queued", "ticker": ticker.upper()}
 
 @app.get("/tickers")
-def tickers():
-    """Return all implemented ASX tickers."""
-    return {"tickers": available_tickers()}
+def tickers(skip: int = 0, limit: int = 100, db=Depends(get_db)):
+    """Return database tickers for clients that request /tickers without a slash."""
+    return ticker.get_tickers(skip=skip, limit=limit, db=db)

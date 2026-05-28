@@ -6,6 +6,13 @@ def get_watchlist_tickers(db: Session, watchlist_id: UUID):
     return db.query(WatchlistTicker).filter(WatchlistTicker.watchlist_id == watchlist_id).all()
 
 def add_ticker_to_watchlist(db: Session, watchlist_id: UUID, ticker_id: UUID):
+    existing = db.query(WatchlistTicker).filter(
+        WatchlistTicker.watchlist_id == watchlist_id,
+        WatchlistTicker.ticker_id == ticker_id,
+    ).first()
+    if existing:
+        return existing
+
     db_wt = WatchlistTicker(watchlist_id=watchlist_id, ticker_id=ticker_id)
     db.add(db_wt)
     db.commit()
@@ -17,5 +24,8 @@ def remove_ticker_from_watchlist(db: Session, watchlist_id: UUID, ticker_id: UUI
         WatchlistTicker.watchlist_id == watchlist_id,
         WatchlistTicker.ticker_id == ticker_id
     ).first()
+    if not db_wt:
+        return
+
     db.delete(db_wt)
     db.commit()

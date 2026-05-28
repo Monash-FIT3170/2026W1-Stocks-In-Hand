@@ -15,3 +15,8 @@ class AnnouncementResponse(BaseModel):
     changed: str
     matters: str
     url: Optional[str]
+
+
+class TrendingAnnouncementResponse(BaseModel):
+    symbol: str
+    count: int

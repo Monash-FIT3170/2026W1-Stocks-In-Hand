@@ -5,10 +5,19 @@ from sqlalchemy.orm import Session
 
 from app.crud import announcement as crud
 from app.database.connection import get_db
-from app.schemas.announcement import AnnouncementResponse
+from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
 
 
 router = APIRouter(prefix="/announcements", tags=["announcements"])
+
+
+@router.get("/trending", response_model=list[TrendingAnnouncementResponse])
+def list_trending_announcements(
+    days: int = 7,
+    limit: int = 4,
+    db: Session = Depends(get_db),
+):
+    return crud.get_trending_announcements(db, days=days, limit=limit)
 
 
 @router.get("/", response_model=list[AnnouncementResponse])

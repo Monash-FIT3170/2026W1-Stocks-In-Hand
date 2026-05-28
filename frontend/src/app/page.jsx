@@ -1,30 +1,75 @@
 "use client"
 
 import Link from "next/link"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { AppFrame } from "./components/layout/AppFrame"
 import { BadgeIcon, BellIcon, CalendarIcon, SearchIcon } from "./components/icons"
-import { features, popularStocks } from "./mock/landing"
+import { fetchTickers } from "./lib/api"
 import styles from "./page.module.css"
 
 // Landing page route for "/".
 // This file should stay focused on the first-screen marketing/search experience:
 // hero copy, the landing search form, popular ticker links, and feature-card layout.
-// To change the displayed ticker pills or feature-card text, edit mock/landing.js instead
-// of changing the JSX here. Shared navigation/footer changes belong in AppFrame.jsx.
+// Shared navigation/footer changes belong in AppFrame.jsx.
 const iconMap = { calendar: CalendarIcon, bell: BellIcon, badge: BadgeIcon }
+const features = [
+  {
+    icon: "calendar",
+    tone: "mint",
+    title: "Daily briefs in plain English",
+    body: "Complex regulatory filings translated into clear, actionable summaries every morning.",
+    featured: false,
+  },
+  {
+    icon: "bell",
+    tone: "amber",
+    title: "Alerts when it matters",
+    body: "Skip the noise. Get notified only when price-sensitive news or significant sentiment shifts occur.",
+    featured: false,
+  },
+  {
+    icon: "badge",
+    tone: "sage",
+    title: "Every claim is sourced",
+    body: "Zero hallucinations. Every insight includes direct links to official ASX announcements or verified data.",
+    featured: true,
+  },
+]
 
 export default function Home() {
   const [query, setQuery] = useState("BHP")
+  const [popularStocks, setPopularStocks] = useState(null)
+
+  useEffect(() => {
+    let ignore = false
+
+    fetchTickers({ limit: 6 })
+      .then((tickers) => {
+        if (!ignore) {
+          setPopularStocks(tickers.map((ticker) => ticker.symbol).filter(Boolean))
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setPopularStocks([])
+        }
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [])
 
   function handleSearch(event) {
     event.preventDefault()
-    // Prototype-only navigation.
-    // Keeping the query in the URL makes the static mock easy to demo and share.
-    // When real search exists, this is the main place to replace with Next router
-    // navigation, debounced suggestions, or an API-backed search flow.
     window.location.href = `/search?q=${encodeURIComponent(query.trim() || "BHP")}`
   }
+
+  const popularTickerLinks = popularStocks === null
+    ? <span>Loading tickers</span>
+    : popularStocks.length > 0
+      ? popularStocks.map((ticker) => <Link key={ticker} href={`/search?q=${ticker}`}>{ticker}</Link>)
+      : <span>No tickers loaded</span>
 
   return (
     <AppFrame active="home">
@@ -38,7 +83,7 @@ export default function Home() {
           </form>
           <div className={styles.popularRow}>
             <span>Popular:</span>
-            {popularStocks.map((ticker) => <Link key={ticker} href={`/search?q=${ticker}`}>{ticker}</Link>)}
+            {popularTickerLinks}
           </div>
         </div>
 
