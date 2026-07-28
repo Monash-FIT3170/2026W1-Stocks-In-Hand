@@ -1,4 +1,3 @@
-```markdown
 # AWS Scraping and Document Analysis Architecture Plan
 
 ## 1. Objective
@@ -1126,607 +1125,661 @@ If document analysis fails, the document remains stored in S3.
 If downloading fails, document discovery does not need to run again.
 
 If one document fails, other documents from the same website can still complete successfully.
-```
-# AWS Deployment Plan
 
-## 1. Purpose and scope
+---
 
-This document describes how to deploy the current StonksInHand application to
-AWS. It is a deployment plan, not an implementation record.
+## 27. Repository-Specific Implementation Plan
 
-The plan assumes:
+This section maps the target architecture above to the code that currently
+exists in this repository. It is the implementation sequence to follow; it does
+not replace the event-driven architecture in Sections 1–26.
 
-- AWS Region: `ap-southeast-2` (Sydney).
-- The first environment is a low-traffic demo/staging environment.
-- The application remains containerised.
-- PostgreSQL data must survive application deployments.
-- The public application is served over HTTPS on a real domain.
-- The FastAPI API remains behind the Next.js `/api/*` proxy instead of being
-  exposed as a separate public origin.
+### 27.1 Current fit assessment
 
-Production hardening and higher-availability changes are called out separately.
-
-## 2. What is being deployed
-
-The repository currently contains:
-
-| Component | Current implementation | Important runtime needs |
+| Target component | Reusable code | Gap to close |
 |---|---|---|
-| Frontend | Next.js 14 on Node 20 | Port 3000 and access to FastAPI |
-| Backend | FastAPI/Uvicorn on Python 3.11 | Port 8000, Chromium/Playwright, FinBERT/PyTorch, outbound internet |
-| Database | PostgreSQL 15 | Persistent relational storage and Alembic migrations |
-| Scraping/processing | FastAPI startup hooks and background tasks | Outbound internet, temporary PDF storage, long execution time |
-| External APIs | Reddit, Groq, Gemini legacy path, Yahoo Finance, ASX/company sites | Secrets and outbound HTTPS |
+| S3/CloudFront frontend | Next.js pages and components | The app is not currently a static export. Several pages use server-side fetching, dynamic routes, search parameters, and a Next.js rewrite. |
+| API Gateway/backend Lambda | FastAPI routes, schemas, CRUD, auth, SQLAlchemy | Add a Lambda ASGI adapter, split API-only dependencies, and use serverless-safe database pooling. |
+| Website queue | `ScrapeRun`, ticker registry, scrape routes | The current `/scrape/{ticker}` endpoint runs an in-process background task instead of publishing a job message. |
+| Discovery Lambda | Five company scraper adapters | The public scraper contract separates discovery/download, but some implementations still download inside `fetch_announcements`. |
+| Download Lambda | `Announcement` metadata and HTTP/Playwright download logic | Move downloading out of discovery, stream to S3, validate files, calculate checksums, and publish analysis messages. |
+| Analysis Lambda | PDF extraction, classifier, FinBERT service, storage layer | Read from S3 instead of `/app/output`, package the large ML dependencies for Lambda, and write stage state/results idempotently. |
+| Supabase | PostgreSQL-compatible SQLAlchemy and Alembic schema | Use the Supabase serverless pooler and extend existing tables with per-document stage state and S3 metadata. |
+| EventBridge | Startup seeding logic | Replace startup hooks with an explicit scheduled job creator. |
 
-The backend image includes Chromium, Playwright Chromium, PyTorch, and a bundled
-FinBERT model. It will therefore be much larger and use more memory than a
-typical FastAPI image.
+The current application supports five configured ASX sources (`ANZ`, `CBA`,
+`BHP`, `WES`, and `CSL`) and primarily processes PDFs. Generic website
+submission and support for DOCX, XLSX, CSV, TXT, and HTML are later increments,
+not capabilities that already exist.
 
-## 3. Deployment readiness findings
+### 27.2 Selected deployment shape
 
-The application should not be deployed unchanged. The following items are
-deployment blockers or material operational risks.
-
-### P0: required before the first AWS deployment
-
-1. **Run Next.js in production mode.**
-   `docker-compose.yml` currently overrides the frontend command with
-   `npm run dev`, and the frontend Dockerfile has no production `CMD`. The
-   deployed container must run `npm run start` or a Next.js standalone server.
-
-2. **Make the frontend image reproducible.**
-   Commit a `package-lock.json`, use `npm ci`, pin the Node base image to a
-   supported patch/digest, and add a production runtime stage. The current
-   `npm install` without a lock file can produce different images from the same
-   commit.
-
-3. **Configure the API proxy for ECS.**
-   Browser requests should use `NEXT_PUBLIC_API_BASE_URL=/api`. The Next.js
-   rewrite and server-side API client should target
-   `INTERNAL_API_URL=http://127.0.0.1:8000`. The rewrite configuration is
-   evaluated during `next build`, so this value must be available at build time
-   as well as at runtime.
-
-4. **Separate migrations from web-server startup.**
-   Remove `alembic upgrade head` from the long-running backend command. Run it as
-   a one-off ECS task before updating the ECS service. This prevents multiple
-   replicas from attempting the same migration and lets a failed migration stop
-   the release.
-
-5. **Remove long-running work from application startup.**
-   `main.py` currently queues ticker seeding and Reddit seeding at startup.
-   Deployments, auto-scaling, and task replacement could run these jobs more
-   than once. Add explicit feature flags that disable both jobs in the web
-   service, then invoke seeding through a one-off ECS task.
-
-6. **Add deployment-grade health checks.**
-   Keep a lightweight liveness endpoint and add a readiness endpoint that checks
-   database connectivity. Add a frontend health route that does not depend on
-   external APIs. Configure both ECS container health checks and the load
-   balancer health check.
-
-7. **Set production cookie and origin settings.**
-   Use `SESSION_COOKIE_SECURE=true`, `SESSION_COOKIE_SAMESITE=lax`, and set
-   `CORS_ORIGINS` to the final HTTPS origin. Keeping all browser traffic on one
-   origin avoids cross-site cookie complexity.
-
-8. **Define temporary-file behaviour.**
-   Scraped PDFs are written to `/app/output`, but durable application data and
-   extracted raw text are stored in PostgreSQL. For the first deployment, treat
-   `/app/output` as scratch space and delete files after successful processing.
-   If PDFs must be retained, upload them to S3 and store the S3 object key in the
-   artifact metadata before launch.
-
-### P1: required before a production launch
-
-- Replace in-process FastAPI `BackgroundTasks` for scrapes with an SQS-backed
-  worker. In-process work is lost if ECS replaces the task.
-- Pin the FinBERT repository to an immutable revision instead of cloning its
-  mutable default branch during every build.
-- Pin the `uv` image and Git/Xet installer rather than downloading unpinned
-  executable content during the Docker build.
-- Remove the duplicated system Chromium or Playwright Chromium installation
-  after verifying which executable the scrapers use.
-- Add database connection validation, `pool_pre_ping`, explicit pool sizing,
-  and PostgreSQL TLS (`sslmode=require`).
-- Disable or protect `/docs`, `/redoc`, and any administrative/manual-write API
-  endpoints in production.
-- Add request-size limits, authentication rate limiting, and CSRF review for
-  cookie-authenticated mutations.
-- Add structured logs with request/correlation IDs. Do not log session tokens,
-  API keys, credentials, or full sensitive request bodies.
-- Run the web service with a non-root container user and a read-only root
-  filesystem where Playwright and temporary output requirements permit it.
-
-## 4. Recommended AWS architecture
+Use `ap-southeast-2` unless the Supabase project, data-residency requirement, or
+team policy requires another region.
 
 ```text
-Internet
-   |
-Route 53 DNS
-   |
-Application Load Balancer + ACM certificate
-   |  HTTPS :443
-   v
-ECS service on AWS Fargate
-  One task revision, initially one running task
-  +------------------------------------------------------+
-  | Next.js container :3000                              |
-  |   /api/* -> http://127.0.0.1:8000                   |
-  |                                                      |
-  | FastAPI container :8000 (not in the ALB target group)|
-  |   FinBERT + Playwright + scraper                     |
-  +------------------------------------------------------+
-       |                  |                     |
-       | TCP 5432         | HTTPS egress        | logs/metrics
-       v                  v                     v
-  RDS PostgreSQL     NAT Gateway/Internet   CloudWatch
-  private subnets    external data/APIs     Logs + Alarms
-       ^
-       |
-  Secrets Manager supplies DATABASE_URL and API keys
-
-GitHub Actions --OIDC--> AWS
-       |                  |
-       v                  v
-  ECR frontend        ECR backend
-       \                  /
-        \--> ECS task revision and deployment
+app.example.com
+        |
+        v
+CloudFront
+  | default behaviour                 | /api/*
+  v                                   v
+Private frontend S3 bucket       API Gateway HTTP API
+                                      |
+                                      v
+                                FastAPI Lambda
+                                  |         |
+                                  v         v
+                              Supabase   Website SQS
+                                             |
+                                             v
+                                      Discovery Lambda
+                                             |
+                                             v
+                                      Download SQS
+                                             |
+                                             v
+                                       Download Lambda
+                                         |         |
+                                         v         v
+                                  Raw document S3  Analysis SQS
+                                                       |
+                                                       v
+                                                Analysis Lambda
+                                                       |
+                                                       v
+                                                   Supabase
 ```
 
-Amazon ECS Fargate tasks use `awsvpc` networking, and containers in the same
-task can communicate over `localhost`. This makes a two-container task a direct
-fit for the existing Next.js proxy design. See the
-[AWS Fargate task networking documentation](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-networking.html).
+CloudFront should be the only browser-facing origin:
 
-### Why a single two-container task is recommended initially
+- The default behaviour serves the static frontend from the private S3 bucket.
+- The `/api/*` behaviour forwards API traffic to API Gateway with caching
+  disabled and cookies, query strings, required headers, and all API methods
+  forwarded.
+- API Gateway or the Lambda adapter must strip the `/api` base path before
+  FastAPI route matching.
+- This preserves the frontend's existing `/api` base URL and keeps session
+  cookies same-origin.
 
-- Only the frontend needs a public load-balancer target.
-- The API can stay private and same-origin cookies continue to work.
-- No service-discovery layer is required.
-- Frontend and backend versions are released together, which matches the
-  current repository and API coupling.
-- It is simpler and cheaper for a proof of concept.
+Use CloudFront Origin Access Control, not a public S3 website endpoint. AWS
+recommends OAC for private S3 origins:
+[Restrict access to an Amazon S3 origin](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html).
 
-The trade-off is that frontend and backend scale together. Split them into
-separate ECS services with ECS Service Connect only when load testing shows a
-real need to scale them independently.
+### 27.3 Mandatory technical spikes
 
-## 5. AWS resources
+Complete these measurements before committing the workload to Lambda:
 
-Create all resources as infrastructure as code. Terraform is recommended for
-this repository, with remote state in an encrypted/versioned S3 bucket and state
-locking enabled. AWS CDK is also acceptable if the team prefers TypeScript.
-Do not build the permanent environment manually in the AWS console.
+1. Build a Lambda-compatible analysis container containing PyTorch,
+   Transformers, pypdf, and the pinned FinBERT model.
+2. Record its uncompressed size, cold-start time, warm execution time, peak
+   memory, and `/tmp` usage for representative small, average, and largest PDFs.
+3. Run each Playwright scraper in a Lambda-compatible discovery image and
+   measure cold start, browser startup, duration, and memory.
+4. Verify that every discovered URL can be downloaded in a separate invocation.
+   ANZ, CBA, and WES currently reuse browser context or click-based downloads,
+   so this separation is not yet guaranteed.
+5. Load-test concurrent Lambda connections through Supabase's transaction-mode
+   pooler.
 
-### Network
+Lambda has a 15-minute maximum invocation time, a 10 GB maximum uncompressed
+container image, up to 10,240 MB memory, and configurable `/tmp` storage from
+512 MB to 10,240 MB. These are hard design constraints, not values to discover
+after deployment. See
+[AWS Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html).
 
-- One VPC across two Availability Zones.
-- Two public subnets for the Application Load Balancer.
-- Two private application subnets for ECS tasks.
-- Two private database subnets for RDS.
-- Internet Gateway for public ingress.
-- NAT Gateway egress for ECS because the scrapers and external API clients need
-  arbitrary internet access.
-- Route tables scoped to each subnet tier.
+Go/no-go rules:
 
-For production, use a NAT Gateway in each Availability Zone. A demo environment
-can use one NAT Gateway to reduce cost, accepting the single-AZ egress failure
-mode. A still cheaper demo option is to place Fargate tasks in public subnets
-with public IPs and restrict inbound traffic to the ALB security group; do not
-use that profile for production user data.
+- If analysis cannot reliably finish inside 15 minutes with at least 20% time
+  headroom, retain the SQS/S3 stages but consume the analysis queue with an ECS
+  Fargate worker.
+- If a source requires a live browser session across discovery and download,
+  refactor that source adapter so the download Lambda can recreate the session.
+  Do not put cookies or authentication tokens into SQS messages.
+- If static export would remove required product behaviour, use a managed
+  Next.js runtime for the frontend and record that as an approved deviation
+  from Section 3.
 
-### Security groups
+### 27.4 Phase 0: repository and dependency preparation
 
-| Security group | Inbound | Outbound |
-|---|---|---|
-| ALB | TCP 443 from the internet; TCP 80 only for HTTPS redirect | TCP 3000 to ECS task SG |
-| ECS task | TCP 3000 from ALB SG only | TCP 5432 to RDS SG and HTTPS/DNS egress |
-| RDS | TCP 5432 from ECS task SG only | Default response traffic |
+1. Add and commit a frontend `package-lock.json`.
+2. Replace `npm install` with `npm ci` in builds.
+3. Split backend requirements into deployable groups:
+   - API: FastAPI, Mangum, SQLAlchemy, psycopg2, auth/validation packages.
+   - Discovery: Playwright/Chromium, HTTP client, shared scraper code.
+   - Download: HTTP client, AWS SDK, file-validation utilities, and only the
+     browser dependencies proven necessary.
+   - Analysis: PyTorch, Transformers, pypdf, AWS SDK, and shared parsing code.
+4. Pin the FinBERT repository to an immutable model revision.
+5. Pin base images and the model/Xet download mechanism to immutable versions
+   or checksums.
+6. Add a shared package for message schemas, status constants, URL validation,
+   database helpers, structured logging, and idempotency.
+7. Keep local Docker Compose for development and integration tests; it is not
+   the production topology.
 
-Do not add a public inbound rule for backend port 8000 or database port 5432.
+Exit criteria:
 
-### Container registry
+- Clean-checkout frontend and backend tests pass.
+- Each Lambda package/image builds independently.
+- No Lambda contains dependencies belonging only to another stage.
 
-- One private ECR repository for `stonks-frontend`.
-- One private ECR repository for `stonks-backend`.
-- Enable image scanning and immutable tags.
-- Tag each image with the Git commit SHA.
-- Deploy by SHA tag or image digest, never `latest`.
-- Add lifecycle rules that retain recent release images and delete old
-  unreferenced images.
+### 27.5 Phase 1: static frontend conversion
 
-### ECS and Fargate
+The current frontend cannot be copied to S3 as-is. Next.js static export does
+not support rewrites or dynamic routes without `generateStaticParams`, and
+server components execute their fetches during the build. See
+[Next.js static export limitations](https://nextjs.org/docs/app/guides/static-exports).
 
-Start the demo environment with:
+Make these changes:
 
-- Linux/x86-64 Fargate task.
-- `2 vCPU` and `8 GiB` task memory as a conservative starting point.
-- Approximate container shares: backend 1.5 vCPU/6 GiB and frontend
-  0.5 vCPU/1 GiB, leaving task overhead.
-- `30 GiB` ephemeral storage to allow for large image layers, Playwright, and
-  temporary PDFs.
-- Desired task count: `1` for demo/staging.
-- Deployment circuit breaker with automatic rollback.
-- ECS Exec disabled by default and enabled temporarily only for controlled
-  diagnostics.
-- CloudWatch Logs using separate log streams for frontend and backend.
-- A health-check grace period long enough for the large backend image and
-  readiness process, initially 180 seconds and then tuned from measurements.
+1. Set `output: "export"` and preferably `trailingSlash: true` in
+   `frontend/next.config.js`.
+2. Remove the production reliance on the Next.js `/api` rewrite.
+3. Build with `NEXT_PUBLIC_API_BASE_URL=/api`.
+4. Convert the announcements page from build-time/server-side data fetching to
+   a client component that fetches after page load.
+5. Convert ticker summary, news, and deep-dive pages to client-side data
+   fetching, or add `generateStaticParams` for every supported ticker. Client
+   fetching is preferred if ticker symbols will change without a frontend
+   rebuild.
+6. Keep sign-in, sign-up, sign-out, search, watchlist, and session checks in
+   client components.
+7. Replace user-facing “backend on port 8000” errors with deployment-neutral
+   messages.
+8. Confirm direct navigation and refresh for:
+   - `/`
+   - `/announcements/`
+   - `/search/`
+   - `/sign-in/`
+   - `/watchlist/`
+   - every supported ticker route and subroute.
+9. Add a static `404.html` and CloudFront routing/error behaviour compatible
+   with the generated trailing-slash paths.
+10. Add long-lived immutable caching for hashed assets and short/no-cache
+    behaviour for HTML.
 
-Fargate provides 20 GiB by default and supports increasing task ephemeral
-storage up to 200 GiB. Container image layers consume part of that allocation.
-See [Fargate task storage](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/fargate-task-storage.html).
-
-Do not reduce the initial memory estimate until a test run measures:
-
-- steady-state memory after FinBERT is loaded;
-- peak memory during sentiment analysis;
-- peak memory while Chromium and PDF parsing run together;
-- backend image pull/start time; and
-- `/app/output` growth during a complete five-ticker seed.
-
-For production, use at least two tasks across two Availability Zones, but only
-after startup jobs have been removed from the web process and background jobs
-are durable.
-
-### Application Load Balancer, TLS, and DNS
-
-- Public Application Load Balancer across both public subnets.
-- Target group type `ip`, targeting frontend container port 3000.
-- HTTP listener redirects to HTTPS.
-- HTTPS listener uses an ACM certificate.
-- Route 53 alias record points the application hostname to the ALB.
-- ALB health check uses a dedicated frontend health route.
-- Enable deletion protection and ALB access logs for production.
-
-The backend is not registered with the load balancer. Browser requests to
-`/api/*` first reach Next.js, which proxies them to the backend over
-`127.0.0.1:8000`.
-
-### RDS PostgreSQL
-
-- Amazon RDS for PostgreSQL 15 initially, matching local Compose.
-- Private DB subnet group; `publicly_accessible=false`.
-- Demo: small Single-AZ burstable instance.
-- Production: Multi-AZ instance sized from observed CPU, connections, storage,
-  and latency.
-- Encrypted General Purpose SSD storage with storage autoscaling.
-- Automated backups and point-in-time recovery.
-- Deletion protection and a final snapshot in production.
-- Apply minor-version upgrades in a controlled maintenance window.
-- Require TLS from the application.
-
-Use an RDS security group that accepts port 5432 only from the ECS task security
-group. AWS documents security-group-controlled RDS access in
-[Controlling access with security groups](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Overview.RDSSecurityGroups.html).
-
-### Secrets and configuration
-
-Store sensitive values in AWS Secrets Manager and inject them using the ECS task
-definition `secrets` field. AWS recommends Secrets Manager or Systems Manager
-Parameter Store for ECS secret material; see
-[Passing sensitive data to ECS containers](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/specifying-sensitive-data.html).
-
-Secrets:
-
-- `DATABASE_URL` using the private RDS endpoint and `sslmode=require`
-- `GROQ_API_KEY`
-- `REDDIT_CLIENT_ID`
-- `REDDIT_CLIENT_SECRET`
-- `GEMINI_API_KEY` only if the legacy Gemini integration is enabled
-
-Non-secret environment configuration:
-
-| Variable | Deployment value |
-|---|---|
-| `INTERNAL_API_URL` | `http://127.0.0.1:8000` |
-| `NEXT_PUBLIC_API_BASE_URL` | `/api` |
-| `FINBERT_MODEL` | `/app/finbert` |
-| `GROQ_MODEL` | Pin the approved model identifier |
-| `GEMINI_MODEL` | Pin only if enabled |
-| `CORS_ORIGINS` | `https://<application-hostname>` |
-| `SESSION_COOKIE_SECURE` | `true` |
-| `SESSION_COOKIE_SAMESITE` | `lax` |
-| `SESSION_EXPIRE_DAYS` | `7`, or the agreed policy |
-| `SEED_TICKERS` | Empty in the web service |
-| `REDDIT_SEED_SUBREDDIT` | `ASX` for a one-off/worker task |
-| `REDDIT_SEED_LIMIT` | Agreed bounded job value |
-
-Secret rotation is not visible to a running container automatically. Rotate the
-secret, register a new task definition revision if required, and force a new ECS
-deployment.
-
-### IAM
-
-Use separate least-privilege roles:
-
-- **ECS execution role:** pull the two ECR images, write CloudWatch logs, and
-  retrieve only the named Secrets Manager secrets.
-- **ECS task role:** no AWS permissions initially. Add access to only the
-  application S3 prefix if durable PDF storage is implemented.
-- **Migration/seed task role:** only the permissions specifically required by
-  those jobs.
-- **GitHub deployment role:** assumed through GitHub OIDC and limited to the
-  repository, branch/environment, ECR repositories, ECS resources, and required
-  infrastructure actions.
-
-Do not store AWS access keys in GitHub secrets. Scope the OIDC trust policy to
-this repository and its protected deployment environment. AWS explicitly
-requires the GitHub OIDC `sub` condition to be constrained; see
-[Creating an OIDC-federated IAM role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-idp_oidc.html).
-
-### Object storage
-
-S3 is not required if downloaded PDFs are temporary and deleted after parsing.
-If retention is required:
-
-- Create a private, encrypted, versioned S3 bucket.
-- Block all public access.
-- Use object keys such as
-  `announcements/<ticker>/<published-date>/<content-hash>.pdf`.
-- Grant the task role access only to the relevant bucket/prefix.
-- Store the object key, source URL, checksum, and ingestion time in PostgreSQL.
-- Add an S3 lifecycle policy for the agreed retention period.
-
-Do not use EFS merely to preserve the current `/app/output` directory. S3 is a
-better fit for immutable source PDFs.
-
-## 6. Application changes
-
-### Frontend image
-
-Recommended result:
-
-1. Generate and commit `package-lock.json`.
-2. Update the Dockerfile to use `npm ci`.
-3. Supply `INTERNAL_API_URL=http://127.0.0.1:8000` while running `next build`.
-4. Use Next.js standalone output or copy only production dependencies and build
-   artifacts into a clean runtime stage.
-5. Add `CMD ["npm", "run", "start"]` or the standalone equivalent.
-6. Run as a non-root Node user.
-7. Add a dedicated health route.
-
-### Backend image
-
-Recommended result:
-
-1. Pin all base images by supported version and preferably digest.
-2. Pin the FinBERT model revision.
-3. Replace the remote installer pipe with a pinned, checksummed build input.
-4. Verify whether system Chromium or Playwright Chromium is required, then keep
-   only one.
-5. Add a non-root runtime user and writable scratch/output paths.
-6. Run Uvicorn without the Alembic command:
-
-   ```text
-   python -m uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
-7. Start with one worker. Multiple Uvicorn workers would each load a FinBERT
-   model and can multiply memory use.
-8. Add readiness that verifies PostgreSQL connectivity.
-9. Warm FinBERT deliberately during readiness or immediately after deployment,
-   and measure the effect before making it mandatory.
-
-### Startup and background jobs
-
-Refactor the current startup hooks into explicit commands, for example:
+Frontend deployment:
 
 ```text
-python -m alembic upgrade head
-python -m app.jobs.seed --tickers ANZ,CBA,BHP,WES,CSL
-python -m app.jobs.seed_reddit --subreddit ASX --limit 50
+npm ci
+npm run build
+aws s3 sync out/ s3://<frontend-bucket>/ --delete
+aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
 ```
 
-The exact module names can differ, but each command must:
+Use commit-addressed build artifacts and deploy the same tested artifact to
+production rather than rebuilding it.
 
-- return a non-zero exit code on failure;
-- be safe to retry;
-- log a start time, completion time, item counts, and failures;
-- avoid starting an HTTP server; and
-- prevent duplicate work through database uniqueness/idempotency.
+### 27.6 Phase 2: Supabase schema and connection changes
 
-For the first demo, run these as manual one-off ECS tasks. For production,
-invoke scheduled jobs with EventBridge Scheduler and use SQS plus a dedicated
-worker service for user-triggered jobs.
+The existing schema should be extended instead of creating duplicate concepts.
 
-## 7. Infrastructure-as-code layout
+| Architecture concept | Existing table(s) | Required change |
+|---|---|---|
+| Scraping jobs | `scrape_runs` | Add requester/source URL, stage counts, queued/completed timestamps, stable status values, idempotency key, and last error. |
+| Websites | `information_platforms` | Use `base_url` and `scrape_config`; add last/next scrape timestamps and unique canonical URL/domain rules if generic sites are introduced. |
+| Documents | `artifacts` | Add `scrape_run_id`, file name/type/size/checksum, S3 bucket/key, download status, analysis status, stage timestamps, and last error. |
+| Analysis results | `artifact_sentiments`, `artifact_summaries`, `artifact_topics`, `extracted_facts` | Add/confirm model name, model revision, analysis version, confidence, and uniqueness rules. |
+| Processing attempts | New `processing_attempts` table | Store job/document/stage/attempt/status/error/start/end for audit and retries. |
 
-Suggested repository structure:
+Add database constraints for:
+
+- one canonical document URL per scrape run;
+- one stored content checksum per agreed deduplication scope;
+- one completed analysis per artifact, analysis type, model revision, and
+  analysis version; and
+- one idempotency key per processing stage.
+
+Lambda runtime connections should use Supabase's transaction-mode Supavisor
+pooler on port 6543. Supabase identifies transaction mode as the appropriate
+option for serverless/temporary clients:
+[Supabase database connections](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+For SQLAlchemy Lambda handlers:
+
+- use `NullPool` or a deliberately tiny pool;
+- enable `pool_pre_ping`;
+- use short connection and statement timeouts;
+- close every session in `finally`;
+- do not assume a connection remains valid after an execution environment is
+  frozen; and
+- disable prepared statements if the chosen driver/configuration would use
+  them through transaction mode.
+
+Use a separate migration connection suitable for Alembic. Run migrations as a
+CI/CD release step, not from an API request or every Lambda cold start.
+
+### 27.7 Phase 3: backend API Lambda
+
+Reuse the FastAPI application for synchronous application APIs:
+
+1. Add Mangum or an equivalent ASGI-to-Lambda adapter.
+2. Create a Lambda entry point separate from the local Uvicorn entry point.
+3. Package only API dependencies; do not include FinBERT, Playwright, or
+   Chromium.
+4. Configure an API Gateway HTTP API proxy integration for the required
+   FastAPI routes.
+5. Add the job endpoints defined in Section 4:
+   - `POST /scraping-jobs`
+   - `GET /scraping-jobs`
+   - `GET /scraping-jobs/{jobId}`
+   - `POST /scraping-jobs/{jobId}/retry`
+   - document/result read endpoints as required by the UI.
+6. Replace `/scrape/{ticker}` background execution with:
+   - authenticated/authorised request validation;
+   - a `scrape_runs` row committed as `QUEUED`;
+   - an idempotent website-queue message; and
+   - an HTTP `202 Accepted` response containing the job ID.
+7. Remove ticker and Reddit auto-seeding from FastAPI startup.
+8. Keep a lightweight `/health` endpoint that does not load FinBERT.
+9. Protect or disable `/docs` and `/redoc` in production.
+
+Authentication requirements:
+
+- Route browser API traffic through CloudFront `/api/*` so the session cookie is
+  same-origin.
+- Set `SESSION_COOKIE_SECURE=true`, `HttpOnly=true`, and the agreed SameSite
+  policy.
+- Forward `Cookie` and `Set-Cookie` through CloudFront/API Gateway.
+- Disable caching on all authenticated API behaviours.
+- Add CSRF protection for cookie-authenticated write operations.
+- Add API Gateway throttling and AWS WAF rate-based rules for auth and job
+  creation endpoints.
+
+### 27.8 Phase 4: queue contracts and state machine
+
+Define versioned Pydantic message schemas. Every message should include:
+
+```json
+{
+  "schemaVersion": 1,
+  "jobId": "uuid",
+  "documentId": "uuid-or-null",
+  "stage": "DISCOVERY|DOWNLOAD|ANALYSIS",
+  "attemptCorrelationId": "uuid",
+  "requestedAt": "ISO-8601 UTC timestamp"
+}
+```
+
+Stage-specific fields:
+
+- Discovery: `platformId`, `ticker`, canonical source URL.
+- Download: document ID, source URL, document URL, expected type, and
+  non-sensitive adapter metadata.
+- Analysis: document ID, S3 bucket, object key, checksum, content type, and
+  analysis version.
+
+Rules:
+
+- Do not include secrets, cookies, raw document content, or full extracted text
+  in SQS.
+- Validate every message at the handler boundary.
+- Treat SQS delivery as at least once.
+- Start each handler with a database idempotency/status check.
+- Commit the completed database state before acknowledging success.
+- Publish the next-stage message with a deterministic deduplication record or
+  transactional outbox so a database commit followed by an SQS failure can be
+  recovered.
+
+### 27.9 Phase 5: discovery Lambda
+
+Refactor the scraper interface so discovery returns metadata only:
+
+```text
+discover(source) -> list[DiscoveredDocument]
+download(document) -> stored S3 object
+```
+
+For each company adapter:
+
+1. Move all file writes and downloads out of discovery.
+2. Return title, publication date, direct/source URL, ticker, expected file
+   type, and adapter metadata.
+3. Canonicalise and deduplicate URLs.
+4. Upsert artifact/document rows as `QUEUED_FOR_DOWNLOAD`.
+5. Publish one download message per document.
+6. Update the scrape run's discovery counts/status.
+
+Initial controls:
+
+- allowlist only the five implemented source domains;
+- SQS batch size `1`;
+- reserved/maximum concurrency `1–2`;
+- timeout around five minutes, based on measurements;
+- Chromium-compatible container image;
+- bounded page count, link count, redirects, and navigation time;
+- structured logs containing job ID, source/ticker, stage, attempt, and
+  duration.
+
+Generic user-supplied websites should not be enabled until the SSRF controls in
+Section 18 are implemented and security-tested.
+
+### 27.10 Phase 6: download Lambda
+
+Implement one document per SQS record:
+
+1. Revalidate the URL and every redirect target.
+2. Resolve DNS and reject loopback, link-local, private, reserved, metadata, and
+   unsupported addresses before every request/redirect.
+3. Apply per-domain timeouts, concurrency, and a clear user agent.
+4. Stream the response while enforcing a maximum byte count.
+5. Verify status, content type, magic bytes, and supported extension.
+6. Calculate SHA-256 while streaming.
+7. Check the database for duplicate content.
+8. Write to the private raw-document S3 bucket using a deterministic key.
+9. Record S3 version ID/ETag, checksum, size, type, and `DOWNLOADED` state.
+10. Publish the analysis message.
+
+Prefer streaming directly to S3. Use `/tmp` only when a source/browser download
+requires it, and delete temporary data before returning.
+
+For sources needing browser context, implement a source-specific download
+strategy that recreates the context from non-secret metadata. A failed download
+must never require discovery to run again.
+
+### 27.11 Phase 7: analysis Lambda
+
+Create an analysis-only Lambda container:
+
+- Use an AWS Lambda Python base image or include the Lambda runtime interface
+  client in a compatible custom image.
+- Do not include Playwright or Chromium.
+- Copy a pinned FinBERT model into the image.
+- Read the source object from S3.
+- Use `/tmp` only for bounded local processing.
+- Extract and chunk PDF text.
+- Run the existing FinBERT distribution/aggregation logic.
+- Store raw text and metadata in `artifacts` and results in the existing
+  analysis tables.
+- Record model revision and analysis version.
+- Mark the document complete only after all required result writes commit.
+
+Lambda container images must be read-only except for `/tmp` and must implement
+the Lambda runtime API. See
+[Creating Lambda container images](https://docs.aws.amazon.com/lambda/latest/dg/images-create.html).
+
+Initial configuration, subject to the spike:
+
+- batch size `1`;
+- memory `6–10 GB`;
+- timeout below 15 minutes with operational headroom;
+- `/tmp` sized to the maximum accepted document plus extraction overhead;
+- reserved/maximum concurrency `1–2` to protect Supabase and cost;
+- no VPC attachment unless a future private dependency requires it.
+
+Keeping these Lambdas outside a customer VPC preserves their default outbound
+internet connectivity to Supabase and external model APIs and avoids a NAT
+Gateway. If VPC attachment is introduced later, explicitly provide working
+internet egress.
+
+### 27.12 Phase 8: S3, SQS, DLQs, and EventBridge
+
+Raw document bucket:
+
+- Block Public Access.
+- Use SSE-S3 initially or SSE-KMS if policy requires customer-managed keys.
+- Enable versioning.
+- Enforce TLS in the bucket policy.
+- Use keys such as
+  `raw-documents/<job-id>/<document-id>/<sha256>.<extension>`.
+- Add lifecycle rules for the approved retention period.
+- Never serve raw documents through the frontend bucket.
+- Issue short-lived signed URLs only after an authorised API request.
+
+Create three standard queues and three DLQs. Suggested initial settings:
+
+| Queue | Lambda timeout | Visibility timeout | Batch | Max receives |
+|---|---:|---:|---:|---:|
+| Website discovery | 5 minutes | 30 minutes | 1 | 5 |
+| Document download | 5 minutes | 30 minutes | 1 initially | 5 |
+| Document analysis | 15 minutes | 90 minutes | 1 | 5 |
+
+Tune these values from measured p95 duration. AWS recommends an SQS visibility
+timeout of at least six times the Lambda timeout and a `maxReceiveCount` of at
+least five:
+[Configuring SQS event sources for Lambda](https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-configure.html).
+
+Enable `ReportBatchItemFailures` before increasing a batch size above one so a
+single failed record does not replay successful records. AWS documents the
+at-least-once and partial-batch behaviour in
+[Using Lambda with SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html).
+
+EventBridge Scheduler should invoke a small job-creation Lambda. It must create
+the same database record and website-queue message as the API path. Do not
+invoke discovery directly and do not keep the current FastAPI startup seeds.
+
+### 27.13 Phase 9: infrastructure as code
+
+Use AWS SAM for the serverless application and native CloudFormation resources
+inside the same templates where SAM has no higher-level resource. Split stacks
+only where lifecycle or permissions justify it.
+
+Suggested layout:
 
 ```text
 infra/
-  terraform/
-    modules/
-      network/
-      ecr/
-      rds/
-      ecs/
-      observability/
-    environments/
-      staging/
-      production/
+  samconfig.toml
+  template.yaml
+  parameters/
+    dev.json
+    staging.json
+    production.json
+backend/
+  lambdas/
+    api/
+    discovery/
+    download/
+    analysis/
+    scheduled_job/
+  shared/
+frontend/
 ```
 
-Each environment should have separate state, secrets, database, log groups, ECS
-service, and DNS hostname. Do not make staging share the production database.
+The template must define:
 
-Terraform outputs should include:
+- Lambda functions, versions/aliases, log groups, and reserved concurrency;
+- API Gateway HTTP API and throttling/access logs;
+- queues, DLQs, encryption, redrive policies, and event-source mappings;
+- raw and frontend S3 buckets;
+- CloudFront origins, behaviours, OAC, cache/origin-request policies, security
+  headers, certificate, and DNS records;
+- EventBridge schedules;
+- Secrets Manager references;
+- least-privilege IAM roles per Lambda;
+- CloudWatch alarms and dashboards;
+- AWS Budgets alerts; and
+- environment-specific names/tags.
 
-- application URL;
-- ECS cluster and service names;
-- ECR repository URLs;
-- migration task definition family;
-- RDS endpoint without credentials; and
-- CloudWatch dashboard name.
+Use separate dev, staging, and production stacks, buckets, queues, secrets, and
+Supabase configurations. Never share production queues or data with staging.
 
-## 8. CI/CD workflow
+### 27.14 Phase 10: secrets and IAM
 
-Use GitHub Actions with short-lived AWS credentials obtained through OIDC.
+Store these in Secrets Manager:
 
-### Pull request checks
+- Supabase Lambda runtime connection string;
+- separate migration connection string if required;
+- Groq API key;
+- Reddit client ID and secret;
+- Gemini key only while the legacy integration is enabled.
 
-1. Backend unit/integration tests.
-2. Frontend production build.
-3. Docker builds for both production targets.
-4. Dependency and container vulnerability scans.
-5. Terraform formatting, validation, and plan.
-6. Fail if credentials or `.env` files are included in the build context.
+Use separate execution roles:
 
-### Deployment to staging
+- API: read its database/auth secrets and send only to the website queue.
+- Discovery: consume website queue, send download queue, and read its database
+  secret.
+- Download: consume download queue, write only the raw-document bucket prefix,
+  send analysis queue, and read its database secret.
+- Analysis: consume analysis queue, read raw documents, read model/API secrets,
+  and access the database.
+- Scheduled job: send website queue and access only the job-creation database
+  path/secret.
 
-1. Merge to the protected deployment branch.
-2. Authenticate to AWS through GitHub OIDC.
-3. Build both images from the same Git commit.
-4. Push commit-SHA-tagged images to ECR.
-5. Apply reviewed infrastructure changes.
-6. Register a one-off migration task using the new backend image.
-7. Run the migration task and wait for a successful exit code.
-8. Register the web task definition using the exact two image digests.
-9. Update the ECS service.
-10. Wait for ECS steady state and ALB health.
-11. Run smoke tests.
-12. Mark the Git commit and task revision as the deployed release.
+No Lambda should have wildcard administrator access. Queue messages and logs
+must never contain secret values.
 
-### Production promotion
+### 27.15 Phase 11: CI/CD
 
-Promote previously tested image digests rather than rebuilding them. Require a
-protected GitHub environment approval, a reviewed Terraform plan, a current RDS
-backup, and a migration compatibility review.
+Use GitHub Actions with AWS OIDC; do not store long-lived AWS access keys.
 
-Enable the ECS deployment circuit breaker with rollback. AWS documents that it
-can stop a deployment that cannot reach steady state and roll back to the last
-completed deployment; see
-[ECS deployment circuit breaker](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/deployment-circuit-breaker.html).
+Pull request pipeline:
 
-## 9. Database migration strategy
+1. Run backend unit and database integration tests.
+2. Run frontend tests and a production static export.
+3. Validate message-contract and idempotency tests.
+4. Build all Lambda zip/container artifacts.
+5. Run `sam validate` and a change-set preview.
+6. Scan dependencies, Lambda images, and IaC.
+7. Run scraper contract tests proving discovery performs no downloads.
 
-Use an expand-and-contract approach:
+Staging deployment:
 
-1. Take or verify a backup before risky schema changes.
-2. Deploy additive/backward-compatible migrations first.
-3. Run the migration as a one-off ECS task.
-4. Deploy application code that can work with both old and new schema states.
-5. Remove old columns/constraints only in a later release.
+1. Build immutable artifacts once and tag images with the Git commit SHA.
+2. Apply backward-compatible Alembic migrations.
+3. Deploy the SAM/CloudFormation change set.
+4. Publish Lambda versions and move staging aliases.
+5. Upload the tested frontend `out/` artifact to its S3 bucket.
+6. Invalidate changed CloudFront paths.
+7. Run end-to-end smoke tests.
+8. Run one real scrape per supported source with conservative limits.
+9. Verify S3 object, database state transitions, queue drain, and logs.
 
-Application rollback does not automatically reverse a database migration.
-Every release must state whether its migration is backward compatible and how
-to recover if it fails. Do not automatically run Alembic downgrade in the
-deployment pipeline.
+Production promotion:
 
-## 10. Observability and alarms
+- Promote the exact tested image digests and frontend artifact.
+- Require a protected-environment approval.
+- Review the CloudFormation change set and database migration.
+- Use Lambda aliases for rapid code rollback.
+- Do not automatically reverse database migrations; use expand-and-contract
+  migrations and forward fixes.
 
-Create:
+### 27.16 Monitoring, alarms, and operating runbooks
 
-- CloudWatch log groups for frontend, backend, migrations, and scheduled jobs;
-- 14-day retention for demo and an agreed retention period for production;
-- a dashboard for ALB, ECS, and RDS;
-- alarms for:
-  - ALB unhealthy hosts;
-  - sustained ALB 5xx responses;
-  - ECS task restarts and failed deployments;
-  - ECS CPU and memory pressure;
-  - Fargate ephemeral-storage pressure;
-  - RDS CPU, free storage, connections, and low freeable memory;
-  - migration or scheduled-job failure; and
-  - Secrets Manager or ECR permission failures visible in stopped-task reasons.
+Use structured JSON logs with:
 
-Send production alarms to an owned notification channel. Avoid alerting on a
-single transient scraper failure; use a threshold and a dead-letter queue once
-SQS workers exist.
+```text
+correlationId
+jobId
+documentId
+stage
+attempt
+sourceDomain
+status
+durationMs
+errorCode
+```
 
-## 11. Validation and cutover checklist
+Do not log full document text, credentials, cookies, or session tokens.
 
-### Before deployment
+Create alarms for:
 
-- [ ] Frontend production image starts with `npm start`/standalone server.
-- [ ] Both images build from a clean checkout.
-- [ ] Compose-based automated tests pass.
-- [ ] No secrets are present in Git history, Docker layers, build arguments, or
-      logs.
-- [ ] RDS restore procedure has been tested in staging.
-- [ ] Startup seeding is disabled in the web service.
-- [ ] Migration task succeeds against a fresh staging database.
-- [ ] Backend memory is measured with FinBERT and Chromium active.
-- [ ] `/app/output` retention/cleanup behaviour is confirmed.
+- each DLQ having one or more visible messages;
+- age of oldest message breaching the stage service-level objective;
+- sustained queue growth;
+- Lambda errors, throttles, duration near timeout, and concurrency saturation;
+- API Gateway 4xx/5xx and latency;
+- Supabase connection failures;
+- S3 access-denied or failed writes; and
+- unexpected spend.
 
-### Smoke tests after deployment
+Write and test runbooks for:
 
-- [ ] `GET /` returns the Next.js application over HTTPS.
-- [ ] HTTP redirects to HTTPS.
-- [ ] `GET /api/health` returns success.
-- [ ] `GET /api/tickers` returns database-backed data.
-- [ ] Sign-up sets a `Secure`, `HttpOnly` session cookie.
-- [ ] Sign-in, `/api/auth/me`, sign-out, and session expiry work.
-- [ ] Watchlist reads and writes persist after an ECS task replacement.
-- [ ] One sentiment request loads/runs FinBERT successfully.
-- [ ] One supported ticker scrape can use Chromium and write/process a PDF.
-- [ ] External Reddit/Groq calls work without exposing their credentials.
-- [ ] Frontend, backend, and ALB logs are available.
-- [ ] An intentionally bad task revision is rolled back in staging.
+- replaying one DLQ message after correcting its cause;
+- retrying one document stage without replaying earlier stages;
+- disabling one source/schedule;
+- rotating a secret and refreshing Lambda environments;
+- rolling back Lambda aliases and the frontend;
+- restoring database data; and
+- handling a malicious/invalid downloaded file.
 
-### Production exit criteria
+### 27.17 Test strategy
 
-- [ ] Two healthy tasks run across two Availability Zones.
-- [ ] RDS is Multi-AZ with backups, deletion protection, and restore evidence.
-- [ ] Long-running jobs use a durable queue/worker path.
-- [ ] Public API documentation and administrative endpoints are protected.
-- [ ] WAF/rate-limit requirements have been reviewed.
-- [ ] Load, failure, and recovery tests meet agreed targets.
+Required automated tests:
 
-## 12. Rollback and recovery
+- URL canonicalisation and SSRF blocking, including redirects and DNS rebinding
+  scenarios;
+- file type, magic byte, maximum size, corrupt file, and zip-bomb rejection;
+- duplicate SQS delivery at every stage;
+- database commit succeeds but next queue publish fails;
+- partial batch failure;
+- stale `IN_PROGRESS` recovery;
+- duplicate URL and duplicate checksum handling;
+- analysis version/model revision idempotency;
+- cookie auth through the CloudFront `/api/*` path;
+- static deep-link refreshes;
+- Supabase connection exhaustion and recovery; and
+- Lambda timeout/memory behaviour with representative files.
 
-Application rollback:
+Staging failure tests:
 
-1. Stop or allow the circuit breaker to fail the unhealthy deployment.
-2. Restore the last known-good ECS task definition revision/image digests.
-3. Confirm ALB health and rerun smoke tests.
+- force each Lambda to fail and verify only its stage retries;
+- exhaust retries and verify the correct DLQ/alarm;
+- replay the DLQ message and verify no duplicate artifact/result;
+- deploy an invalid Lambda version and verify alias rollback;
+- delete a warm database connection and verify reconnection; and
+- verify a failed analysis never causes another download.
 
-Database recovery:
+### 27.18 Release acceptance criteria
 
-1. Prefer a forward fix for a backward-compatible migration.
-2. For destructive corruption, restore RDS to a new instance from
-   point-in-time recovery.
-3. Validate the restored database before changing the application secret or
-   endpoint.
-4. Preserve the failed database until the incident is understood.
+The first staging release is complete when:
 
-Job recovery:
+- [ ] The frontend is a clean static export served only through CloudFront.
+- [ ] `/api/*` reaches FastAPI through API Gateway and the Lambda adapter.
+- [ ] Sign-up, sign-in, `/auth/me`, sign-out, and secure session cookies work.
+- [ ] Creating a scrape returns `202` and a durable job ID.
+- [ ] Each supported source publishes discovery results without downloading.
+- [ ] Each document is downloaded once logically, validated, hashed, and stored
+      privately in S3.
+- [ ] Analysis reads from S3 and stores versioned results in Supabase.
+- [ ] Duplicate deliveries do not create duplicate rows or analysis work.
+- [ ] Each stage retries independently and moves exhausted messages to its own
+      DLQ.
+- [ ] Status counts and partial completion are correct.
+- [ ] CloudWatch logs, metrics, alarms, and correlation IDs work end to end.
+- [ ] Measured Lambda duration, memory, image, and `/tmp` use have safe
+      headroom.
+- [ ] Infrastructure can be recreated from source using SAM/CloudFormation.
 
-- One-off seed jobs must be idempotent and safe to rerun.
-- Once SQS is introduced, configure retry limits and a dead-letter queue.
-- Do not rely on files left on Fargate ephemeral storage for recovery.
+Production is additionally blocked until:
 
-## 13. Recommended implementation order
+- [ ] Raw-document retention and deletion policy is approved.
+- [ ] Source authorisation/terms and request-rate policy are approved.
+- [ ] SSRF, file validation, auth, CSRF, and rate-limit review is complete.
+- [ ] Supabase backups/recovery and migration rollback procedures are tested.
+- [ ] Ownership exists for alarms, DLQs, secrets, database, and incidents.
+- [ ] Load, cost, recovery-time, and recovery-point targets are met.
 
-1. Fix and verify the two production Docker images.
-2. Add health/readiness endpoints and production configuration.
-3. extract migrations and seed operations into one-off commands.
-4. Decide whether PDFs are scratch data or durable S3 objects.
-5. Add Terraform for ECR, networking, RDS, secrets, ECS, ALB, DNS, and logging.
-6. Deploy an empty staging environment.
-7. Build and push commit-addressed images.
-8. Run migrations, deploy the service, and run smoke tests.
-9. Benchmark memory, startup time, storage, and scrape duration; right-size the
-   task and RDS instance.
-10. Add GitHub OIDC CI/CD and automated rollback validation.
-11. Add SQS workers and multi-AZ/high-availability settings before production.
+### 27.19 Implementation order
 
-## 14. Decisions still needed
+1. Complete the Lambda viability spikes.
+2. Add locked/split dependencies and shared contracts.
+3. Add the database migration for durable stage state and idempotency.
+4. Adapt FastAPI to API Gateway/Lambda and replace in-process scrape triggers.
+5. Convert Next.js to a static, client-fetching frontend.
+6. Refactor all five scrapers into discovery-only adapters.
+7. Implement and test the download Lambda and raw-document S3 storage.
+8. Implement and benchmark the analysis Lambda.
+9. Add queues, DLQs, EventBridge, IAM, secrets, alarms, and CloudFront in SAM.
+10. Add OIDC CI/CD and deploy staging.
+11. Run end-to-end, failure, security, and cost tests.
+12. Promote to production only after all production acceptance criteria pass.
 
-The team must confirm:
+### 27.20 Decisions required from the team
 
-- the final domain or subdomain;
-- whether the target is a disposable class demo, persistent staging, or
-  production;
-- acceptable monthly AWS budget;
-- whether source PDFs must be retained and for how long;
-- availability and recovery targets;
-- whether Reddit/Groq/Gemini use is allowed for the deployed environment;
-- the required scraping schedule;
-- log/data retention requirements; and
-- who owns production alarms, secret rotation, backups, and incident response.
+Confirm before implementation:
 
-These decisions affect cost and hardening, but they do not block implementing
-the P0 image, configuration, migration, and startup-job changes.
+- AWS account and final region;
+- domain/subdomain and DNS ownership;
+- Supabase project/region/tier and backup policy;
+- whether PDFs are retained, and for how long;
+- maximum document size and page count;
+- whether only the five current sources are in scope for release one;
+- whether document types other than PDF are required;
+- scraping schedules and per-domain rate limits;
+- whether Groq, Reddit, and Gemini are approved in each environment;
+- job and document status retention;
+- target monthly AWS/Supabase budget;
+- availability, processing-time, recovery-time, and recovery-point objectives;
+  and
+- named owners for operations, security, database, and source compliance.
