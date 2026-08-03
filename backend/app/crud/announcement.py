@@ -109,7 +109,6 @@ def get_announcements(
         db.query(Artifact)
         .options(joinedload(Artifact.ticker))
         .filter(Artifact.source_type == "asx_announcement")
-        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
     )
 
     has_custom_range = start_date is not None or end_date is not None
@@ -144,7 +143,6 @@ def get_trending_announcements(
         db.query(Ticker.symbol, count_value.label("count"))
         .join(Artifact, Artifact.ticker_id == Ticker.id)
         .filter(Artifact.source_type == "asx_announcement")
-        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
         .filter(date_value >= cutoff)
         .group_by(Ticker.symbol)
         .order_by(count_value.desc(), Ticker.symbol.asc())

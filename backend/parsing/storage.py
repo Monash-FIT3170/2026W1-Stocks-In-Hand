@@ -154,7 +154,6 @@ def _summarise_and_store_artifact(
             summary,
         ),
         model_used=groq_service.active_model_name(),
-        prompt_version=groq_service.SUMMARY_PROMPT_VERSION,
     ))
     db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")

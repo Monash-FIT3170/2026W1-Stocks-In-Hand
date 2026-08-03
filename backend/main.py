@@ -2,52 +2,36 @@
 main python file which creates database connection, connects to finBERT, and runs a FastAPI server
 """
 import asyncio
-from datetime import date, timedelta
+from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
+
 from app.models.information_platform import InformationPlatform
-from pathlib import Path
 from app.services import sentiment as sentiment_service
 
-# Import from app structure
 from app.api.routes import (
     investor,
     ticker,
     watchlist,
     watchlist_ticker,
-    alert,
-    report,
     artifact,
-    artifact_chunk,
     artifact_summary,
     artifact_sentiment,
-    artifact_topic,
-    extracted_fact,
-    claim,
-    claim_source,
-    report_claim,
-    llm_run,
     scrape_run,
-    market_data,
     information_platform,
-    topic,
     reddit,
     gemini,
     category_sentiment,
     auth,
     announcement,
 )
-from app.database.connection import SessionLocal
-from app.database.connection import get_db
+from app.database.connection import SessionLocal, get_db
 from app.core.config import settings
-from app.models.result import Result
 
-# Import scrapers
 from scrapers.registry import scrape, available_tickers
 
 app = FastAPI(title="StonksInHand API")
@@ -59,32 +43,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register all database routes
 app.include_router(investor.router)
 app.include_router(ticker.router)
 app.include_router(watchlist.router)
 app.include_router(watchlist_ticker.router)
-app.include_router(alert.router)
-app.include_router(report.router)
 app.include_router(artifact.router)
-app.include_router(artifact_chunk.router)
 app.include_router(artifact_summary.router)
 app.include_router(artifact_sentiment.router)
-app.include_router(artifact_topic.router)
-app.include_router(extracted_fact.router)
-app.include_router(claim.router)
-app.include_router(claim_source.router)
-app.include_router(report_claim.router)
-app.include_router(llm_run.router)
 app.include_router(scrape_run.router)
-app.include_router(market_data.router)
 app.include_router(information_platform.router)
-app.include_router(topic.router)
 app.include_router(auth.router)
 app.include_router(reddit.router)
 app.include_router(gemini.router)
 app.include_router(category_sentiment.router)
 app.include_router(announcement.router)
+
 
 @app.on_event("startup")
 def seed_platforms():
@@ -100,47 +73,6 @@ def seed_platforms():
                 scrape_enabled=True,
             ))
             db.commit()
-
-
-async def _fetch_market_data(symbol: str) -> None:
-    from app.crud import ticker as ticker_crud
-    from app.crud import market_data as market_data_crud
-
-    yahoo_symbol = f"{symbol}.AX"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200:
-            print(f"[SEED] Yahoo Finance returned {resp.status_code} for {symbol}")
-            return
-        result = resp.json().get("chart", {}).get("result") or []
-        if not result:
-            print(f"[SEED] No chart data from Yahoo Finance for {symbol}")
-            return
-        meta = result[0].get("meta", {})
-        current_price = meta.get("regularMarketPrice")
-        prev_close = meta.get("chartPreviousClose") or meta.get("regularMarketPreviousClose")
-        if not current_price:
-            print(f"[SEED] Could not parse price for {symbol}")
-            return
-        today = date.today()
-        with SessionLocal() as db:
-            ticker_obj = ticker_crud.get_ticker_by_symbol(db, symbol=symbol)
-            if ticker_obj:
-                market_data_crud.upsert_market_data(
-                    db, ticker_id=ticker_obj.id, price_date=today, close_price=current_price
-                )
-                if prev_close:
-                    market_data_crud.upsert_market_data(
-                        db,
-                        ticker_id=ticker_obj.id,
-                        price_date=today - timedelta(days=1),
-                        close_price=prev_close,
-                    )
-                print(f"[SEED] Market data for {symbol}: ${current_price} (prev: ${prev_close})")
-    except Exception as exc:
-        print(f"[SEED] Market data fetch for {symbol} failed: {exc}")
 
 
 def _run_seed_sentiment(symbol: str) -> None:
@@ -188,7 +120,6 @@ async def _run_seed(tickers: list[str]) -> None:
         except Exception as exc:
             print(f"[SEED] {symbol} failed: {exc}")
             _traceback.print_exc()
-        await _fetch_market_data(symbol)
         await loop.run_in_executor(None, _run_seed_sentiment, symbol)
     print("[SEED] Auto-seed finished.")
 
@@ -239,7 +170,7 @@ def root():
         "frontend": "http://localhost:3000",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": ["/analyse", "/sentiment/{ticker}", "/headlines", "/results", "/scrape/{ticker}", "/tickers",],
+        "endpoints": ["/analyse", "/sentiment/{ticker}", "/headlines", "/scrape/{ticker}", "/tickers"],
     }
 
 @app.get("/health")
@@ -251,7 +182,6 @@ def health() -> dict:
 def viewer():
     return (Path(__file__).parent / "viewer.html").read_text(encoding="utf-8")
 
-# --- Playwright scraper ---
 async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
     """
     Scrapes Yahoo for headlines relating to a ticker
@@ -272,18 +202,16 @@ async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
         await page.goto(url, timeout=15000)
         await page.wait_for_load_state("domcontentloaded")
 
-        # grab all h3 text on the page, filter out short/nav ones
         items = await page.query_selector_all("h3")
         headline_list = []
         for item in items[:30]:
             text = (await item.inner_text()).strip()
-            if len(text) > 20:  # filter out nav labels like "Trending Tickers"
+            if len(text) > 20:
                 headline_list.append(text)
 
         await browser.close()
     return headline_list[:10]
 
-# --- API ---
 
 class AnalyseRequest(BaseModel):
     """Class representing the structure of requests made to the analyse API"""
@@ -293,23 +221,7 @@ class AnalyseRequest(BaseModel):
 def analyse(body: AnalyseRequest) -> dict:
     """Analyses the sentiment of a headline passed in as an AnalyseRequest"""
     out = sentiment_service.analyse_text(body.text)
-    with SessionLocal() as db:
-        row = Result(
-            text=body.text,
-            label=out["sentiment_label"],
-            score=out["score"],
-        )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-    return {"id": row.id, "label": row.label, "score": row.score}
-
-@app.get("/results")
-def results() -> list[dict]:
-    """Returns a list of sentiment analysis results"""
-    with SessionLocal() as db:
-        rows = db.query(Result).order_by(Result.id.desc()).limit(10).all()
-    return [{"id": r.id, "text": r.text[:80], "label": r.label, "score": r.score} for r in rows]
+    return {"label": out["sentiment_label"], "score": out["score"]}
 
 @app.get("/headlines")
 async def headlines() -> list[str]:

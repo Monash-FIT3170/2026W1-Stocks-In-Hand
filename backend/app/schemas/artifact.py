@@ -13,11 +13,9 @@ class SourceType(str, Enum):
 
 
 class ArtifactType(str, Enum):
-    # Document types with reliable pypdf/regex extractors
     DIVIDEND_ANNOUNCEMENT  = "dividend_announcement"
     SECURITY_NOTIFICATION  = "security_notification"
     LEADERSHIP_CHANGE      = "leadership_change"
-    # Catch-alls for types that cannot be reliably parsed without AI
     ASX_ANNOUNCEMENT_OTHER = "asx_announcement_other"
     REDDIT_POST            = "reddit_post"
     HOTCOPPER_POST         = "hotcopper_post"
@@ -25,7 +23,6 @@ class ArtifactType(str, Enum):
 
 
 class ArtifactCreate(BaseModel):
-    # required
     source_type:        SourceType
     artifact_type:      ArtifactType
     title:              str
@@ -33,12 +30,10 @@ class ArtifactCreate(BaseModel):
     published_at:       datetime
     content_hash:       str
     raw_text:           str
-    # optional — genuinely not always available
     ticker_id:          Optional[UUID] = None
     platform_id:        Optional[UUID] = None
     author:             Optional[str] = None
     artifact_metadata:  Optional[dict[str, Any]] = None
-    credibility_label:  Optional[str] = None
 
 
 class ArtifactResponse(BaseModel):
@@ -52,9 +47,6 @@ class ArtifactResponse(BaseModel):
     author: Optional[str]
     published_at: Optional[datetime]
     scraped_at: datetime
-    is_duplicate: bool
-    duplicate_of_id: Optional[UUID]
-    credibility_label: Optional[str]
     artifact_metadata: Optional[dict[str, Any]] = None
     raw_text: Optional[str] = None
     created_at: datetime
