@@ -494,7 +494,7 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
                 _metadata_value(
                     artifact,
                     "summary",
-                    _preview(artifact.raw_text, 160) or "No summary available yet.",
+                    "Summary pending.",
                 ),
             ),
             "changed": _metadata_value(artifact, "changed", "No change summary available yet."),

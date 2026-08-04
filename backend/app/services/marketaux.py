@@ -19,6 +19,7 @@ from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
 from app.schemas.ticker import TickerCreate
 from app.services import gemini as summary_service
+from app.services.title_normalization import normalise_title
 
 
 PROVIDER_NAME = "Marketaux"
@@ -109,12 +110,13 @@ def _author(payload: dict[str, Any]) -> str | None:
 
 def normalise_article(payload: dict[str, Any]) -> NewsArticle:
     """Map a Marketaux response item into the internal article shape."""
-    title = str(payload.get("title") or "").strip()
     url = str(payload.get("url") or "").strip()
-    if not title:
+    raw_title = str(payload.get("title") or "").strip()
+    if not raw_title:
         raise ValueError("Marketaux article is missing a title")
     if not url:
         raise ValueError("Marketaux article is missing a URL")
+    title = normalise_title(raw_title, url)
 
     raw_entities = payload.get("entities")
     entities = (

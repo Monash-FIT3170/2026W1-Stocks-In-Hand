@@ -25,6 +25,7 @@ from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
 from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
+from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
 
 if TYPE_CHECKING:
     from scrapers.base import Announcement
@@ -175,8 +176,11 @@ def should_replace_artifact_title(
     incoming = " ".join((incoming_title or "").split())
     return bool(
         incoming
-        and len(incoming) <= 200
-        and (not existing or (len(existing) > 200 and len(incoming) < len(existing)))
+        and len(incoming) <= MAX_TITLE_LENGTH
+        and (
+            not existing
+            or (len(existing) > MAX_TITLE_LENGTH and len(incoming) < len(existing))
+        )
     )
 
 
@@ -215,7 +219,11 @@ def store(
     raw_text: str,
 ) -> None:
     """Store announcement with raw text and metadata to database."""
-    print(f"[STORAGE] Storing: {announcement.title[:50]}... ({len(raw_text)} chars)")
+    clean_title = normalise_title(
+        announcement.title,
+        announcement.source_url or announcement.pdf_url,
+    )
+    print(f"[STORAGE] Storing: {clean_title[:50]}... ({len(raw_text)} chars)")
 
     db = SessionLocal()
     try:
@@ -225,9 +233,9 @@ def store(
 
         existing = db.query(Artifact).filter_by(content_hash=content_hash).first()
         if existing:
-            print(f"[STORAGE] Duplicate found for: {announcement.title[:50]}... Skipping storage.")
-            if should_replace_artifact_title(existing.title, announcement.title):
-                existing.title = " ".join(announcement.title.split())
+            print(f"[STORAGE] Duplicate found for: {clean_title[:50]}... Skipping storage.")
+            if should_replace_artifact_title(existing.title, clean_title):
+                existing.title = clean_title
                 db.add(existing)
                 db.commit()
                 print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
@@ -277,7 +285,7 @@ def store(
         artifact_data = ArtifactCreate(
             source_type=SourceType.ASX_ANNOUNCEMENT,
             artifact_type=artifact_type,
-            title=announcement.title,
+            title=clean_title,
             url=announcement.source_url or "",
             published_at=announcement.date,
             content_hash=content_hash,
@@ -288,7 +296,7 @@ def store(
         )
 
         artifact = artifact_crud.create_artifact(db, artifact_data)
-        print(f"[STORAGE] Stored artifact (ID: {artifact.id}): {announcement.title[:50]}...")
+        print(f"[STORAGE] Stored artifact (ID: {artifact.id}): {clean_title[:50]}...")
         _summarise_and_store_artifact(
             db,
             artifact,

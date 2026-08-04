@@ -7,7 +7,13 @@ from typing import Any
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
+from app.services.title_normalization import normalise_title
 from ..base import BaseScraper, Announcement
+
+
+def clean_bhp_title(raw_title: str, article_url: str) -> str:
+    """Retain the BHP-specific entry point while using shared title cleanup."""
+    return normalise_title(raw_title, article_url)
 
 
 class BHPScraper(BaseScraper):
@@ -113,19 +119,20 @@ class BHPScraper(BaseScraper):
                 continue
 
             full_url = urljoin(self.source_url, href)
+            title = clean_bhp_title(text, full_url)
 
-            if not self._looks_like_bhp_article(full_url, text):
+            if not self._looks_like_bhp_article(full_url, title):
                 continue
 
             date = await self._extract_nearby_date(link)
 
             if not date:
-                print(f"[BHP] Skipping article because no date found: {text}")
+                print(f"[BHP] Skipping article because no date found: {title}")
                 continue
 
             items.append(
                 {
-                    "title": text,
+                    "title": title,
                     "date": date,
                     "article_url": full_url,
                 }
