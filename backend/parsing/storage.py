@@ -166,6 +166,20 @@ def compute_content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def should_replace_artifact_title(
+    existing_title: str | None,
+    incoming_title: str | None,
+) -> bool:
+    """Return true when a duplicate can safely repair an oversized title."""
+    existing = " ".join((existing_title or "").split())
+    incoming = " ".join((incoming_title or "").split())
+    return bool(
+        incoming
+        and len(incoming) <= 200
+        and (not existing or (len(existing) > 200 and len(incoming) < len(existing)))
+    )
+
+
 def get_or_create_ticker(db, ticker_symbol: str) -> Ticker:
     ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
     if not ticker:
@@ -212,6 +226,11 @@ def store(
         existing = db.query(Artifact).filter_by(content_hash=content_hash).first()
         if existing:
             print(f"[STORAGE] Duplicate found for: {announcement.title[:50]}... Skipping storage.")
+            if should_replace_artifact_title(existing.title, announcement.title):
+                existing.title = " ".join(announcement.title.split())
+                db.add(existing)
+                db.commit()
+                print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
             if not _artifact_has_summary_fields(existing):
                 existing_metadata = (
                     existing.artifact_metadata
