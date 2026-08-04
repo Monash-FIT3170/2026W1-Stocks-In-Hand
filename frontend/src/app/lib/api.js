@@ -1,12 +1,7 @@
-const SERVER_API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
-
-function apiBaseUrl() {
-  return typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL
-}
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
 
 export async function apiFetch(path, options = {}) {
-  const baseUrl = apiBaseUrl().replace(/\/$/, "")
+  const baseUrl = API_BASE_URL.replace(/\/$/, "")
   const apiPath = path.startsWith("/") ? path : `/${path}`
   return fetch(`${baseUrl}${apiPath}`, options)
 }

@@ -1,0 +1,163 @@
+name: Deploy staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_schedule:
+        description: Enable the daily EventBridge scrape after deployment
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      scheduled_tickers:
+        description: Comma-separated tickers allowed in the weekly schedule
+        required: true
+        default: "ANZ,BHP,CBA,CSL,WES"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy staging
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+      PARAMETER_PATH_PREFIX: /stocks-in-hand/staging
+
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-staging
+
+      - name: Resolve immutable deployment values
+        id: values
+        shell: bash
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          TAG="${GITHUB_SHA::12}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CFN_ROLE="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          {
+            echo "AWS_ACCOUNT_ID=$ACCOUNT_ID"
+            echo "ECR_REGISTRY=$REGISTRY"
+            echo "RELEASE_TAG=$TAG"
+            echo "CFN_ROLE_ARN=$CFN_ROLE"
+          } >> "$GITHUB_ENV"
+          {
+            echo "registry=$REGISTRY"
+            echo "release_tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to ECR
+        shell: bash
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.api
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-api:${{ steps.values.outputs.release_tag }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push scraper image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.scraper
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-scraper:${{ steps.values.outputs.release_tag }}
+          cache-from: type=gha,scope=scraper
+          cache-to: type=gha,mode=max,scope=scraper
+
+      - name: Build and push analysis image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.analysis
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-analysis:${{ steps.values.outputs.release_tag }}
+          cache-from: type=gha,scope=analysis
+          cache-to: type=gha,mode=max,scope=analysis
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate and deploy the AWS stack
+        shell: bash
+        run: |
+          sam validate --lint --template-file infra/template.yaml
+          sam deploy \
+            --template-file infra/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --role-arn "$CFN_ROLE_ARN" \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "Environment=staging" \
+              "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
+              "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "ScheduleEnabled=${{ inputs.enable_schedule }}" \
+              "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
+              "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
+              "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_TAG"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the static frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Publish the frontend and invalidate CloudFront
+        shell: bash
+        run: |
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+          DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendDistributionId'].OutputValue" \
+            --output text)"
+          aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"

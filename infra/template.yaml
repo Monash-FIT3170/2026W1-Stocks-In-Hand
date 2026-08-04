@@ -1,0 +1,710 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Low-cost staging deployment for Stocks In Hand.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: staging
+    AllowedValues:
+      - staging
+  ParameterPathPrefix:
+    Type: String
+    Default: /stocks-in-hand/staging
+    AllowedPattern: ^/[A-Za-z0-9/_.-]+$
+  OperationsEmail:
+    Type: String
+    AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  ScheduleEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+  ScheduledTickers:
+    Type: String
+    Default: ANZ,BHP,CBA,CSL,WES
+  ApiImageUri:
+    Type: String
+  ScraperImageUri:
+    Type: String
+  AnalysisImageUri:
+    Type: String
+
+Conditions:
+  IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
+
+Resources:
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub stocks-in-hand-${Environment}-alarms
+      Subscription:
+        - Endpoint: !Ref OperationsEmail
+          Protocol: email
+
+  DiscoveryDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-discovery-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  DownloadDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-download-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  AnalysisDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-analysis-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  DiscoveryQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-discovery
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DiscoveryDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  DownloadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-download
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DownloadDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  AnalysisQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-analysis
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 4320
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AnalysisDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  AnalysisQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref AnalysisQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowRawBucketNotifications
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AnalysisQueue.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub >-
+                  arn:${AWS::Partition}:s3:::stocks-in-hand-${Environment}-${AWS::AccountId}-raw
+
+  RawDocumentBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: AnalysisQueuePolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub stocks-in-hand-${Environment}-${AWS::AccountId}-raw
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRawDocuments
+            Status: Enabled
+            ExpirationInDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: raw/
+            Queue: !GetAtt AnalysisQueue.Arn
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  RawDocumentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawDocumentBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt RawDocumentBucket.Arn
+              - !Sub ${RawDocumentBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub stocks-in-hand-${Environment}-${AWS::AccountId}-frontend
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ServerlessHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: $default
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-api
+      PackageType: Image
+      ImageUri: !Ref ApiImageUri
+      ImageConfig:
+        Command:
+          - lambda_api.handler
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 30
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
+          DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
+          SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
+          SESSION_COOKIE_SECURE: "true"
+          SESSION_COOKIE_SAMESITE: lax
+      Policies:
+        - Statement:
+            - Sid: ReadRuntimeParameters
+              Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/*
+            - Sid: DecryptSsmParameters
+              Effect: Allow
+              Action:
+                - kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: EnqueueDiscovery
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DiscoveryQueue.Arn
+      Events:
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ServerlessHttpApi
+            Method: ANY
+            Path: /
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ServerlessHttpApi
+            Method: ANY
+            Path: /{proxy+}
+
+  DiscoveryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-discovery
+      PackageType: Image
+      ImageUri: !Ref ScraperImageUri
+      ImageConfig:
+        Command:
+          - lambdas.discovery.handler
+      Architectures:
+        - x86_64
+      MemorySize: 2048
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          DOWNLOAD_QUEUE_URL: !Ref DownloadQueue
+          DISCOVERY_LOOKBACK_DAYS: "30"
+          MAX_DOCUMENTS_PER_RUN: "3"
+      Policies:
+        - Statement:
+            - Sid: ReadDatabaseParameter
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+            - Sid: DecryptDatabaseParameter
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: EnqueueDownload
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DownloadQueue.Arn
+      Events:
+        DiscoveryMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt DiscoveryQueue.Arn
+            BatchSize: 1
+            Enabled: true
+
+  DownloadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-download
+      PackageType: Image
+      ImageUri: !Ref ScraperImageUri
+      ImageConfig:
+        Command:
+          - lambdas.download.handler
+      Architectures:
+        - x86_64
+      MemorySize: 2048
+      Timeout: 300
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          RAW_DOCUMENT_BUCKET: !Ref RawDocumentBucket
+          MAX_DOCUMENT_BYTES: "10485760"
+          MAX_DOCX_UNCOMPRESSED_BYTES: "20971520"
+      Policies:
+        - Statement:
+            - Sid: ReadDatabaseParameter
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+            - Sid: DecryptDatabaseParameter
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: StoreRawDocuments
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource: !Sub ${RawDocumentBucket.Arn}/raw/*
+      Events:
+        DownloadMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt DownloadQueue.Arn
+            BatchSize: 1
+            Enabled: true
+            ScalingConfig:
+              MaximumConcurrency: 2
+
+  AnalysisFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-analysis
+      PackageType: Image
+      ImageUri: !Ref AnalysisImageUri
+      ImageConfig:
+        Command:
+          - lambdas.analysis.handler
+      Architectures:
+        - x86_64
+      MemorySize: 6144
+      Timeout: 720
+      ReservedConcurrentExecutions: 1
+      EphemeralStorage:
+        Size: 1024
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
+          RAW_DOCUMENT_BUCKET: !Ref RawDocumentBucket
+          MAX_DOCUMENT_BYTES: "10485760"
+          MAX_PDF_PAGES: "100"
+          MAX_OCR_PAGES: "5"
+          MAX_OCR_PIXELS_PER_PAGE: "8000000"
+          MAX_ANALYSIS_CHARS: "50000"
+      Policies:
+        - Statement:
+            - Sid: ReadRuntimeParameters
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/*
+            - Sid: DecryptRuntimeParameters
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: ReadRawDocuments
+              Effect: Allow
+              Action: s3:GetObject
+              Resource: !Sub ${RawDocumentBucket.Arn}/raw/*
+      Events:
+        AnalysisMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AnalysisQueue.Arn
+            BatchSize: 1
+            Enabled: true
+
+  SchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-scheduler
+      PackageType: Image
+      ImageUri: !Ref ApiImageUri
+      ImageConfig:
+        Command:
+          - lambdas.schedule.handler
+      Architectures:
+        - x86_64
+      MemorySize: 512
+      Timeout: 60
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
+          SCHEDULED_TICKERS: !Ref ScheduledTickers
+      Policies:
+        - Statement:
+            - Sid: ReadDatabaseParameter
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+            - Sid: DecryptDatabaseParameter
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: EnqueueDiscovery
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt DiscoveryQueue.Arn
+
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStocksInHandScheduler
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt SchedulerFunction.Arn
+
+  WeeklyScrapeSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Bounded weekly discovery run for enabled ASX sources.
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Name: !Sub stocks-in-hand-${Environment}-weekly
+      ScheduleExpression: cron(0 9 ? * MON *)
+      ScheduleExpressionTimezone: Australia/Melbourne
+      State: !If [IsScheduleEnabled, ENABLED, DISABLED]
+      Target:
+        Arn: !GetAtt SchedulerFunction.Arn
+        Input: '{"source":"weekly"}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 2
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-api
+      RetentionInDays: 7
+
+  DiscoveryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-discovery
+      RetentionInDays: 7
+
+  DownloadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-download
+      RetentionInDays: 7
+
+  AnalysisLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-analysis
+      RetentionInDays: 7
+
+  SchedulerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-scheduler
+      RetentionInDays: 7
+
+  DiscoveryDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stocks-in-hand-${Environment}-discovery-dlq
+      AlarmDescription: Discovery messages require operator review.
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DiscoveryDeadLetterQueue.QueueName
+
+  DownloadDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stocks-in-hand-${Environment}-download-dlq
+      AlarmDescription: Download messages require operator review.
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DownloadDeadLetterQueue.QueueName
+
+  AnalysisDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stocks-in-hand-${Environment}-analysis-dlq
+      AlarmDescription: Analysis messages require operator review.
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt AnalysisDeadLetterQueue.QueueName
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub stocks-in-hand-${Environment}-frontend
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendRouteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          var uri = request.uri;
+          if (uri.endsWith('/')) {
+            request.uri += 'index.html';
+          } else if (!uri.split('/').pop().includes('.')) {
+            request.uri += '/index.html';
+          }
+          return request;
+        }
+      FunctionConfig:
+        Comment: Rewrite static Next.js routes to generated index files.
+        Runtime: cloudfront-js-2.0
+      Name: !Sub stocks-in-hand-${Environment}-routes
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub Stocks In Hand ${Environment}
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt FrontendRouteFunction.FunctionARN
+          TargetOriginId: frontend-s3
+          ViewerProtocolPolicy: redirect-to-https
+        CacheBehaviors:
+          - AllowedMethods:
+              - DELETE
+              - GET
+              - HEAD
+              - OPTIONS
+              - PATCH
+              - POST
+              - PUT
+            CachedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            Compress: true
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            PathPattern: /api/*
+            TargetOriginId: backend-api
+            ViewerProtocolPolicy: https-only
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            Id: frontend-s3
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            DomainName: !Sub >-
+              ${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+            Id: backend-api
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub >-
+                  arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt FrontendBucket.Arn
+              - !Sub ${FrontendBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  FrontendDistributionId:
+    Value: !Ref FrontendDistribution
+  FrontendUrl:
+    Value: !Sub https://${FrontendDistribution.DomainName}
+  ApiEndpoint:
+    Value: !Sub https://${FrontendDistribution.DomainName}/api
+  RawDocumentBucketName:
+    Value: !Ref RawDocumentBucket
+  DiscoveryQueueUrl:
+    Value: !Ref DiscoveryQueue
+  DownloadQueueUrl:
+    Value: !Ref DownloadQueue
+  AnalysisQueueUrl:
+    Value: !Ref AnalysisQueue
+  DiscoveryDeadLetterQueueUrl:
+    Value: !Ref DiscoveryDeadLetterQueue
+  DownloadDeadLetterQueueUrl:
+    Value: !Ref DownloadDeadLetterQueue
+  AnalysisDeadLetterQueueUrl:
+    Value: !Ref AnalysisDeadLetterQueue
+  WeeklyScheduleName:
+    Value: !Ref WeeklyScrapeSchedule

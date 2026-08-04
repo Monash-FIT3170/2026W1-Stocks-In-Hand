@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
+
+WORKDIR /var/task
+
+COPY requirements-runtime.txt requirements-scraper.txt ./
+RUN pip install --no-cache-dir -r requirements-scraper.txt
+
+COPY app ./app
+COPY lambdas ./lambdas
+COPY scrapers ./scrapers
+
+ENV PYTHONPATH=/var/task \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+ENTRYPOINT ["/usr/local/bin/python", "-m", "awslambdaric"]
+CMD ["lambdas.discovery.handler"]

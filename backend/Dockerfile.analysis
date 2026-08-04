@@ -1,0 +1,32 @@
+FROM public.ecr.aws/lambda/python:3.12
+
+ARG FINBERT_REVISION=4556d13015211d73dccd3fdd39d39232506f3e43
+
+COPY requirements-runtime.txt requirements-analysis.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.13.0
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements-analysis.txt
+# RapidOCR declares desktop OpenCV, which expects X11 libraries absent from
+# Lambda. Replace it with the API-compatible headless wheel.
+RUN pip uninstall -y opencv-python \
+    && pip install --no-cache-dir --no-deps \
+        opencv-python-headless==5.0.0.93
+
+# Resolve the model during the image build, at an immutable revision. Lambda
+# execution never needs Hugging Face network access.
+RUN python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; revision='${FINBERT_REVISION}'; tokenizer=AutoTokenizer.from_pretrained('ProsusAI/finbert', revision=revision); model=AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert', revision=revision); tokenizer.save_pretrained('/opt/finbert'); model.save_pretrained('/opt/finbert')" \
+    && rm -rf /root/.cache/huggingface
+
+COPY app ${LAMBDA_TASK_ROOT}/app
+COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
+COPY parsing ${LAMBDA_TASK_ROOT}/parsing
+
+# RapidOCR includes its ONNX models in the image, so scanned PDFs are analysed
+# without Textract, network calls, or a separate OCR service.
+ENV FINBERT_MODEL=/opt/finbert \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    TOKENIZERS_PARALLELISM=false
+
+CMD ["lambdas.analysis.handler"]

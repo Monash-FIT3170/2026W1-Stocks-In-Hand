@@ -1,21 +1,65 @@
-"""
-main python file which creates database connection, connects to finBERT, and runs a FastAPI server
-"""
-import asyncio
-from datetime import date, timedelta
+"""FastAPI application and the Queue A scrape producer."""
 
-import httpx
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from playwright.async_api import async_playwright
-from app.models.information_platform import InformationPlatform
-from pathlib import Path
-from app.services import sentiment as sentiment_service
+from sqlalchemy.orm import Session
 
-# Import from app structure
 from app.api.routes import (
+    alert,
+    announcement,
+    artifact,
+    artifact_chunk,
+    artifact_sentiment,
+    artifact_summary,
+    artifact_topic,
+    auth,
+    claim,
+    claim_source,
+    category_sentiment,
+    extracted_fact,
+    gemini,
+    information_platform,
+    investor,
+    llm_run,
+    market_data,
+    reddit,
+    report,
+    report_claim,
+    scrape_run,
+    ticker,
+    topic,
+    watchlist,
+    watchlist_ticker,
+)
+from app.core.config import settings
+from app.api.deps import require_admin_investor
+from app.crud import scrape_run as scrape_run_crud
+from app.database.connection import SessionLocal, get_db
+from app.messages import QueueAMessage
+from app.models.result import Result
+from app.models.investor import Investor
+from app.schemas.scrape_run import ScrapeEnqueueResponse
+from app.services import scrape_queue
+from app.sources import source_for_ticker
+
+
+app = FastAPI(title="StonksInHand API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Database-backed routes stay in the small API deployment. The sentiment
+# service lazily imports FinBERT only when inference is requested.
+for route_module in (
     investor,
     ticker,
     watchlist,
@@ -30,269 +74,97 @@ from app.api.routes import (
     extracted_fact,
     claim,
     claim_source,
+    category_sentiment,
     report_claim,
     llm_run,
     scrape_run,
     market_data,
     information_platform,
     topic,
+    auth,
     reddit,
     gemini,
-    category_sentiment,
-    auth,
     announcement,
-)
-from app.database.connection import SessionLocal
-from app.database.connection import get_db
-from app.core.config import settings
-from app.models.result import Result
+):
+    app.include_router(route_module.router)
 
-# Import scrapers
-from scrapers.registry import scrape, available_tickers
-
-app = FastAPI(title="StonksInHand API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Register all database routes
-app.include_router(investor.router)
-app.include_router(ticker.router)
-app.include_router(watchlist.router)
-app.include_router(watchlist_ticker.router)
-app.include_router(alert.router)
-app.include_router(report.router)
-app.include_router(artifact.router)
-app.include_router(artifact_chunk.router)
-app.include_router(artifact_summary.router)
-app.include_router(artifact_sentiment.router)
-app.include_router(artifact_topic.router)
-app.include_router(extracted_fact.router)
-app.include_router(claim.router)
-app.include_router(claim_source.router)
-app.include_router(report_claim.router)
-app.include_router(llm_run.router)
-app.include_router(scrape_run.router)
-app.include_router(market_data.router)
-app.include_router(information_platform.router)
-app.include_router(topic.router)
-app.include_router(auth.router)
-app.include_router(reddit.router)
-app.include_router(gemini.router)
-app.include_router(category_sentiment.router)
-app.include_router(announcement.router)
-
-@app.on_event("startup")
-def seed_platforms():
-    with SessionLocal() as db:
-        exists = db.query(InformationPlatform).filter(
-            InformationPlatform.name == "Reddit"
-        ).first()
-        if not exists:
-            db.add(InformationPlatform(
-                name="Reddit",
-                platform_type="social",
-                base_url="https://reddit.com",
-                scrape_enabled=True,
-            ))
-            db.commit()
-
-
-async def _fetch_market_data(symbol: str) -> None:
-    from app.crud import ticker as ticker_crud
-    from app.crud import market_data as market_data_crud
-
-    yahoo_symbol = f"{symbol}.AX"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}"
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code != 200:
-            print(f"[SEED] Yahoo Finance returned {resp.status_code} for {symbol}")
-            return
-        result = resp.json().get("chart", {}).get("result") or []
-        if not result:
-            print(f"[SEED] No chart data from Yahoo Finance for {symbol}")
-            return
-        meta = result[0].get("meta", {})
-        current_price = meta.get("regularMarketPrice")
-        prev_close = meta.get("chartPreviousClose") or meta.get("regularMarketPreviousClose")
-        if not current_price:
-            print(f"[SEED] Could not parse price for {symbol}")
-            return
-        today = date.today()
-        with SessionLocal() as db:
-            ticker_obj = ticker_crud.get_ticker_by_symbol(db, symbol=symbol)
-            if ticker_obj:
-                market_data_crud.upsert_market_data(
-                    db, ticker_id=ticker_obj.id, price_date=today, close_price=current_price
-                )
-                if prev_close:
-                    market_data_crud.upsert_market_data(
-                        db,
-                        ticker_id=ticker_obj.id,
-                        price_date=today - timedelta(days=1),
-                        close_price=prev_close,
-                    )
-                print(f"[SEED] Market data for {symbol}: ${current_price} (prev: ${prev_close})")
-    except Exception as exc:
-        print(f"[SEED] Market data fetch for {symbol} failed: {exc}")
-
-
-def _run_seed_sentiment(symbol: str) -> None:
-    with SessionLocal() as db:
-        try:
-            result = category_sentiment.build_ticker_category_sentiment(
-                ticker=symbol,
-                body=None,
-                db=db,
-                persist=True,
-            )
-            categories = ", ".join(result["categories"].keys())
-            print(f"[SEED] Sentiment for {symbol}: {categories}")
-        except Exception as exc:
-            print(f"[SEED] Sentiment analysis for {symbol} skipped: {exc}")
-
-
-async def _run_seed(tickers: list[str]) -> None:
-    import sys as _sys
-    import traceback as _traceback
-    from pathlib import Path as _Path
-
-    parsing_dir = str(_Path(__file__).parent / "parsing")
-    if parsing_dir not in _sys.path:
-        _sys.path.insert(0, parsing_dir)
-
-    from scrapers.registry import scrape
-    from pipeline import process_announcement
-
-    output_dir = _Path("/app/output")
-    loop = asyncio.get_event_loop()
-
-    print(f"[SEED] Auto-seeding tickers: {', '.join(tickers)}")
-    for symbol in tickers:
-        print(f"[SEED] Processing {symbol}...")
-        try:
-            announcements = await scrape(symbol, output_dir)
-            print(f"[SEED] {symbol}: {len(announcements)} announcements scraped")
-            for ann in announcements:
-                if not ann.local_path:
-                    print(f"[SEED] {symbol}: skipping '{ann.title[:50]}' — PDF not downloaded")
-                    continue
-                await loop.run_in_executor(None, process_announcement, ann)
-            print(f"[SEED] {symbol} pipeline complete.")
-        except Exception as exc:
-            print(f"[SEED] {symbol} failed: {exc}")
-            _traceback.print_exc()
-        await _fetch_market_data(symbol)
-        await loop.run_in_executor(None, _run_seed_sentiment, symbol)
-    print("[SEED] Auto-seed finished.")
-
-
-async def _run_reddit_seed() -> None:
-    if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
-        print("[REDDIT] Startup scrape skipped: Reddit credentials are not configured")
-        return
-
-    subreddit = settings.REDDIT_SEED_SUBREDDIT
-    limit = max(settings.REDDIT_SEED_LIMIT, 1)
-    print(f"[REDDIT] Startup scrape queued for r/{subreddit} (limit={limit})")
-
-    loop = asyncio.get_event_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            reddit._scrape_and_store_posts,
-            subreddit,
-            limit,
-        )
-        print(
-            "[REDDIT] Startup scrape complete "
-            f"r/{subreddit}: saved={result['saved']} skipped={result['skipped_duplicates']}"
-        )
-    except Exception as exc:
-        print(f"[REDDIT] Startup scrape failed for r/{subreddit}: {exc}")
-
-
-@app.on_event("startup")
-async def auto_seed():
-    if not settings.SEED_TICKERS:
-        return
-    asyncio.ensure_future(_run_seed(settings.SEED_TICKERS))
-
-
-@app.on_event("startup")
-async def auto_seed_reddit():
-    asyncio.ensure_future(_run_reddit_seed())
-
-
-OUTPUT_DIR = Path("/app/output")
 
 @app.get("/")
 def root():
     return {
         "message": "StonksInHand FastAPI backend",
-        "frontend": "http://localhost:3000",
         "docs": "/docs",
         "health": "/health",
-        "endpoints": ["/analyse", "/sentiment/{ticker}", "/headlines", "/results", "/scrape/{ticker}", "/tickers",],
+        "endpoints": [
+            "/scrape/{ticker_symbol}",
+            "/scrape-runs/{scrape_run_id}",
+            "/tickers",
+            "/auth/sign-in",
+        ],
     }
+
 
 @app.get("/health")
 def health() -> dict:
-    """Returns the health status of the server"""
+    """Return the health status of the API process."""
     return {"status": "ok"}
+
 
 @app.get("/viewer", response_class=HTMLResponse)
 def viewer():
     return (Path(__file__).parent / "viewer.html").read_text(encoding="utf-8")
 
-# --- Playwright scraper ---
-async def scrape_yahoo_headlines(ticker: str = "BHP.AX") -> list[str]:
-    """
-    Scrapes Yahoo for headlines relating to a ticker
 
-    Keyword arguments:
-    ticker -- a string representing the ticker of a company
+async def scrape_yahoo_headlines(ticker_symbol: str = "BHP.AX") -> list[str]:
+    """Run the legacy local Yahoo headline scraper on demand."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The local Playwright headline scraper is not deployed in the API Lambda",
+        ) from exc
 
-    Returns:
-    a list of 10 headlines (strings) relating to the ticker that was input
-    """
-    url = f"https://finance.yahoo.com/quote/{ticker}/news/"
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
+    url = f"https://finance.yahoo.com/quote/{ticker_symbol}/news/"
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--headless=new"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--headless=new",
+            ],
         )
         page = await browser.new_page()
         await page.goto(url, timeout=15000)
         await page.wait_for_load_state("domcontentloaded")
-
-        # grab all h3 text on the page, filter out short/nav ones
         items = await page.query_selector_all("h3")
-        headline_list = []
+        headlines = []
         for item in items[:30]:
             text = (await item.inner_text()).strip()
-            if len(text) > 20:  # filter out nav labels like "Trending Tickers"
-                headline_list.append(text)
-
+            if len(text) > 20:
+                headlines.append(text)
         await browser.close()
-    return headline_list[:10]
+    return headlines[:10]
 
-# --- API ---
 
 class AnalyseRequest(BaseModel):
-    """Class representing the structure of requests made to the analyse API"""
     text: str
+
 
 @app.post("/analyse")
 def analyse(body: AnalyseRequest) -> dict:
-    """Analyses the sentiment of a headline passed in as an AnalyseRequest"""
-    out = sentiment_service.analyse_text(body.text)
+    """Keep the legacy local sentiment endpoint without loading FinBERT at boot."""
+    try:
+        from app.services import sentiment as sentiment_service
+        out = sentiment_service.analyse_text(body.text)
+    except (ImportError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="FinBERT sentiment runs in the document analysis worker",
+        ) from exc
+
     with SessionLocal() as db:
         row = Result(
             text=body.text,
@@ -304,34 +176,112 @@ def analyse(body: AnalyseRequest) -> dict:
         db.refresh(row)
     return {"id": row.id, "label": row.label, "score": row.score}
 
+
 @app.get("/results")
 def results() -> list[dict]:
-    """Returns a list of sentiment analysis results"""
     with SessionLocal() as db:
         rows = db.query(Result).order_by(Result.id.desc()).limit(10).all()
-    return [{"id": r.id, "text": r.text[:80], "label": r.label, "score": r.score} for r in rows]
+    return [
+        {
+            "id": row.id,
+            "text": row.text[:80],
+            "label": row.label,
+            "score": row.score,
+        }
+        for row in rows
+    ]
+
 
 @app.get("/headlines")
 async def headlines() -> list[str]:
-    """Returns a list of headlines from Yahoo for the default ticker"""
     return await scrape_yahoo_headlines()
 
-@app.post("/scrape/{ticker}")
-async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
-    """
-    Trigger an ASX announcement scrape for a given ticker.
-    Runs in the background — returns immediately.
-    PDFs are saved to /app/output/{ticker}/
-    """
-    if ticker.upper() not in available_tickers():
+
+@app.post(
+    "/scrape/{ticker_symbol}",
+    response_model=ScrapeEnqueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def scrape_ticker(
+    ticker_symbol: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
+    """Create durable run state and enqueue website discovery."""
+    symbol = ticker_symbol.strip().upper()
+    source = source_for_ticker(symbol)
+    if source is None or symbol not in settings.SUPPORTED_TICKERS:
         raise HTTPException(
             status_code=404,
-            detail=f"'{ticker.upper()}' not implemented. Available: {available_tickers()}"
+            detail=(
+                f"'{symbol}' is not enabled for scraping. "
+                f"Enabled: {settings.SUPPORTED_TICKERS}"
+            ),
         )
-    background_tasks.add_task(scrape, ticker, OUTPUT_DIR)
-    return {"status": "queued", "ticker": ticker.upper()}
+    source_url = settings.SOURCE_URLS.get(symbol, source.source_url)
+    if idempotency_key is not None:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key:
+            raise HTTPException(status_code=400, detail="Idempotency-Key is empty")
+        if len(idempotency_key) > 128:
+            raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
+
+    request_key = idempotency_key or uuid4().hex
+    durable_key = f"scrape:{symbol}:{request_key}"
+    run, created = scrape_run_crud.get_or_create_queued_run(
+        db,
+        ticker=symbol,
+        source_url=source_url,
+        idempotency_key=durable_key,
+    )
+
+    active_or_finished = {
+        "queued",
+        "discovering",
+        "downloading",
+        "analyzing",
+        "partial",
+        "completed",
+    }
+    if not created and run.status in active_or_finished:
+        return {
+            "status": run.status,
+            "ticker": symbol,
+            "scrape_run_id": run.id,
+        }
+
+    if not created and run.status == "failed":
+        run = scrape_run_crud.mark_run_enqueueing(db, run.id)
+
+    message = QueueAMessage(
+        scrape_run_id=run.id,
+        ticker=symbol,
+        source_url=source_url,
+        source_adapter=source.adapter,
+    )
+    try:
+        scrape_queue.enqueue_discovery(message)
+    except Exception as exc:
+        scrape_run_crud.mark_run_discovery_failed(
+            db,
+            run.id,
+            error="Could not enqueue website discovery",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Could not enqueue website discovery",
+        ) from exc
+
+    scrape_run_crud.mark_run_queued_if_enqueueing(db, run.id)
+
+    return {
+        "status": "queued",
+        "ticker": symbol,
+        "scrape_run_id": run.id,
+    }
+
 
 @app.get("/tickers")
 def tickers(skip: int = 0, limit: int = 100, db=Depends(get_db)):
-    """Return database tickers for clients that request /tickers without a slash."""
     return ticker.get_tickers(skip=skip, limit=limit, db=db)

@@ -2,10 +2,10 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.crud import artifact as artifact_crud
+from app.crud import artifact_sentiment as artifact_sentiment_crud
 from app.api.routes import reddit as reddit_route
 from app.database.connection import get_db
 from app.models.artifact import Artifact
-from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.ticker import Ticker
 from app.schemas.category_sentiment import CategorySentimentRequest
 from app.schemas.category_sentiment import CategorySentimentResponse
@@ -218,14 +218,14 @@ def _persist_latest_ticker_sentiment(db: Session, ticker: str, categories: dict[
     if not artifact:
         return
 
-    db.add(ArtifactSentiment(
+    artifact_sentiment_crud.upsert_artifact_sentiment(
+        db,
         artifact_id=artifact.id,
         sentiment_label=aggregate["sentiment_label"],
         stance="ticker_pipeline",
         confidence_score=aggregate["confidence_score"],
         model_used=sentiment_service.model_name(),
-    ))
-    db.commit()
+    )
 
 
 def _categorise_recent_asx(ticker: str, db: Session, days: int, asx_limit: int, offset: int, batch_size: int,):

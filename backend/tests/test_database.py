@@ -706,3 +706,168 @@ def test_ticker_brief_aside_uses_market_artifact_and_claim_data(
     assert result["market_intelligence"]["confirmed"] == ["The dividend was increased."]
     assert result["market_intelligence"]["rumoured"] == []
     assert result["themes"] == ["Dividend Announcement activity"]
+
+
+def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
+    """Duplicate queue work updates one artifact and one pair of results."""
+    from app.crud import artifact as artifact_crud
+    from app.crud import scrape_run as scrape_run_crud
+    from app.models.artifact_sentiment import ArtifactSentiment
+    from app.models.artifact_summary import ArtifactSummary
+
+    request_key = f"test:{uuid.uuid4()}"
+    run, created = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=request_key,
+    )
+    duplicate_run, duplicate_created = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=request_key,
+    )
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate_run.id == run.id
+    assert run.status == "enqueueing"
+
+    scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
+    scrape_run_crud.mark_run_discovery_started(db_session, run.id)
+    # Simulate the API acknowledging its send after the Lambda already began.
+    scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
+    db_session.refresh(run)
+    assert run.status == "discovering"
+
+    canonical_url = f"https://example.test/{uuid.uuid4()}.pdf"
+    artifact, artifact_created = scrape_run_crud.get_or_create_artifact(
+        db_session,
+        scrape_run_id=run.id,
+        canonical_url=canonical_url,
+        document_url=canonical_url,
+        source_adapter="csl",
+        source_id="csl-test-document",
+        title="CSL test announcement",
+    )
+    duplicate_artifact, duplicate_artifact_created = (
+        scrape_run_crud.get_or_create_artifact(
+            db_session,
+            scrape_run_id=run.id,
+            canonical_url=canonical_url,
+            document_url=canonical_url,
+            source_adapter="csl",
+            source_id="csl-test-document",
+        )
+    )
+    assert artifact_created is True
+    assert duplicate_artifact_created is False
+    assert duplicate_artifact.id == artifact.id
+
+    second_run, _ = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=f"test:{uuid.uuid4()}",
+    )
+    prior_artifact, prior_artifact_created = scrape_run_crud.get_or_create_artifact(
+        db_session,
+        scrape_run_id=second_run.id,
+        canonical_url=canonical_url,
+        document_url=canonical_url,
+        source_adapter="csl",
+        source_id="csl-test-document",
+    )
+    assert prior_artifact_created is False
+    assert prior_artifact.id == artifact.id
+    assert prior_artifact.scrape_run_id == run.id
+
+    scrape_run_crud.mark_artifact_download_started(db_session, artifact.id)
+    scrape_run_crud.mark_artifact_stored(
+        db_session,
+        artifact.id,
+        checksum_sha256="a" * 64,
+        s3_bucket="raw-documents",
+        s3_key=f"raw/CSL/{artifact.id}/{'a' * 64}.pdf",
+        content_type="application/pdf",
+        file_size_bytes=128,
+    )
+    scrape_run_crud.mark_artifact_analysis_started(db_session, artifact.id)
+
+    analysis = {
+        "raw_text": "CSL announced a test result.",
+        "metadata": {"page_count": 1},
+        "summary": {
+            "summary_text": "CSL announced a test result.",
+            "model_used": "test-summary",
+            "prompt_version": "test-v1",
+        },
+        "sentiment": {
+            "sentiment_label": "neutral",
+            "confidence_score": 0.9,
+            "model_used": "test-finbert",
+        },
+    }
+    artifact_crud.store_artifact_analysis(
+        db_session,
+        artifact_id=artifact.id,
+        **analysis,
+    )
+    artifact_crud.store_artifact_analysis(
+        db_session,
+        artifact_id=artifact.id,
+        **analysis,
+    )
+    scrape_run_crud.mark_artifact_analysis_completed(db_session, artifact.id)
+    scrape_run_crud.mark_artifact_analysis_completed(db_session, artifact.id)
+    # Queue B and the S3 event can finish before discovery records its count.
+    scrape_run_crud.mark_run_discovery_completed(
+        db_session,
+        run.id,
+        items_found=1,
+    )
+
+    db_session.refresh(run)
+    db_session.refresh(artifact)
+    assert run.status == "completed"
+    assert run.items_downloaded == 1
+    assert run.items_analyzed == 1
+    assert artifact.download_status == "stored"
+    assert artifact.analysis_status == "completed"
+    assert (
+        db_session.query(ArtifactSummary)
+        .filter(ArtifactSummary.artifact_id == artifact.id)
+        .count()
+        == 1
+    )
+
+    scrape_run_crud.mark_run_discovery_started(db_session, run.id)
+    scrape_run_crud.mark_run_discovery_completed(db_session, run.id, items_found=1)
+    scrape_run_crud.mark_run_discovery_failed(
+        db_session,
+        run.id,
+        error="late duplicate failed",
+    )
+    scrape_run_crud.mark_artifact_download_failed(
+        db_session,
+        artifact.id,
+        error="late duplicate download failed",
+    )
+    scrape_run_crud.mark_artifact_analysis_failed(
+        db_session,
+        artifact.id,
+        error="late duplicate analysis failed",
+    )
+    db_session.refresh(run)
+    db_session.refresh(artifact)
+    assert run.status == "completed"
+    assert run.items_failed == 0
+    assert artifact.download_status == "stored"
+    assert artifact.analysis_status == "completed"
+    assert (
+        db_session.query(ArtifactSentiment)
+        .filter(ArtifactSentiment.artifact_id == artifact.id)
+        .count()
+        == 1
+    )

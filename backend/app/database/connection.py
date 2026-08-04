@@ -11,13 +11,22 @@ CRUD modules receive a ``Session`` from route handlers and use it to query,
 insert, update, and delete ORM model instances.
 """
 
+import os
+
 from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 
 # Engine configured from app settings. For Docker test/dev runs this points to
 # the Postgres service defined in the compose files.
-engine = create_engine(settings.DATABASE_URL)
+_engine_options = {"pool_pre_ping": True}
+if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+    # Lambda execution environments already scale horizontally. Avoid retaining
+    # one SQLAlchemy pool per warm environment when using Supabase's pooler.
+    _engine_options["poolclass"] = NullPool
+
+engine = create_engine(settings.DATABASE_URL, **_engine_options)
 
 # Session factory used by API routes. ``autocommit=False`` means CRUD functions
 # must explicitly call ``commit()`` when they want writes persisted.
