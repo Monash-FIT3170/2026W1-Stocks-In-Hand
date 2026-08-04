@@ -43,6 +43,12 @@ class Settings:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
+    MARKETAUX_API_TOKEN: str = os.getenv("MARKETAUX_API_TOKEN", "")
+    MARKETAUX_BASE_URL: str = os.getenv(
+        "MARKETAUX_BASE_URL",
+        "https://api.marketaux.com/v1",
+    )
+    NEWS_FETCH_LIMIT: int = int(os.getenv("NEWS_FETCH_LIMIT", "10"))
     
     CORS_ORIGINS: list[str] = [
         origin.strip()
