@@ -41,11 +41,13 @@ from app.api.routes import (
     category_sentiment,
     auth,
     announcement,
+    news,
 )
 from app.database.connection import SessionLocal
 from app.database.connection import get_db
 from app.core.config import settings
 from app.models.result import Result
+from app.services.scraping import run_ticker_scrape
 
 # Import scrapers
 from scrapers.registry import scrape, available_tickers
@@ -85,6 +87,7 @@ app.include_router(reddit.router)
 app.include_router(gemini.router)
 app.include_router(category_sentiment.router)
 app.include_router(announcement.router)
+app.include_router(news.router)
 
 @app.on_event("startup")
 def seed_platforms():
@@ -328,7 +331,9 @@ async def scrape_ticker(ticker: str, background_tasks: BackgroundTasks):
             status_code=404,
             detail=f"'{ticker.upper()}' not implemented. Available: {available_tickers()}"
         )
-    background_tasks.add_task(scrape, ticker, OUTPUT_DIR)
+    # Use the complete pipeline so downloaded announcements are extracted,
+    # stored, summarised, and analysed before they appear in the news feed.
+    background_tasks.add_task(run_ticker_scrape, ticker.upper(), OUTPUT_DIR)
     return {"status": "queued", "ticker": ticker.upper()}
 
 @app.get("/tickers")
