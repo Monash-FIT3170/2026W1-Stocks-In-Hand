@@ -44,17 +44,6 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 ## Running the project
 
-> **One-time step after pulling the database refactor.** The schema was rebuilt from scratch
-> as a single `0001_initial_minimal` migration and the old migration chain was deleted, so
-> `alembic upgrade head` cannot upgrade a database created before it — the backend will fail
-> to start with `Can't locate revision identified by 'f5b57d0d4c33'`. Drop the volume first:
-> ```bash
-> docker compose down -v
-> ```
-> **This destroys your local Postgres data.** The startup seed re-scrapes announcements and
-> Reddit posts on the next boot, so the data comes back on its own — it just takes a few
-> minutes.
-
 In the root folder of the project
 ```bash
 docker compose -f docker-compose.yml up --build
