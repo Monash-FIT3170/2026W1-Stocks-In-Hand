@@ -10,6 +10,11 @@ Parameters:
     Type: Number
     Default: 10
     MinValue: 1
+  BedrockMonthlyBudgetUsd:
+    Type: Number
+    Default: 1
+    MinValue: 0.01
+    Description: Monthly alert threshold for Amazon Bedrock usage before credits.
 
 Resources:
   ApiRepository:
@@ -141,6 +146,9 @@ Resources:
           Amount: !Ref MonthlyBudgetUsd
           Unit: USD
         BudgetType: COST
+        CostTypes:
+          IncludeCredit: false
+          IncludeRefund: false
         TimeUnit: MONTHLY
       NotificationsWithSubscribers:
         - Notification:
@@ -155,6 +163,48 @@ Resources:
             ComparisonOperator: GREATER_THAN
             NotificationType: FORECASTED
             Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref OperationsEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref OperationsEmail
+              SubscriptionType: EMAIL
+
+  BedrockMonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: stocks-in-hand-bedrock-monthly-cost
+        BudgetLimit:
+          Amount: !Ref BedrockMonthlyBudgetUsd
+          Unit: USD
+        BudgetType: COST
+        CostFilters:
+          Service:
+            - Amazon Bedrock
+        CostTypes:
+          IncludeCredit: false
+          IncludeRefund: false
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers:
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 10
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - Address: !Ref OperationsEmail
+              SubscriptionType: EMAIL
+        - Notification:
+            ComparisonOperator: GREATER_THAN
+            NotificationType: ACTUAL
+            Threshold: 50
             ThresholdType: PERCENTAGE
           Subscribers:
             - Address: !Ref OperationsEmail

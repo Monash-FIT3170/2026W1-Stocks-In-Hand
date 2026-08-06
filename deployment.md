@@ -62,6 +62,11 @@ The deployment starts with these fixed limits:
 | Control | Initial value |
 |---|---:|
 | AWS monthly budget | US$10 |
+| Amazon Bedrock monthly budget | US$1 |
+| Amazon Bedrock access | Disabled |
+| Amazon Bedrock model | Nova Micro only |
+| Bedrock input per request | 2,000 tokens |
+| Bedrock output per request | 64 tokens |
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
 | Document size | 10 MiB |
@@ -80,11 +85,21 @@ adapter and source identifier or canonical URL. A later run skips a document
 that has already entered the pipeline, so weekly runs do not repeatedly pay to
 analyse the same announcement.
 
-AWS Budget email notifications are sent at 50 percent actual spend, 80 percent
-forecast spend, and 100 percent actual spend. These notifications are not a
-hard spending cap. The immediate cost controls are the disabled schedule,
-bounded document counts, short retention, API throttling, and Lambda reserved
-concurrency.
+The account-wide AWS Budget sends email at 50 percent actual spend, 80 percent
+forecast spend, and 100 percent actual spend. A separate Bedrock budget sends
+actual-spend emails at 10, 50, and 100 percent of US$1. Both budgets exclude
+credits and refunds so usage is visible before promotional credits run out.
+These notifications are not a hard spending cap and billing data can be
+delayed. The only zero-charge Bedrock setting is `BedrockEnabled=false`, which
+omits model invocation permission from the analysis Lambda. The immediate cost
+controls are the disabled schedule, bounded document counts, short retention,
+API throttling, and Lambda reserved concurrency.
+
+Bedrock is restricted to on-demand `amazon.nova-micro-v1:0` in Sydney. No
+Provisioned Throughput is created. `AnalysisEnabled=false` stops Queue C from
+starting new work, while `BedrockEnabled=false` removes Bedrock permission. The
+2,000 input-token and 64 output-token values are ready for the Bedrock adapter;
+the current release still uses local FinBERT and does not make Bedrock calls.
 
 The deployment intentionally avoids paid-by-default features such as
 provisioned concurrency, X-Ray, detailed API metrics, customer-managed KMS

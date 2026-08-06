@@ -4,7 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       enable_schedule:
-        description: Enable the daily EventBridge scrape after deployment
+        description: Enable the weekly EventBridge scrape after deployment
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      enable_analysis:
+        description: Allow Queue C to start analysis work
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      enable_bedrock:
+        description: Grant the analysis Lambda access to Nova Micro
         required: true
         default: "false"
         type: choice
@@ -130,6 +146,8 @@ jobs:
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
               "ScheduleEnabled=${{ inputs.enable_schedule }}" \
+              "AnalysisEnabled=${{ inputs.enable_analysis }}" \
+              "BedrockEnabled=${{ inputs.enable_bedrock }}" \
               "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \

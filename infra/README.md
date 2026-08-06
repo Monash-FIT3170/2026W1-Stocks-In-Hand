@@ -21,6 +21,7 @@ from `HEAD`.
 export AWS_REGION=ap-southeast-2
 export OPERATIONS_EMAIL=you@example.com
 export MONTHLY_BUDGET_USD=10
+export BEDROCK_MONTHLY_BUDGET_USD=1
 export SCHEDULED_TICKERS=ANZ,BHP,CBA,CSL,WES
 export RELEASE_TAG="$(git rev-parse --short=12 HEAD)"
 export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
@@ -37,11 +38,19 @@ aws cloudformation deploy \
   --parameter-overrides \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "MonthlyBudgetUsd=$MONTHLY_BUDGET_USD" \
+    "BedrockMonthlyBudgetUsd=$BEDROCK_MONTHLY_BUDGET_USD" \
   --no-fail-on-empty-changeset
 ```
 
 Open AWS Billing and Cost Management and verify that
-`stocks-in-hand-monthly-cost` exists before running the pipeline.
+`stocks-in-hand-monthly-cost` and `stocks-in-hand-bedrock-monthly-cost` exist
+before running the pipeline. Both budgets exclude credits and refunds so the
+alerts track gross usage before promotional credits run out.
+
+The Bedrock budget is a free notification-only budget. It is not a hard cap:
+AWS billing data can be delayed, so charges can pass the threshold before an
+email arrives. The only zero-charge Bedrock setting is `BedrockEnabled=false`,
+which leaves the analysis Lambda without permission to invoke a model.
 
 ## 2. Store runtime parameters
 
@@ -155,6 +164,8 @@ sam deploy --guided \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=false" \
+    "AnalysisEnabled=true" \
+    "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
@@ -263,6 +274,8 @@ sam deploy \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=true" \
+    "AnalysisEnabled=true" \
+    "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
@@ -308,16 +321,49 @@ In GitHub:
 3. add environment variable `OPERATIONS_EMAIL`; and
 4. manually run **Deploy staging** from the Actions page;
 5. leave `enable_schedule` set to `false` for ordinary deployments; and
-6. set `scheduled_tickers` only to sources that passed their AWS smoke test.
+6. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
+7. leave `enable_analysis` set to `true` for the current local model; and
+8. set `scheduled_tickers` only to sources that passed their AWS smoke test.
 
 The workflow requests a short-lived AWS token through OIDC, builds immutable
 images, deploys the SAM stack, uploads the static frontend, and invalidates
 CloudFront. It is deliberately `workflow_dispatch` only.
 
-## Disable the schedule immediately
+## Bedrock limits
 
-Redeploy the current images with `ScheduleEnabled=false`. This is the primary
-cost kill switch and does not interrupt already queued documents.
+The current image still uses local FinBERT. The infrastructure prepares a
+small Bedrock opt-in for the later adapter:
+
+- `BedrockEnabled=false` omits Bedrock permission by default;
+- only the analysis Lambda can receive Bedrock permission;
+- only regional `amazon.nova-micro-v1:0` can be invoked;
+- analysis remains at concurrency one and SQS batch size one; and
+- the adapter must reject inputs over 2,000 tokens and set `maxTokens=64`.
+
+Use on-demand inference only. Do not create Provisioned Throughput. When the
+adapter and its mocked tests are ready, deploy one manual smoke test with
+`ScheduleEnabled=false`, `AnalysisEnabled=true`, and `BedrockEnabled=true`.
+The public API Lambda intentionally has no Bedrock permission.
+
+For an immediate stop, prevent Queue C from starting another analysis Lambda:
+
+```bash
+aws lambda put-function-concurrency \
+  --region "$AWS_REGION" \
+  --function-name stocks-in-hand-staging-analysis \
+  --reserved-concurrent-executions 0
+```
+
+This does not cancel a request already in flight and creates CloudFormation
+drift. Follow it with a stack deployment using `AnalysisEnabled=false` and
+`BedrockEnabled=false`. Restore through the stack after reviewing the queue;
+do not redrive analysis messages while Bedrock is disabled.
+
+## Stop scheduled and queued analysis
+
+Redeploy the current images with the schedule, Queue C event source, and
+Bedrock permission disabled. An invocation already in flight can finish, but
+queued documents remain in Queue C without starting more analysis work.
 
 ```bash
 sam deploy \
@@ -329,6 +375,8 @@ sam deploy \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=false" \
+    "AnalysisEnabled=false" \
+    "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
