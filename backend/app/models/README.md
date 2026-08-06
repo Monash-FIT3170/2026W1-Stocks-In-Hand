@@ -31,60 +31,47 @@ Alembic discover the database schema.
 
 ## Main Groups
 
+The schema is deliberately small: ten tables, listed below. Prices are read live
+from Yahoo in `api/routes/ticker.py` rather than stored, so there is no market
+data table.
+
 Investor and watchlist models:
 
 - `investor.py`: users/investors tracked by the app.
+- `auth_session.py`: login sessions backing the session cookie.
 - `watchlist.py`: a named watchlist owned by an investor.
 - `watchlist_ticker.py`: join table linking watchlists to tickers.
 
-Ticker and market models:
+Ticker models:
 
 - `ticker.py`: listed companies or stock symbols.
-- `market_data.py`: historical price/volume data for a ticker.
 
 Source content models:
 
 - `information_platform.py`: source platforms such as news sites or forums.
 - `artifact.py`: scraped or stored source content.
-- `artifact_chunk.py`: text chunks derived from artifacts.
 - `artifact_summary.py`: generated summaries for artifacts.
 - `artifact_sentiment.py`: sentiment/stance analysis for artifacts.
-- `artifact_topic.py`: join table linking artifacts to topics.
-- `topic.py`: tracked topics or themes.
-
-Claim and report models:
-
-- `claim.py`: extracted/generated claim about a ticker.
-- `claim_source.py`: evidence connecting a claim to an artifact or chunk.
-- `report.py`: generated report for a ticker.
-- `report_claim.py`: join table linking reports to claims.
 
 Operational models:
 
-- `alert.py`: investor-facing alerts.
 - `scrape_run.py`: scrape job execution records.
-- `llm_run.py`: LLM task execution records.
-- `extracted_fact.py`: facts extracted from artifacts/chunks.
-- `result.py`: simple sentiment result table used by the legacy `/analyse`
-  and `/results` endpoints.
-- `user.py`: simple user table used by the separate user route.
 
 ## Important Relationship Flow
 
-The report evidence path is:
+The analysis path is:
 
-`Report -> ReportClaim -> Claim -> ClaimSource -> Artifact`
+`Ticker -> Artifact -> ArtifactSummary / ArtifactSentiment`
 
 This means:
 
-1. A `Report` belongs to a ticker.
-2. A `Claim` also belongs to a ticker.
-3. `ReportClaim` links a report to one or more claims.
-4. `ClaimSource` links each claim to supporting evidence.
-5. `Artifact` stores the original source content for that evidence.
+1. An `Artifact` belongs to a ticker and to the platform it came from.
+2. `parsing/storage.py` writes the artifact, then its summary and sentiment.
+3. The ticker overview, news feed, and deep-dive endpoints read them back
+   through the `summaries` and `sentiments` backrefs.
 
-The report CRUD code depends on these ORM relationships to load a report with
-its related claims and evidence.
+Duplicate artifacts are rejected at insert time by `content_hash`, so there is
+no duplicate flag to filter on when reading.
 
 ## Foreign Keys Vs Relationships
 
@@ -97,7 +84,7 @@ ticker_id = Column(UUID(as_uuid=True), ForeignKey("tickers.id"))
 Relationships define Python-level navigation:
 
 ```python
-report_claims = relationship("ReportClaim", back_populates="report")
+ticker = relationship("Ticker", backref="artifacts")
 ```
 
 Both matter:

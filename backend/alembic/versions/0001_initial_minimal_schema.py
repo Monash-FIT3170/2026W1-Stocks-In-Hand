@@ -4,6 +4,10 @@ Revision ID: 0001_initial_minimal
 Revises:
 Create Date: 2026-08-03
 
+This revision replaces the deleted 93468da15455 -> b4f2e1a09c73 -> f5b57d0d4c33 chain
+with the simplified 10-table schema. It is not an upgrade path: a database stamped with
+any of those old revisions cannot be migrated forward, because alembic can no longer
+resolve them. Such databases must be dropped and recreated (``docker compose down -v``).
 """
 from alembic import op
 import sqlalchemy as sa
