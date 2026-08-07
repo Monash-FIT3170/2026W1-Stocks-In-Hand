@@ -65,35 +65,31 @@ This keeps each resource easy to find.
 
 ## Important CRUD Modules
 
-`report.py`
+`artifact.py`
 
-Handles report lookups and report-level calculations. The `get_report`
-function loads a report together with its report claims, claims, claim sources,
-and source artifacts.
+Handles artifact lookups and the text-assembly helpers the analysis routes use.
+`build_recent_artifact_chunk` concatenates recent artifacts into a single block
+of text for Groq, and `get_reddit_posts_for_ticker` finds Reddit posts
+mentioning a symbol. Duplicate artifacts are rejected at insert time by
+`content_hash`, so reads do not filter them.
 
-`report_claim.py`
+`announcement.py`
 
-Handles the join table between reports and claims. It can create, fetch, list,
-and delete report-claim links.
+Derives the ASX announcement feed and trending list from artifacts, including
+the Sydney-timezone day bounds the date filters use.
 
-`claim.py`
+`artifact_summary.py` and `artifact_sentiment.py`
 
-Handles claims. Claims are tied to tickers. Claims are connected to source
-artifacts through `claim_sources`, not through a direct `artifact_id` column.
-
-`claim_source.py`
-
-Handles evidence records that connect claims to artifacts and optional artifact
-chunks.
+Handle the generated summary and sentiment records attached to an artifact.
 
 `watchlist.py` and `watchlist_ticker.py`
 
 Handle investor watchlists and the join table between watchlists and tickers.
 
-`llm_run.py`
+`investor.py`
 
-Handles stored LLM execution records. Current records are grouped by task type,
-model, status, token counts, and cost fields.
+Handles investors, including the password-hashing helpers used by the auth
+routes.
 
 ## Write Behavior
 

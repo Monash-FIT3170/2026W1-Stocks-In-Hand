@@ -101,7 +101,6 @@ def _recent_asx_artifacts(ticker: str, db: Session, days: int, limit: int, offse
         .filter(Artifact.ticker_id == ticker_row.id)
         .filter(Artifact.source_type == "asx_announcement")
         .filter(Artifact.published_at >= cutoff)
-        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
         .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -211,7 +210,6 @@ def _persist_latest_ticker_sentiment(db: Session, ticker: str, categories: dict[
     artifact = (
         db.query(Artifact)
         .filter(Artifact.ticker_id == ticker_row.id)
-        .filter((Artifact.is_duplicate.is_(False)) | (Artifact.is_duplicate.is_(None)))
         .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
         .first()
     )

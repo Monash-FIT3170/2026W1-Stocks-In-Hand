@@ -127,7 +127,6 @@ def summarise_ticker_artifacts(
             artifact_id=artifact.id,
             summary_text=_summary_text(artifact.title or "Untitled ASX announcement", summary),
             model_used=gemini_service.active_model_name(),
-            prompt_version=gemini_service.SUMMARY_PROMPT_VERSION,
         )
         db.add(db_summary)
         processed += 1
@@ -185,7 +184,6 @@ def summarise_artifact(
             summary,
         ),
         model_used=gemini_service.active_model_name(),
-        prompt_version=gemini_service.SUMMARY_PROMPT_VERSION,
     )
     db.add(db_summary)
     db.commit()
@@ -195,6 +193,5 @@ def summarise_artifact(
         "artifact_id": artifact.id,
         "summary_id": db_summary.id,
         "model_used": db_summary.model_used,
-        "prompt_version": db_summary.prompt_version,
         **summary,
     }
