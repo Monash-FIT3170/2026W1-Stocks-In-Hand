@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi import BackgroundTasks
 
 
@@ -67,6 +67,71 @@ def test_news_feed_does_not_use_raw_text_as_summary() -> None:
 
     assert result[0]["about"] == "Summary pending."
     assert artifact.raw_text not in result[0]["about"]
+
+
+def test_marketaux_startup_fetches_all_configured_tickers() -> None:
+    """Backend startup automatically collects news for every seed ticker."""
+    import asyncio
+
+    results = [
+        {
+            "found": 2,
+            "created": 2,
+            "summarised": 2,
+            "skipped_duplicates": 0,
+            "errors": 0,
+        },
+        {
+            "found": 1,
+            "created": 0,
+            "summarised": 0,
+            "skipped_duplicates": 1,
+            "errors": 0,
+        },
+    ]
+
+    with patch.object(
+        main.settings,
+        "MARKETAUX_API_TOKEN",
+        "test-token",
+    ), patch.object(
+        main.settings,
+        "SEED_TICKERS",
+        ["BHP", "CBA"],
+    ), patch.object(
+        main.asyncio,
+        "to_thread",
+        new=AsyncMock(side_effect=results),
+    ) as to_thread:
+        asyncio.run(main._run_marketaux_seed())
+
+    assert to_thread.call_count == 2
+    assert to_thread.call_args_list[0].args == (
+        main._fetch_marketaux_news_for_symbol,
+        "BHP",
+    )
+    assert to_thread.call_args_list[1].args == (
+        main._fetch_marketaux_news_for_symbol,
+        "CBA",
+    )
+
+
+def test_marketaux_startup_skips_without_api_token() -> None:
+    """Missing Marketaux credentials must not stop backend startup."""
+    import asyncio
+
+    with patch.object(
+        main.settings,
+        "MARKETAUX_API_TOKEN",
+        "",
+    ), patch.object(
+        main.asyncio,
+        "to_thread",
+        new=AsyncMock(),
+    ) as to_thread:
+        asyncio.run(main._run_marketaux_seed())
+
+    to_thread.assert_not_awaited()
 
 
 # --- Reddit route tests ---

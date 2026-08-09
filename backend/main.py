@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from playwright.async_api import async_playwright
 from app.models.information_platform import InformationPlatform
 from pathlib import Path
+from app.services import marketaux as marketaux_service
 from app.services import sentiment as sentiment_service
 
 # Import from app structure
@@ -221,6 +222,48 @@ async def _run_reddit_seed() -> None:
         print(f"[REDDIT] Startup scrape failed for r/{subreddit}: {exc}")
 
 
+def _fetch_marketaux_news_for_symbol(symbol: str) -> dict:
+    """Fetch, store, and summarise Marketaux news in a worker thread."""
+    with SessionLocal() as db:
+        return marketaux_service.fetch_and_store_news(
+            symbol,
+            settings.NEWS_FETCH_LIMIT,
+            db,
+        )
+
+
+async def _run_marketaux_seed() -> None:
+    """Collect recent news for configured seed tickers when the backend starts."""
+    if not settings.MARKETAUX_API_TOKEN:
+        print("[MARKETAUX] Startup fetch skipped: API token is not configured")
+        return
+    if not settings.SEED_TICKERS:
+        print("[MARKETAUX] Startup fetch skipped: no SEED_TICKERS are configured")
+        return
+
+    limit = max(settings.NEWS_FETCH_LIMIT, 1)
+    print(
+        "[MARKETAUX] Startup fetch queued for "
+        f"{', '.join(settings.SEED_TICKERS)} (limit={limit} each)"
+    )
+    for symbol in settings.SEED_TICKERS:
+        try:
+            result = await asyncio.to_thread(
+                _fetch_marketaux_news_for_symbol,
+                symbol,
+            )
+            print(
+                f"[MARKETAUX] {symbol}: found={result['found']} "
+                f"created={result['created']} "
+                f"summarised={result['summarised']} "
+                f"duplicates={result['skipped_duplicates']} "
+                f"errors={result['errors']}"
+            )
+        except Exception as exc:
+            print(f"[MARKETAUX] Startup fetch failed for {symbol}: {exc}")
+    print("[MARKETAUX] Startup fetch finished.")
+
+
 @app.on_event("startup")
 async def auto_seed():
     if not settings.SEED_TICKERS:
@@ -231,6 +274,11 @@ async def auto_seed():
 @app.on_event("startup")
 async def auto_seed_reddit():
     asyncio.ensure_future(_run_reddit_seed())
+
+
+@app.on_event("startup")
+async def auto_seed_marketaux():
+    asyncio.ensure_future(_run_marketaux_seed())
 
 
 OUTPUT_DIR = Path("/app/output")
