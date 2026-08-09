@@ -20,6 +20,7 @@ RUN apt-get update \
         libpostproc57 \
         libswresample4 \
         libswscale7 \
+        libzvbi-common \
         libzvbi0t64 \
         python3-pip-whl \
         python3-setuptools-whl \
