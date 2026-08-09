@@ -254,7 +254,8 @@ def _sources_for_artifact(artifact: Artifact):
         title=artifact.title,
         url=artifact.url,
         published_at=artifact.published_at or artifact.created_at,
-        evidence_text=artifact.raw_text,
+        # Keep raw text for backend processing only, never citation display.
+        evidence_text=None,
     )
     if artifact_source and not any(source["url"] == artifact_source["url"] for source in sources):
         sources.append(artifact_source)
@@ -388,8 +389,12 @@ def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
     latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
 
     story = (
-        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
-        if latest_artifact and latest_artifact.raw_text
+        _metadata_value(
+            latest_artifact,
+            "about",
+            _metadata_value(latest_artifact, "summary", "Summary pending."),
+        )
+        if latest_artifact
         else (
             f"{ticker.symbol} is tracked from the StonksInHand database. "
             "Add announcements and analysis data to enrich this brief."
@@ -533,11 +538,7 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
                 "detail": (
                     summary.summary_text
                     if summary
-                    else (
-                        _preview(artifact.raw_text, 240)
-                        if artifact.raw_text
-                        else "No detail available yet."
-                    )
+                    else "Summary pending."
                 ),
                 "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
                 "tone": "green" if artifact.credibility_label == "official" else "orange",

@@ -13,7 +13,7 @@ function formatSourceDate(value) {
 }
 
 // Compact citation links used across ticker brief sections.
-// Each source should include label, title, url, and optional published_at/evidence_text.
+// Each source should include label, title, url, and optional published_at.
 export function CitationLinks({ sources = [] }) {
   const validSources = sources.filter((source) => source?.url)
 
@@ -34,7 +34,7 @@ export function CitationLinks({ sources = [] }) {
             key={`${source.url}-${title}`}
             rel="noreferrer"
             target="_blank"
-            title={source.evidence_text || title}
+            title={title}
           >
             <strong>{source.label || "Source"}</strong>
             <em>{sourceDate || title}</em>
