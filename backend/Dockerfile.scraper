@@ -3,6 +3,16 @@ FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv \
+    && DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        gstreamer1.0-libav \
+        libavcodec60 \
+        libavfilter9 \
+        libavformat60 \
+        libavutil58 \
+        libcjson1 \
+        libpostproc57 \
+        libswresample4 \
+        libswscale7 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
