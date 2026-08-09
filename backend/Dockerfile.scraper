@@ -1,25 +1,35 @@
 FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
 
+ENV VIRTUAL_ENV=/opt/venv
+
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv \
+    && python -m venv "$VIRTUAL_ENV" \
     && DEBIAN_FRONTEND=noninteractive apt-get purge -y \
         gstreamer1.0-libav \
+        gstreamer1.0-plugins-bad \
         libavcodec60 \
         libavfilter9 \
         libavformat60 \
         libavutil58 \
         libcjson1 \
+        libgstreamer-plugins-bad1.0-0 \
+        libmbedcrypto7t64 \
+        libopenexr-3-1-30 \
         libpostproc57 \
         libswresample4 \
         libswscale7 \
+        libzvbi0t64 \
+        python3-pip-whl \
+        python3-setuptools-whl \
+        python3-venv \
+        python3.12-venv \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /var/task
 
-ENV VIRTUAL_ENV=/opt/venv
-RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY requirements-runtime.txt requirements-scraper.txt ./
