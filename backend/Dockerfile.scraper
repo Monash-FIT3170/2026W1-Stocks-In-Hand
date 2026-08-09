@@ -1,6 +1,16 @@
 FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
 
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3-venv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /var/task
+
+ENV VIRTUAL_ENV=/opt/venv
+RUN python -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY requirements-runtime.txt requirements-scraper.txt ./
 RUN pip install --no-cache-dir -r requirements-scraper.txt
@@ -12,5 +22,5 @@ COPY scrapers ./scrapers
 ENV PYTHONPATH=/var/task \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-ENTRYPOINT ["/usr/local/bin/python", "-m", "awslambdaric"]
+ENTRYPOINT ["/opt/venv/bin/python", "-m", "awslambdaric"]
 CMD ["lambdas.discovery.handler"]
