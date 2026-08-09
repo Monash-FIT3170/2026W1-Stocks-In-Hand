@@ -41,7 +41,7 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     MARKETAUX_API_TOKEN: str = os.getenv("MARKETAUX_API_TOKEN", "")
     MARKETAUX_BASE_URL: str = os.getenv(
