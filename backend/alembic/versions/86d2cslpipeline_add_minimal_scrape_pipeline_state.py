@@ -1,7 +1,7 @@
 """add minimal durable CSL scrape pipeline state
 
 Revision ID: 86d2cslpipeline
-Revises: f5b57d0d4c33
+Revises: 0001_initial_minimal
 Create Date: 2026-07-29 00:00:00.000000
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "86d2cslpipeline"
-down_revision: Union[str, None] = "f5b57d0d4c33"
+down_revision: Union[str, None] = "0001_initial_minimal"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -3,7 +3,7 @@
 The `api/routes` folder contains FastAPI route modules.
 
 Each route module defines HTTP endpoints for one backend resource, such as
-tickers, reports, claims, artifacts, or watchlists.
+tickers, artifacts, announcements, or watchlists.
 
 ## Responsibility
 
@@ -50,26 +50,25 @@ The pieces are:
 Each file creates an `APIRouter` with a prefix:
 
 ```python
-router = APIRouter(prefix="/reports", tags=["reports"])
+router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 ```
 
-That means every route in the file starts with `/reports`.
+That means every route in the file starts with `/artifacts`.
 
 Examples:
 
-- `report.py` uses `/reports`.
-- `claim.py` uses `/claims`.
 - `artifact.py` uses `/artifacts`.
 - `watchlist.py` uses `/watchlists`.
-- `report_claim.py` uses `/report-claims`.
+- `watchlist_ticker.py` uses `/watchlist-tickers`.
+- `artifact_sentiment.py` uses `/artifact-sentiments`.
 
 ## How Routes Are Registered
 
 The routers are imported and registered in `backend/main.py`:
 
 ```python
-app.include_router(report.router)
-app.include_router(claim.router)
+app.include_router(artifact.router)
+app.include_router(watchlist.router)
 ```
 
 If a route module is not included in `main.py`, its endpoints will not be
@@ -80,44 +79,43 @@ available in the running API.
 Investor and watchlist routes:
 
 - `investor.py`: create, read, update, and delete investors.
+- `auth.py`: sign up, sign in, sign out, and current-identity lookup.
 - `watchlist.py`: create, read, update, and delete watchlists.
 - `watchlist_ticker.py`: add/list/remove tickers in a watchlist.
 
-Ticker and market routes:
+Ticker routes:
 
-- `ticker.py`: create, list, fetch, and update tickers.
-- `market_data.py`: create and fetch market data by ticker.
+- `ticker.py`: create, list, fetch, and update tickers, plus the brief
+  endpoints the frontend reads (`/overview`, `/brief-aside`, `/news-feed`,
+  `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
+  stored, so there is no market data route.
 
 Source content routes:
 
 - `information_platform.py`: manage source platforms.
 - `artifact.py`: create and fetch artifacts.
-- `artifact_chunk.py`: create and fetch artifact chunks.
 - `artifact_summary.py`: create and fetch summaries.
 - `artifact_sentiment.py`: create and fetch sentiment records.
-- `artifact_topic.py`: link artifacts to topics.
-- `topic.py`: create and fetch topics.
+- `announcement.py`: the ASX announcement feed and trending list, derived from
+  artifacts.
 
-Claim and report routes:
+Analysis routes:
 
-- `claim.py`: create and fetch claims.
-- `claim_source.py`: create and fetch claim evidence.
-- `report.py`: create and fetch reports and report sentiment.
-- `report_claim.py`: link reports to claims.
+- `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
+- `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
+- `gemini.py`: Groq-backed summarisation and categorisation.
 
 Operational routes:
 
-- `alert.py`: create, fetch, update, and delete alerts.
 - `scrape_run.py`: create and fetch scrape run records.
-- `llm_run.py`: create and fetch LLM run records.
 
 ## Where Validation Happens
 
 Request and response shapes come from `app/schemas`.
 
-For example, `report.py` uses:
+For example, `artifact.py` uses:
 
-- `ReportCreate` for incoming report creation data;
-- `ReportResponse` for outgoing report data.
+- `ArtifactCreate` for incoming artifact creation data;
+- `ArtifactResponse` for outgoing artifact data.
 
 FastAPI uses those schemas to validate input and serialize output.

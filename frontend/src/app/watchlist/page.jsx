@@ -61,10 +61,6 @@ function formatStatusLabel(value) {
 }
 
 function getStockBrief(stock) {
-  const reportText = stock.latestReport?.report_text
-  if (reportText && typeof reportText === "string") {
-    return reportText.length > 150 ? `${reportText.slice(0, 147)}...` : reportText
-  }
   const about = stock.latestArtifact?.artifact_metadata?.about
   if (about && typeof about === "string") {
     return about.length > 150 ? `${about.slice(0, 147)}...` : about
@@ -79,10 +75,6 @@ function getTickerStatus(ticker) {
 
   if (ticker.latestSentiment?.stance) {
     return formatStatusLabel(ticker.latestSentiment.stance)
-  }
-
-  if (ticker.latestAlert?.severity) {
-    return `${ticker.latestAlert.severity} Alert`
   }
 
   if (ticker.sector) {
@@ -124,24 +116,8 @@ function formatRelativeDate(value) {
   return `${diffDays} days ago`
 }
 
-function alertTone(alert) {
-  const value = `${alert.severity || ""} ${alert.alert_type || ""}`.toLowerCase()
-  if (value.includes("high") || value.includes("critical") || value.includes("negative")) {
-    return "red"
-  }
-
-  if (value.includes("medium") || value.includes("mixed") || value.includes("warning")) {
-    return "orange"
-  }
-
-  return "green"
-}
-
 async function findLatestSentiment(artifacts) {
-  const recentArtifacts = sortByNewestDate(
-    artifacts.filter((artifact) => !artifact.is_duplicate),
-    getArtifactDate
-  ).slice(0, 5)
+  const recentArtifacts = sortByNewestDate(artifacts, getArtifactDate).slice(0, 5)
 
   for (const artifact of recentArtifacts) {
     const sentiments = await fetchJson(`/artifact-sentiments/artifact/${artifact.id}`, [])
@@ -155,14 +131,8 @@ async function findLatestSentiment(artifacts) {
 
 async function loadTickerDetails(watchlistTicker) {
   const ticker = await fetchJson(`/tickers/${watchlistTicker.ticker_id}`)
-  const [latestReport, artifacts] = await Promise.all([
-    fetchJson(`/reports/ticker/${watchlistTicker.ticker_id}/latest`, null),
-    fetchJson(`/artifacts/ticker/${watchlistTicker.ticker_id}`, []),
-  ])
-  const sortedArtifacts = sortByNewestDate(
-    artifacts.filter((artifact) => !artifact.is_duplicate),
-    getArtifactDate
-  )
+  const artifacts = await fetchJson(`/artifacts/ticker/${watchlistTicker.ticker_id}`, [])
+  const sortedArtifacts = sortByNewestDate(artifacts, getArtifactDate)
   const latestArtifact = sortedArtifacts[0] || null
   const latestSentiment = await findLatestSentiment(sortedArtifacts)
 
@@ -170,15 +140,13 @@ async function loadTickerDetails(watchlistTicker) {
     ...ticker,
     added_at: watchlistTicker.added_at,
     latestArtifact,
-    latestReport,
     latestSentiment,
-    lastBriefAt: latestReport?.generated_at || getArtifactDate(latestArtifact),
+    lastBriefAt: getArtifactDate(latestArtifact),
   }
 }
 
 export default function WatchlistRoute() {
   const [state, setState] = useState({
-    alerts: [],
     error: "",
     investor: null,
     investorId: null,
@@ -212,29 +180,11 @@ export default function WatchlistRoute() {
       const watchlistTickers = watchlist
         ? await fetchJson(`/watchlist-tickers/${watchlist.id}`, [])
         : []
-      const [tickerDetails, alerts] = await Promise.all([
-        Promise.all(
-          watchlistTickers.map((item) => loadTickerDetails(item))
-        ),
-        fetchJson(`/alerts/investor/${investorId}`, []),
-      ])
-
-      const watchlistTickerIds = new Set(watchlistTickers.map((item) => item.ticker_id))
-      const visibleAlerts = alerts
-        .filter((alert) => watchlistTickerIds.has(alert.ticker_id))
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-
-      const tickers = tickerDetails.map((ticker) => {
-        const tickerAlerts = visibleAlerts.filter((alert) => alert.ticker_id === ticker.id)
-        return {
-          ...ticker,
-          alertCount: tickerAlerts.filter((alert) => !alert.is_read).length,
-          latestAlert: tickerAlerts[0] || null,
-        }
-      })
+      const tickers = await Promise.all(
+        watchlistTickers.map((item) => loadTickerDetails(item))
+      )
 
       setState({
-        alerts: visibleAlerts,
         error: "",
         investor,
         investorId,
@@ -272,10 +222,6 @@ export default function WatchlistRoute() {
     }
   }, [loadWatchlist])
 
-  const tickerSymbolsById = useMemo(
-    () => new Map(state.tickers.map((ticker) => [ticker.id, ticker.symbol])),
-    [state.tickers]
-  )
   const watchedTickerIds = useMemo(
     () => new Set(state.tickers.map((ticker) => ticker.id)),
     [state.tickers]
@@ -346,14 +292,6 @@ export default function WatchlistRoute() {
     })
     setState((current) => ({ ...current, watchlist }))
     return watchlist
-  }
-
-  async function clearAlerts() {
-    const ids = state.alerts.map((a) => a.id)
-    setState((current) => ({ ...current, alerts: [] }))
-    await Promise.allSettled(
-      ids.map((id) => fetchJson(`/alerts/${id}`, undefined, { method: "DELETE" }))
-    )
   }
 
   async function addCompany(ticker) {
@@ -427,7 +365,6 @@ export default function WatchlistRoute() {
                       <div className={styles.stockTop}>
                         <div className={`${styles.stockAvatar} ${styles[tone]}`}>{stock.symbol[0]}</div>
                         <div><h3>{stock.company_name}</h3><p>{stock.exchange}: {stock.symbol}</p></div>
-                        {stock.alertCount ? <span className={styles.alertBadge}>{stock.alertCount}</span> : null}
                       </div>
                       <div className={`${styles.stockStatus} ${styles[tone]}`}><span /> {status}</div>
                       {getStockBrief(stock) ? <p className={styles.stockBrief}>{getStockBrief(stock)}</p> : null}
@@ -450,32 +387,6 @@ export default function WatchlistRoute() {
               <button className={styles.emptyCard} onClick={openAddCompany} type="button"><PlusIcon /><h3>Add to Watchlist</h3><p>Monitor your next move</p></button>
             </div>
           </section>
-          <aside className={styles.alertsPanel}>
-            <div className={styles.alertsHeader}><h2>Alerts Feed</h2><button onClick={clearAlerts} type="button">Clear all</button></div>
-            <div className={styles.alertTimeline}>
-              {state.isLoading ? (
-                <article className={styles.alertItem}>
-                  <div className={`${styles.timelineDotSmall} ${styles.green}`} />
-                  <div className={styles.alertCard}><span>Loading</span><p>Fetching recent alerts</p></div>
-                </article>
-              ) : null}
-              {!state.isLoading && !state.error && state.alerts.map((alert) => (
-                <article className={styles.alertItem} key={alert.id}>
-                  <div className={`${styles.timelineDotSmall} ${styles[alertTone(alert)]}`} />
-                  <div className={styles.alertCard}>
-                    <span>{tickerSymbolsById.get(alert.ticker_id) || "ASX"} - {formatRelativeDate(alert.created_at)}</span>
-                    <p>{alert.message || alert.title}</p>
-                  </div>
-                </article>
-              ))}
-              {!state.isLoading && !state.error && !state.alerts.length ? (
-                <article className={styles.alertItem}>
-                  <div className={`${styles.timelineDotSmall} ${styles.green}`} />
-                  <div className={styles.alertCard}><span>No alerts</span><p>Your watchlist has no recent alerts.</p></div>
-                </article>
-              ) : null}
-            </div>
-          </aside>
         </div>
         {isAddOpen ? (
           <div className={styles.watchlistModalBackdrop} role="presentation">

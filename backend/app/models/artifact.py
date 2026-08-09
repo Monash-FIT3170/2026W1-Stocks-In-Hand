@@ -1,6 +1,5 @@
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -48,7 +47,6 @@ class Artifact(Base):
     url = Column(String, nullable=True)
     author = Column(String, nullable=True)
     raw_text = Column(Text, nullable=True)
-    raw_html = Column(Text, nullable=True)
     artifact_metadata = Column(JSONB, nullable=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     scraped_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -63,15 +61,9 @@ class Artifact(Base):
     downloaded_at = Column(DateTime(timezone=True), nullable=True)
     analyzed_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)
-    is_duplicate = Column(Boolean, default=False)
-    duplicate_of_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id"), nullable=True)
-    credibility_label = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # relationships
     ticker = relationship("Ticker", backref="artifacts")
     platform = relationship("InformationPlatform", backref="artifacts")
     scrape_run = relationship("ScrapeRun", back_populates="artifacts")
-    duplicate_of = relationship("Artifact", remote_side="Artifact.id", foreign_keys=[duplicate_of_id])
-    claim_sources = relationship("ClaimSource", back_populates="artifact")

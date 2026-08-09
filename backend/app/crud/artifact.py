@@ -74,7 +74,6 @@ def store_artifact_analysis(
             db.add(summary_row)
         summary_row.summary_text = str(summary["summary_text"])
         summary_row.model_used = summary.get("model_used")
-        summary_row.prompt_version = summary.get("prompt_version")
         summary_row.confidence_score = summary.get("confidence_score")
 
     if sentiment is not None:

@@ -48,21 +48,23 @@ Alembic applies the schema changes to Postgres.
 
 ## Important Tables
 
-The report evidence flow uses these core tables:
+The analysis flow uses these core tables:
 
 - `tickers`: listed companies or symbols being tracked.
-- `reports`: generated reports for a ticker.
-- `claims`: extracted or generated claims about a ticker.
-- `report_claims`: join table linking reports to claims.
-- `claim_sources`: evidence linking claims to source artifacts.
+- `information_platforms`: the sources artifacts are scraped from.
 - `artifacts`: scraped or stored source content.
+- `artifact_summaries`: generated summaries for an artifact.
+- `artifact_sentiments`: sentiment/stance analysis for an artifact.
 
-The ORM relationship chain for report evidence is:
+The ORM relationship chain is:
 
-`Report -> ReportClaim -> Claim -> ClaimSource -> Artifact`
+`Ticker -> Artifact -> ArtifactSummary / ArtifactSentiment`
 
-That relationship is used by report CRUD code when loading a report with its
-supporting claims and evidence.
+`parsing/storage.py` writes all three in one pass, and the ticker brief
+endpoints read them back through the `summaries` and `sentiments` backrefs.
+
+The full schema is ten tables, created by the `0001_initial_minimal` migration.
+See `app/models/README.md` for the complete list.
 
 ## Configuration
 

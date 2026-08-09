@@ -31,7 +31,7 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 - Paste any financial headline → FinBERT classifies it as **positive**, **negative**, or **neutral**
 - Scrape live headlines from Yahoo Finance via Playwright
-- Some results persisted to PostgreSQL
+- Scraped announcements, Reddit posts, and their summaries/sentiment persisted to PostgreSQL
 
 ---
 
@@ -43,6 +43,7 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 ---
 
 ## Running the project
+
 In the root folder of the project
 ```bash
 docker compose -f docker-compose.yml up --build
@@ -54,7 +55,6 @@ Then open:
 | http://localhost:3000 | Frontend UI |
 | http://localhost:8000/docs | FastAPI auto-generated API docs |
 | http://localhost:8000/headlines | Raw scraped headlines (JSON) |
-| http://localhost:8000/results | Last 10 sentiment results (JSON) |
 
 First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on first run and is cached after that.
 
@@ -108,7 +108,6 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 ### Storage (direct DB access)
 | Method | Path | Description |
 |---|---|---|
-| GET | `/results` | Last 10 saved FinBERT results |
 | POST | `/artifact-sentiments/` | Manually store a sentiment record against an artifact |
 | GET | `/artifact-sentiments/artifact/{artifact_id}` | Get all sentiment records for an artifact |
 | GET | `/artifact-sentiments/{sentiment_id}` | Get a single sentiment record |
