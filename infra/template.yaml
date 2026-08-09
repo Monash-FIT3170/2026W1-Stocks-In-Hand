@@ -194,6 +194,16 @@ Resources:
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub stocks-in-hand-${Environment}-${AWS::AccountId}-frontend
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldFrontendVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 14
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -219,6 +229,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub stocks-in-hand-${Environment}-api
+      AutoPublishAlias: live
       PackageType: Image
       ImageUri: !Ref ApiImageUri
       ImageConfig:
@@ -275,6 +286,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub stocks-in-hand-${Environment}-discovery
+      AutoPublishAlias: live
       PackageType: Image
       ImageUri: !Ref ScraperImageUri
       ImageConfig:
@@ -321,6 +333,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub stocks-in-hand-${Environment}-download
+      AutoPublishAlias: live
       PackageType: Image
       ImageUri: !Ref ScraperImageUri
       ImageConfig:
@@ -371,6 +384,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub stocks-in-hand-${Environment}-analysis
+      AutoPublishAlias: live
       PackageType: Image
       ImageUri: !Ref AnalysisImageUri
       ImageConfig:
@@ -438,6 +452,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub stocks-in-hand-${Environment}-scheduler
+      AutoPublishAlias: live
       PackageType: Image
       ImageUri: !Ref ApiImageUri
       ImageConfig:

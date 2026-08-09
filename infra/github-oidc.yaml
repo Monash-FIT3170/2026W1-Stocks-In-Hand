@@ -122,6 +122,7 @@ Resources:
                   - cloudformation:DescribeStacks
                   - cloudformation:ExecuteChangeSet
                   - cloudformation:GetTemplateSummary
+                  - cloudformation:ListChangeSets
                   - cloudformation:ListStackResources
                   - cloudformation:UpdateStack
                 Resource: "*"

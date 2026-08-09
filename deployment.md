@@ -74,6 +74,7 @@ The deployment starts with these fixed limits:
 | OCR pages | 5 |
 | Sentiment input | 50,000 characters |
 | Raw-document retention | 30 days |
+| Noncurrent frontend versions | 14 days |
 | CloudWatch log retention | 7 days |
 | ECR images retained per repository | 2 |
 | Discovery concurrency | 1 |
@@ -163,16 +164,22 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
 3. Deploy `infra/bootstrap.yaml` to create the budget and ECR repositories.
 4. Store the runtime SSM parameters interactively.
 5. Build and push immutable API, scraper, and analysis images tagged with the
-   Git commit.
-6. Deploy `infra/template.yaml` with `ScheduleEnabled=false`.
-7. Upload `frontend/out` to the frontend bucket and invalidate CloudFront.
+   full Git commit SHA.
+6. Create the SAM change set with `ScheduleEnabled=false`. Person 1 reviews it
+   before Person 2 executes the approved ARN.
+7. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
+   frontend bucket, and invalidate CloudFront.
 8. Create exactly one administrator and manually trigger one bounded run for
    every source.
 9. Verify the database, queues, private S3 object, analysis result, logs,
    duplicate suppression, and one DLQ redrive.
 10. Enable the weekly schedule only for sources that pass.
 11. Configure the manual GitHub OIDC workflow only after the first manual
-    deployment succeeds.
+     deployment succeeds.
+
+Every Lambda publishes through its `live` alias. Backend rollback creates a new
+reviewed change set that points to the previous retained ECR image SHA. Database
+migrations are never downgraded automatically.
 
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.

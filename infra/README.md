@@ -23,7 +23,7 @@ export OPERATIONS_EMAIL=you@example.com
 export MONTHLY_BUDGET_USD=10
 export BEDROCK_MONTHLY_BUDGET_USD=1
 export SCHEDULED_TICKERS=ANZ,BHP,CBA,CSL,WES
-export RELEASE_TAG="$(git rev-parse --short=12 HEAD)"
+export RELEASE_SHA="$(git rev-parse HEAD)"
 export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 ```
@@ -92,15 +92,15 @@ aws ecr get-login-password --region "$AWS_REGION" |
 
 docker buildx build --platform linux/amd64 --provenance=false --load \
   -f backend/Dockerfile.api \
-  -t "stocks-in-hand-api:$RELEASE_TAG" backend
+  -t "stocks-in-hand-api:$RELEASE_SHA" backend
 
 docker buildx build --platform linux/amd64 --provenance=false --load \
   -f backend/Dockerfile.scraper \
-  -t "stocks-in-hand-scraper:$RELEASE_TAG" backend
+  -t "stocks-in-hand-scraper:$RELEASE_SHA" backend
 
 docker buildx build --platform linux/amd64 --provenance=false --load \
   -f backend/Dockerfile.analysis \
-  -t "stocks-in-hand-analysis:$RELEASE_TAG" backend
+  -t "stocks-in-hand-analysis:$RELEASE_SHA" backend
 ```
 
 The scraper contains Chromium. The analysis image contains FinBERT, PDF
@@ -109,9 +109,9 @@ free.
 
 ```bash
 for IMAGE in api scraper analysis; do
-  docker tag "stocks-in-hand-${IMAGE}:$RELEASE_TAG" \
-    "$ECR_REGISTRY/stocks-in-hand-${IMAGE}:$RELEASE_TAG"
-  docker push "$ECR_REGISTRY/stocks-in-hand-${IMAGE}:$RELEASE_TAG"
+  docker tag "stocks-in-hand-${IMAGE}:$RELEASE_SHA" \
+    "$ECR_REGISTRY/stocks-in-hand-${IMAGE}:$RELEASE_SHA"
+  docker push "$ECR_REGISTRY/stocks-in-hand-${IMAGE}:$RELEASE_SHA"
 done
 ```
 
@@ -149,16 +149,17 @@ unset MIGRATION_DATABASE_URL
 cd ..
 ```
 
-## 5. Deploy AWS with the schedule off
+## 5. Create and review the AWS change set
 
 ```bash
 sam validate --lint --template-file infra/template.yaml
 cfn-lint infra/template.yaml infra/bootstrap.yaml infra/github-oidc.yaml
 
-sam deploy --guided \
+sam deploy \
   --config-file infra/samconfig.toml \
   --config-env staging \
   --template-file infra/template.yaml \
+  --no-execute-changeset \
   --parameter-overrides \
     "Environment=staging" \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
@@ -167,13 +168,14 @@ sam deploy --guided \
     "AnalysisEnabled=true" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_TAG"
+    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
+    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
+    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
 ```
 
-Review the CloudFormation change set before approving it. Confirm the SNS alarm
-subscription email. CloudFront can take several minutes to finish deploying.
+Person 1 must export and review the CloudFormation change set. Person 2 executes
+only the approved ARN. Confirm the SNS alarm subscription email after execution.
+CloudFront can take several minutes to finish deploying.
 
 ## 6. Build and upload the frontend
 
@@ -198,7 +200,16 @@ export FRONTEND_URL="$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' \
   --output text)"
 
-aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" --delete
+aws s3 sync frontend/out \
+  "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
+  --cache-control "no-cache"
+aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" \
+  --delete \
+  --exclude "_releases/*" \
+  --cache-control "no-cache"
+aws s3 sync frontend/out/_next/static \
+  "s3://$FRONTEND_BUCKET/_next/static" \
+  --cache-control "public,max-age=31536000,immutable"
 aws cloudfront create-invalidation \
   --distribution-id "$DISTRIBUTION_ID" \
   --paths "/*"
@@ -277,9 +288,9 @@ sam deploy \
     "AnalysisEnabled=true" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_TAG"
+    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
+    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
+    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
 ```
 
 Keep it disabled if the projected monthly cost exceeds US$10.
@@ -319,15 +330,19 @@ In GitHub:
 1. create an environment named `staging`;
 2. add environment variable `AWS_DEPLOY_ROLE_ARN` with that output;
 3. add environment variable `OPERATIONS_EMAIL`; and
-4. manually run **Deploy staging** from the Actions page;
-5. leave `enable_schedule` set to `false` for ordinary deployments; and
-6. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
-7. leave `enable_analysis` set to `true` for the current local model; and
-8. set `scheduled_tickers` only to sources that passed their AWS smoke test.
+4. require Person 1 approval for the `staging` environment;
+5. run **Prepare staging release** to build images and create a change set;
+6. have Person 1 review the uploaded change-set JSON;
+7. have Person 2 run **Execute approved staging change set** with the approved ARN;
+8. run **Publish staging frontend** with the approved full Git SHA;
+9. leave `enable_schedule` set to `false` for ordinary deployments;
+10. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
+11. leave `enable_analysis` set to `true` for the current local model; and
+12. set `scheduled_tickers` only to sources that passed their AWS smoke test.
 
-The workflow requests a short-lived AWS token through OIDC, builds immutable
-images, deploys the SAM stack, uploads the static frontend, and invalidates
-CloudFront. It is deliberately `workflow_dispatch` only.
+The workflows request short-lived AWS tokens through OIDC. Preparation,
+execution, frontend publishing, and rollback are separate manual actions. This
+prevents an image build from bypassing Person 1's change-set review.
 
 ## Bedrock limits
 
@@ -378,9 +393,9 @@ sam deploy \
     "AnalysisEnabled=false" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_TAG" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_TAG" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_TAG"
+    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
+    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
+    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
 ```
 
 ## DLQ inspection and redrive
@@ -416,11 +431,12 @@ earlier successful stages.
 
 ## Rollback
 
-ECR keeps the two newest image versions. To roll back the backend, set
-`RELEASE_TAG` to the previous known-good immutable tag and redeploy the SAM
-stack with `ScheduleEnabled=false`. Reapply the previous tested `frontend/out`
-artifact and invalidate CloudFront. Do not automatically downgrade the
-database. Use a forward-fix migration if the schema changed.
+ECR keeps the two newest image versions. Use **Prepare staging backend rollback**
+with the previous full SHA. Person 1 reviews that change set before Person 2
+executes it. Each Lambda publishes through its `live` alias. Use **Roll back
+staging frontend** to restore the matching S3 release snapshot and invalidate
+CloudFront. Do not downgrade the database automatically. Use a forward-fix
+migration if the schema changed.
 
 Verify after rollback:
 

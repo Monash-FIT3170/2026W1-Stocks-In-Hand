@@ -1,0 +1,85 @@
+name: Roll back staging frontend
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Previous full Git SHA stored in the frontend bucket
+        required: true
+        type: string
+      compatibility_reference:
+        description: Person 2 compatibility confirmation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-frontend
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Restore previous static frontend
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-frontend-rollback
+
+      - name: Resolve frontend resources
+        shell: bash
+        run: |
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+          DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendDistributionId'].OutputValue" \
+            --output text)"
+          {
+            echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
+            echo "DISTRIBUTION_ID=$DISTRIBUTION_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify and restore the previous release
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_sha must be a full 40-character Git SHA" >&2
+            exit 1
+          fi
+          if ! aws s3api head-object \
+            --bucket "$FRONTEND_BUCKET" \
+            --key "_releases/$RELEASE_SHA/index.html" >/dev/null; then
+            echo "Stored frontend release does not exist: $RELEASE_SHA" >&2
+            exit 1
+          fi
+          aws s3 sync \
+            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
+            "s3://$FRONTEND_BUCKET" \
+            --delete \
+            --exclude "_releases/*"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"
+          {
+            echo "### Staging frontend rollback started"
+            echo ""
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Compatibility confirmation: ${{ inputs.compatibility_reference }}"
+          } >> "$GITHUB_STEP_SUMMARY"
