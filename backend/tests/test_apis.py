@@ -102,6 +102,40 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
     assert result[0]["is_self"] is False
 
 
+# --- Bluesky route tests ---
+
+def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
+    """Public Bluesky search results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "posts": [{
+            "uri": "at://did:plc:test/app.bsky.feed.post/abc123",
+            "record": {
+                "text": "ANZ results look strong.",
+                "createdAt": "2026-08-09T01:00:00Z",
+                "langs": ["en"],
+                "tags": [{"tag": "ASX"}],
+            },
+            "author": {"handle": "investor.bsky.social", "displayName": "Investor"},
+            "replyCount": 2,
+            "repostCount": 3,
+            "likeCount": 4,
+            "quoteCount": 1,
+        }],
+    }
+
+    with patch("app.api.routes.bluesky.httpx.get", return_value=mock_response):
+        from app.api.routes.bluesky import _fetch_posts
+        result = _fetch_posts(query="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor.bsky.social"
+    assert result[0]["like_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
 def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
     """POST /sentiment/{ticker} wires ASX categories and Reddit summary together."""
     from app.api.routes import category_sentiment
