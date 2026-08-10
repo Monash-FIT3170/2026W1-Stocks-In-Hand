@@ -13,6 +13,7 @@ from .companies.wes import WESScraper
 from .companies.wds import WDSScraper
 from .companies.rio import RIOScraper
 from .companies.org import ORGScraper
+from .companies.mqg import MQGScraper
 
 # Add one import and one line here each time a new company is onboarded.
 REGISTRY: dict[str, type[BaseScraper]] = {
@@ -28,6 +29,7 @@ REGISTRY: dict[str, type[BaseScraper]] = {
     "WDS": WDSScraper,
     "RIO": RIOScraper,
     "ORG": ORGScraper,
+    "MQG": MQGScraper,
 }
 
 
