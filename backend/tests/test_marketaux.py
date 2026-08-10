@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.routes import news
 from app.schemas.artifact import ArtifactType, SourceType
@@ -214,3 +215,36 @@ def test_news_fetch_route_response_shape() -> None:
 
     assert result == expected
     fetch_and_store.assert_called_once_with("bhp", 5, ANY)
+
+
+def test_news_summarise_route_response_shape() -> None:
+    expected = {
+        "ticker": "BHP",
+        "candidates": 3,
+        "summarised": 2,
+        "skipped": 1,
+        "errors": [],
+    }
+
+    with patch.object(
+        news.news_summary,
+        "summarise_news_for_symbol",
+        return_value=expected,
+    ) as summarise_news:
+        result = news.summarise_symbol_news("bhp", limit=25, db=MagicMock())
+
+    assert result == expected
+    summarise_news.assert_called_once_with(ANY, "bhp", limit=25)
+
+
+def test_news_summarise_route_missing_ticker_maps_to_404() -> None:
+    with patch.object(
+        news.news_summary,
+        "summarise_news_for_symbol",
+        side_effect=ValueError("Ticker 'BHP' not found"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            news.summarise_symbol_news("BHP", db=MagicMock())
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Ticker 'BHP' not found"

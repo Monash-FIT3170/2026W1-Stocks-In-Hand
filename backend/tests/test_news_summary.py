@@ -110,3 +110,100 @@ def test_summarise_news_artifact_rejects_empty_text() -> None:
 
     db.add.assert_not_called()
     db.commit.assert_not_called()
+
+
+def test_summarise_news_for_symbol_summarises_unsummarised_artifacts() -> None:
+    db = MagicMock()
+    ticker = MagicMock(symbol="BHP")
+    unsummarised = _artifact(artifact_metadata={})
+    summarised = _artifact(artifact_metadata={"about": "Existing summary"})
+
+    with patch.object(
+        news_summary,
+        "_ticker_for_symbol",
+        return_value=ticker,
+    ), patch.object(
+        news_summary,
+        "_news_artifacts_for_ticker",
+        return_value=[unsummarised, summarised],
+    ), patch.object(
+        news_summary,
+        "summarise_news_artifact",
+    ) as summarise_artifact:
+        result = news_summary.summarise_news_for_symbol(db, "bhp", limit=10)
+
+    assert result == {
+        "ticker": "BHP",
+        "candidates": 2,
+        "summarised": 1,
+        "skipped": 1,
+        "errors": [],
+    }
+    summarise_artifact.assert_called_once_with(db, unsummarised)
+
+
+def test_summarise_news_for_symbol_records_artifact_errors_and_continues() -> None:
+    db = MagicMock()
+    ticker = MagicMock(symbol="BHP")
+    failed = _artifact(title="Broken story", artifact_metadata={})
+    later = _artifact(title="Later story", artifact_metadata={})
+
+    with patch.object(
+        news_summary,
+        "_ticker_for_symbol",
+        return_value=ticker,
+    ), patch.object(
+        news_summary,
+        "_news_artifacts_for_ticker",
+        return_value=[failed, later],
+    ), patch.object(
+        news_summary,
+        "summarise_news_artifact",
+        side_effect=[ValueError("News artifact has no text to summarise"), MagicMock()],
+    ):
+        result = news_summary.summarise_news_for_symbol(db, "BHP", limit=10)
+
+    assert result["candidates"] == 2
+    assert result["summarised"] == 1
+    assert result["skipped"] == 0
+    assert result["errors"] == [
+        {
+            "artifact_id": str(failed.id),
+            "title": "Broken story",
+            "message": "News artifact has no text to summarise",
+        }
+    ]
+    db.rollback.assert_called_once()
+
+
+def test_summarise_news_for_symbol_missing_ticker_raises_value_error() -> None:
+    db = MagicMock()
+
+    with patch.object(
+        news_summary,
+        "_ticker_for_symbol",
+        side_effect=ValueError("Ticker 'BHP' not found"),
+    ):
+        with pytest.raises(ValueError, match="Ticker 'BHP' not found"):
+            news_summary.summarise_news_for_symbol(db, "BHP")
+
+
+def test_news_artifacts_for_ticker_filters_to_news_rows() -> None:
+    db = MagicMock()
+    ticker = MagicMock(id=uuid.uuid4())
+    query = db.query.return_value
+    query.filter.return_value = query
+    query.order_by.return_value = query
+    query.limit.return_value = query
+
+    news_summary._news_artifacts_for_ticker(db, ticker, limit=25)
+
+    filters = query.filter.call_args_list
+    assert filters[0].args[0].compare(news_summary.Artifact.ticker_id == ticker.id)
+    assert filters[1].args[0].compare(
+        news_summary.Artifact.source_type == news_summary.NEWS_SOURCE_TYPE
+    )
+    assert filters[2].args[0].compare(
+        news_summary.Artifact.artifact_type == news_summary.NEWS_ARTIFACT_TYPE
+    )
+    query.limit.assert_called_once_with(25)
