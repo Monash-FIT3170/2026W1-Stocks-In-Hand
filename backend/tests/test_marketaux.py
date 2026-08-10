@@ -248,3 +248,36 @@ def test_news_summarise_route_missing_ticker_maps_to_404() -> None:
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "Ticker 'BHP' not found"
+
+
+def test_news_sentiment_route_response_shape() -> None:
+    expected = {
+        "ticker": "BHP",
+        "candidates": 3,
+        "analysed": 2,
+        "skipped": 1,
+        "errors": [],
+    }
+
+    with patch.object(
+        news.news_sentiment,
+        "analyse_news_sentiment_for_symbol",
+        return_value=expected,
+    ) as analyse_news_sentiment:
+        result = news.analyse_symbol_news_sentiment("bhp", limit=25, db=MagicMock())
+
+    assert result == expected
+    analyse_news_sentiment.assert_called_once_with(ANY, "bhp", limit=25)
+
+
+def test_news_sentiment_route_missing_ticker_maps_to_404() -> None:
+    with patch.object(
+        news.news_sentiment,
+        "analyse_news_sentiment_for_symbol",
+        side_effect=ValueError("Ticker 'BHP' not found"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            news.analyse_symbol_news_sentiment("BHP", db=MagicMock())
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Ticker 'BHP' not found"
