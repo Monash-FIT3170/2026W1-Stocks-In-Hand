@@ -48,6 +48,12 @@ DEFAULT_TICKERS = {
         "sector": "Health Care",
         "industry": "Biotechnology",
     },
+    "TLS": {
+        "company_name": "Telstra Group Limited",
+        "exchange": "ASX",
+        "sector": "Communication Services",
+        "industry": "Diversified Telecommunication Services",
+    },
     "WES": {
         "company_name": "Wesfarmers Limited",
         "exchange": "ASX",

@@ -6,6 +6,7 @@ from .companies.csl import CSLScraper
 from .companies.bhp import BHPScraper
 from .companies.cba import CBAScraper
 from .companies.col import COLScraper
+from .companies.tls import TLSScraper
 from .companies.wes import WESScraper
 
 # Add one import and one line here each time a new company is onboarded.
@@ -15,6 +16,7 @@ REGISTRY: dict[str, type[BaseScraper]] = {
     "BHP": BHPScraper,
     "CBA": CBAScraper,
     "COL": COLScraper,
+    "TLS": TLSScraper,
     "WES": WESScraper,
 }
 
