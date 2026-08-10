@@ -524,6 +524,8 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
             "about": "The filing explains dividend timing.",
             "changed": "The payment date was confirmed.",
             "matters": "Investors can plan income timing.",
+            "confirmed_facts": ["The payment date is 2 January 2040."],
+            "speculation": ["The dividend may affect future income expectations."],
         },
     ), patch.object(
         gemini.artifact_summary_crud,
@@ -542,6 +544,12 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
     assert artifact.artifact_metadata["about"] == "The filing explains dividend timing."
     assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
     assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
+    assert artifact.artifact_metadata["confirmed_facts"] == [
+        "The payment date is 2 January 2040."
+    ]
+    assert artifact.artifact_metadata["speculation"] == [
+        "The dividend may affect future income expectations."
+    ]
     assert result["summary"] == "The company confirmed its dividend timetable."
     mock_upsert.assert_called_once()
 
@@ -588,3 +596,28 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         raw_text=artifact.raw_text,
     )
     summarise_announcement.assert_not_called()
+
+
+def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
+    """A later summary can replace old clarity classifications with empty lists."""
+    from app.api.routes.gemini import _summary_metadata
+
+    metadata = {
+        "category": "DividendAnnouncement",
+        "speculation": ["An outdated forecast."],
+    }
+    result = _summary_metadata(
+        metadata,
+        {
+            "summary": "A concise summary.",
+            "about": "",
+            "changed": "No material change identified.",
+            "matters": "The dates help investors plan.",
+            "confirmed_facts": ["The payment date was announced."],
+            "speculation": [],
+        },
+    )
+
+    assert result["confirmed_facts"] == ["The payment date was announced."]
+    assert result["speculation"] == []
+    assert metadata["speculation"] == ["An outdated forecast."]
