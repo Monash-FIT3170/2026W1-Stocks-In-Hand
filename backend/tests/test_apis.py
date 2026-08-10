@@ -244,6 +244,53 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
     assert result[0]["is_self"] is False
 
 
+def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
+    """Reddit summaries should use the configured Groq model, not a hardcoded ID."""
+    from app.api.routes import reddit
+
+    mock_response = MagicMock()
+    mock_response.choices = [
+        MagicMock(
+            message=MagicMock(
+                content=(
+                    '{"summary": "Retail investors are mixed on BHP.", '
+                    '"dominant_sentiment": "mixed", '
+                    '"key_themes": ["iron ore"]}'
+                )
+            )
+        )
+    ]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_response
+
+    with patch.object(
+        reddit,
+        "_get_groq_client",
+        return_value=mock_client,
+    ), patch.object(
+        reddit.settings,
+        "GROQ_MODEL",
+        "openai/gpt-oss-120b",
+    ):
+        result = reddit._summarise_reddit_posts(
+            "BHP",
+            [
+                {
+                    "title": "BHP outlook",
+                    "body": "Investors are debating iron ore demand.",
+                    "score": 12,
+                }
+            ],
+        )
+
+    assert result["summary"] == "Retail investors are mixed on BHP."
+    mock_client.chat.completions.create.assert_called_once()
+    assert (
+        mock_client.chat.completions.create.call_args.kwargs["model"]
+        == "openai/gpt-oss-120b"
+    )
+
+
 def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
     """POST /sentiment/{ticker} wires ASX categories and Reddit summary together."""
     from app.api.routes import category_sentiment
