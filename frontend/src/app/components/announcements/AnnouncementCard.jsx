@@ -9,6 +9,7 @@ import { CitationLinks } from "../ticker/CitationLinks"
 // changed, matters, and url fields.
 export function AnnouncementCard({ item }) {
   const filingUrl = item.url || "#"
+  const sourceLabel = item.source_label || "View original ASX filing"
 
   return (
     <article className={styles.announcementCard}>
@@ -26,7 +27,7 @@ export function AnnouncementCard({ item }) {
       </div>
       <div className={styles.cardActions}>
         <Link href={`/ticker/${item.ticker}/news`}>Read full summary</Link>
-        <a href={filingUrl}>View original ASX filing</a>
+        <a href={filingUrl}>{sourceLabel}</a>
       </div>
       <CitationLinks sources={item.sources} />
     </article>
