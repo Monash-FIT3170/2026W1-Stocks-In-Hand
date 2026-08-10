@@ -621,3 +621,72 @@ def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> N
     assert result["confirmed_facts"] == ["The payment date was announced."]
     assert result["speculation"] == []
     assert metadata["speculation"] == ["An outdated forecast."]
+
+
+def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
+    """The overview contract should expose classified claims for the summary UI."""
+    from datetime import datetime, timezone
+
+    from app.api.routes import ticker as ticker_route
+
+    ticker = MagicMock()
+    ticker.id = "ticker-id"
+    ticker.symbol = "ANZ"
+    ticker.company_name = "ANZ Group Holdings Limited"
+    ticker.sector = "Financials"
+    ticker.industry = "Banks"
+    ticker.exchange = "ASX"
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "about": "ANZ published an update.",
+        "confirmed_facts": [
+            " Net profit was $1 billion. ",
+            "Net profit was $1 billion.",
+            None,
+        ],
+        "speculation": ["Management expects costs to fall."],
+    }
+    artifact.raw_text = "ANZ published an update."
+    artifact.source_type = "asx_announcement"
+    artifact.title = "ANZ update"
+    artifact.url = "https://example.test/anz-update"
+    artifact.published_at = datetime(2040, 1, 2, tzinfo=timezone.utc)
+    artifact.created_at = artifact.published_at
+
+    with patch.object(ticker_route, "_ensure_default_tickers"), patch.object(
+        ticker_route.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker,
+    ), patch.object(
+        ticker_route,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker_route,
+        "_latest_sentiment_for_ticker",
+        return_value=None,
+    ), patch.object(ticker_route, "_live_quote", return_value=None):
+        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+
+    assert result["clarity"] == {
+        "is_classified": True,
+        "confirmed_facts": ["Net profit was $1 billion."],
+        "speculation": ["Management expects costs to fall."],
+    }
+
+
+def test_clarity_contract_marks_legacy_metadata_as_unclassified() -> None:
+    """Older artifacts must not be presented as verified without classification."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": "A malformed legacy value.",
+    }
+
+    assert _clarity_for_artifact(artifact) == {
+        "is_classified": False,
+        "confirmed_facts": [],
+        "speculation": [],
+    }

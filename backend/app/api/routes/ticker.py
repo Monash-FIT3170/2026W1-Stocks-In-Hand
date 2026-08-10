@@ -184,6 +184,35 @@ def _source_action_label(artifact: Artifact) -> str:
     return "View original source"
 
 
+def _metadata_text_list(metadata: dict, key: str) -> list[str]:
+    values = metadata.get(key)
+    if not isinstance(values, list):
+        return []
+
+    cleaned_values = []
+    seen = set()
+    for value in values:
+        cleaned = _clean_text(value)
+        if cleaned and cleaned not in seen:
+            cleaned_values.append(cleaned)
+            seen.add(cleaned)
+    return cleaned_values
+
+
+def _clarity_for_artifact(artifact: Artifact | None) -> dict:
+    metadata = (
+        artifact.artifact_metadata
+        if artifact and isinstance(artifact.artifact_metadata, dict)
+        else {}
+    )
+    clarity_keys = ("confirmed_facts", "speculation")
+    return {
+        "is_classified": all(isinstance(metadata.get(key), list) for key in clarity_keys),
+        "confirmed_facts": _metadata_text_list(metadata, "confirmed_facts"),
+        "speculation": _metadata_text_list(metadata, "speculation"),
+    }
+
+
 def _format_announcement_time(artifact: Artifact) -> str:
     if artifact.published_at:
         return f"{artifact.published_at.strftime('%b')} {artifact.published_at.day}, {artifact.published_at.year}"
@@ -332,6 +361,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
         # Deprecated compatibility field. New consumers must use the accurately
         # named latest-signal field above.
         "public_sentiment_pct": confidence_pct,
+        "clarity": _clarity_for_artifact(latest_artifact),
         "sources": sources,
     }
     aside = {

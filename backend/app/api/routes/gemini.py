@@ -65,8 +65,9 @@ def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
             next_metadata[key] = value.strip()
 
     for key in gemini_service.SUMMARY_LIST_KEYS:
-        value = summary.get(key)
-        next_metadata[key] = list(value) if isinstance(value, list) else []
+        if key in summary:
+            value = summary.get(key)
+            next_metadata[key] = list(value) if isinstance(value, list) else []
 
     return next_metadata
 
