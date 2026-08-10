@@ -67,6 +67,92 @@ def test_news_feed_does_not_use_raw_text_as_summary() -> None:
 
     assert result[0]["about"] == "Summary pending."
     assert artifact.raw_text not in result[0]["about"]
+    assert result[0]["source_type"] == "asx_announcement"
+    assert result[0]["source_name"] is None
+    assert result[0]["source_label"] == "View original ASX filing"
+
+
+def test_news_feed_uses_source_aware_news_label() -> None:
+    """News article cards should expose publisher-specific source labels."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    ticker_record = MagicMock()
+    ticker_record.id = uuid.uuid4()
+    ticker_record.symbol = "BHP"
+
+    artifact = MagicMock()
+    artifact.id = uuid.uuid4()
+    artifact.artifact_type = "news_article"
+    artifact.source_type = "news"
+    artifact.title = "BHP production story"
+    artifact.url = "https://publisher.example/bhp-story"
+    artifact.raw_text = "BHP reported stronger copper production."
+    artifact.artifact_metadata = {
+        "source_name": "publisher.example",
+        "about": "The story covers BHP's production update.",
+    }
+    artifact.published_at = None
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker,
+        "_sources_for_artifact",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_news_feed("BHP", db=MagicMock())
+
+    assert result[0]["source_type"] == "news"
+    assert result[0]["source_name"] == "publisher.example"
+    assert result[0]["source_label"] == "View original at publisher.example"
+
+
+def test_news_feed_uses_generic_source_label_when_news_source_missing() -> None:
+    """News article cards should fall back cleanly when publisher metadata is absent."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    ticker_record = MagicMock()
+    ticker_record.id = uuid.uuid4()
+    ticker_record.symbol = "BHP"
+
+    artifact = MagicMock()
+    artifact.id = uuid.uuid4()
+    artifact.artifact_type = "news_article"
+    artifact.source_type = "news"
+    artifact.title = "BHP production story"
+    artifact.url = "https://publisher.example/bhp-story"
+    artifact.raw_text = "BHP reported stronger copper production."
+    artifact.artifact_metadata = {"about": "The story covers BHP's production update."}
+    artifact.published_at = None
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker,
+        "_sources_for_artifact",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_news_feed("BHP", db=MagicMock())
+
+    assert result[0]["source_type"] == "news"
+    assert result[0]["source_name"] is None
+    assert result[0]["source_label"] == "View original source"
 
 
 # --- Reddit route tests ---

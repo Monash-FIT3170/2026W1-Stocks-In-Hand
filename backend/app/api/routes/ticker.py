@@ -174,6 +174,22 @@ def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
     return _clean_text(metadata.get(key)) or fallback
 
 
+def _metadata_source_name(artifact: Artifact) -> str | None:
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    return _clean_text(metadata.get("source_name"))
+
+
+def _source_action_label(artifact: Artifact) -> str:
+    source_type = (artifact.source_type or "").lower()
+    if source_type == "asx_announcement":
+        return "View original ASX filing"
+    if source_type == "news":
+        source_name = _metadata_source_name(artifact)
+        if source_name:
+            return f"View original at {source_name}"
+    return "View original source"
+
+
 def _format_announcement_time(artifact: Artifact) -> str:
     if artifact.published_at:
         return f"{artifact.published_at.strftime('%b')} {artifact.published_at.day}, {artifact.published_at.year}"
@@ -500,6 +516,9 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
             "changed": _metadata_value(artifact, "changed", "No change summary available yet."),
             "matters": _metadata_value(artifact, "matters", "No investment impact summary available yet."),
             "url": artifact.url,
+            "source_type": artifact.source_type,
+            "source_name": _metadata_source_name(artifact),
+            "source_label": _source_action_label(artifact),
             "sources": _sources_for_artifact(artifact),
         }
         for artifact in artifacts
