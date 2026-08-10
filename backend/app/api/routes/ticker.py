@@ -42,6 +42,12 @@ DEFAULT_TICKERS = {
         "sector": "Consumer Staples",
         "industry": "Food & Staples Retailing",
     },
+    "COH": {
+        "company_name": "Cochlear Limited",
+        "exchange": "ASX",
+        "sector": "Health Care",
+        "industry": "Health Care Equipment & Supplies",
+    },
     "CSL": {
         "company_name": "CSL Limited",
         "exchange": "ASX",
