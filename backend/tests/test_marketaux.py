@@ -175,8 +175,8 @@ def test_correct_news_artifact_is_created() -> None:
         "create_artifact",
         return_value=MagicMock(id=uuid.uuid4(), artifact_metadata={}),
     ) as create_artifact, patch.object(
-        marketaux,
-        "_summarise_and_store_news_artifact",
+        marketaux.news_summary,
+        "summarise_news_artifact",
     ) as summarise_artifact:
         result = marketaux.fetch_and_store_news("BHP", 10, db)
 
@@ -192,34 +192,6 @@ def test_correct_news_artifact_is_created() -> None:
     assert artifact.artifact_metadata["text_used"] == "description"
     assert artifact.artifact_metadata["symbols"] == ["BHP.AX"]
     summarise_artifact.assert_called_once()
-
-
-def test_news_summary_is_stored_in_artifact_metadata() -> None:
-    db = MagicMock()
-    article = _article()
-    artifact = MagicMock()
-    artifact.id = uuid.uuid4()
-    artifact.artifact_metadata = {"provider": "marketaux"}
-
-    with patch.object(
-        marketaux.summary_service,
-        "summarise_news_article",
-        return_value={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The story covers BHP's quarterly copper production.",
-            "changed": "Reported copper output increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        },
-    ):
-        marketaux._summarise_and_store_news_artifact(db, artifact, article)
-
-    assert artifact.artifact_metadata["about"] == (
-        "The story covers BHP's quarterly copper production."
-    )
-    summary_row = db.add.call_args.args[0]
-    assert summary_row.artifact_id == artifact.id
-    assert summary_row.prompt_version == "groq-news-summary-v1"
-    db.commit.assert_called_once()
 
 
 def test_news_fetch_route_response_shape() -> None:
