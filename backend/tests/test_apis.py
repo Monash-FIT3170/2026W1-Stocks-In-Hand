@@ -147,6 +147,38 @@ def test_bluesky_ticker_filter_requires_financial_context() -> None:
     assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
 
 
+# --- Mastodon route tests ---
+
+def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
+    """Public Mastodon hashtag results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [{
+        "id": "114123456789",
+        "created_at": "2026-08-10T01:00:00Z",
+        "content": "<p>ANZ results look <strong>strong</strong>.</p>",
+        "url": "https://aus.social/@investor/114123456789",
+        "account": {"acct": "investor", "display_name": "Investor"},
+        "replies_count": 2,
+        "reblogs_count": 3,
+        "favourites_count": 4,
+        "language": "en",
+        "tags": [{"name": "ASX", "url": "https://aus.social/tags/ASX"}],
+        "sensitive": False,
+        "spoiler_text": "",
+    }]
+
+    with patch("app.api.routes.mastodon.httpx.get", return_value=mock_response):
+        from app.api.routes.mastodon import _fetch_posts
+        result = _fetch_posts(tag="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "114123456789"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor"
+    assert result[0]["favourites_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
 def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
     """Both public discussion sources are included in one summary request."""
     from app.api.routes import category_sentiment

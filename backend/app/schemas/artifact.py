@@ -9,6 +9,7 @@ class SourceType(str, Enum):
     ASX_ANNOUNCEMENT = "asx_announcement"
     REDDIT           = "reddit"
     BLUESKY          = "bluesky"
+    MASTODON         = "mastodon"
     NEWS             = "news"
     HOTCOPPER        = "hotcopper"
 
@@ -20,6 +21,7 @@ class ArtifactType(str, Enum):
     ASX_ANNOUNCEMENT_OTHER = "asx_announcement_other"
     REDDIT_POST            = "reddit_post"
     BLUESKY_POST           = "bluesky_post"
+    MASTODON_POST          = "mastodon_post"
     HOTCOPPER_POST         = "hotcopper_post"
     NEWS_ARTICLE           = "news_article"
 

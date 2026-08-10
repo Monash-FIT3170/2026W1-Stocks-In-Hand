@@ -31,7 +31,7 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 - Paste any financial headline → FinBERT classifies it as **positive**, **negative**, or **neutral**
 - Scrape live headlines from Yahoo Finance via Playwright
-- Scraped announcements, Reddit and Bluesky posts, and their summaries/sentiment persisted to PostgreSQL
+- Scraped announcements, Reddit, Bluesky and Mastodon posts, and their summaries/sentiment persisted to PostgreSQL
 
 ---
 
@@ -98,6 +98,11 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/bluesky/scrape` | Queue a public Bluesky search and store returned posts as artifacts. Params: `query` (default: ASX), `limit` (default: 25). No Bluesky API key is required |
+
+### Mastodon (public API)
+| Method | Path | Description |
+|---|---|---|
+| POST | `/mastodon/scrape` | Queue an `aus.social` hashtag scrape and store returned posts as artifacts. Params: `tag` (default: ASX), `limit` (default: 25). No Mastodon API key is required |
 
 ### Groq / legacy LLM route
 | Method | Path | Description |

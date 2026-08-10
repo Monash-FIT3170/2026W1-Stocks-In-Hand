@@ -25,6 +25,7 @@ from app.api.routes import (
     information_platform,
     reddit,
     bluesky,
+    mastodon,
     gemini,
     category_sentiment,
     auth,
@@ -56,6 +57,7 @@ app.include_router(information_platform.router)
 app.include_router(auth.router)
 app.include_router(reddit.router)
 app.include_router(bluesky.router)
+app.include_router(mastodon.router)
 app.include_router(gemini.router)
 app.include_router(category_sentiment.router)
 app.include_router(announcement.router)
