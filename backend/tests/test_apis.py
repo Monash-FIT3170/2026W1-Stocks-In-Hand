@@ -438,7 +438,7 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
 
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:
-    """Gemini summary parsing should return the four fields the UI uses."""
+    """Gemini summary parsing should preserve text and clarity fields."""
     from app.services.gemini import parse_summary_response
 
     result = parse_summary_response(
@@ -447,7 +447,9 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
           "summary": "The company announced an updated dividend timetable.",
           "about": "The filing explains the dividend key dates.",
           "changed": "The payment date was confirmed.",
-          "matters": "Investors can use the dates to plan income expectations."
+          "matters": "Investors can use the dates to plan income expectations.",
+          "confirmed_facts": ["The payment date is 2 January 2040."],
+          "speculation": ["Investors may use the date to plan future income."]
         }
         """
     )
@@ -457,6 +459,8 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
         "about": "The filing explains the dividend key dates.",
         "changed": "The payment date was confirmed.",
         "matters": "Investors can use the dates to plan income expectations.",
+        "confirmed_facts": ["The payment date is 2 January 2040."],
+        "speculation": ["Investors may use the date to plan future income."],
     }
 
 
@@ -468,6 +472,27 @@ def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
 
     with pytest.raises(ValueError, match="missing keys"):
         parse_summary_response('{"summary": "Only one field"}')
+
+
+def test_gemini_summary_response_parser_rejects_non_list_clarity_fields() -> None:
+    """Clarity fields must remain structured so the UI can label each claim."""
+    import pytest
+
+    from app.services.gemini import parse_summary_response
+
+    with pytest.raises(ValueError, match="confirmed_facts.*list of strings"):
+        parse_summary_response(
+            """
+            {
+              "summary": "A summary.",
+              "about": "An announcement.",
+              "changed": "A change.",
+              "matters": "An impact.",
+              "confirmed_facts": "This should be a list.",
+              "speculation": []
+            }
+            """
+        )
 
 
 def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
