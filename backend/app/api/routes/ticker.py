@@ -48,6 +48,12 @@ DEFAULT_TICKERS = {
         "sector": "Health Care",
         "industry": "Biotechnology",
     },
+    "TCL": {
+        "company_name": "Transurban Group",
+        "exchange": "ASX",
+        "sector": "Industrials",
+        "industry": "Highways & Railtracks",
+    },
     "TLS": {
         "company_name": "Telstra Group Limited",
         "exchange": "ASX",

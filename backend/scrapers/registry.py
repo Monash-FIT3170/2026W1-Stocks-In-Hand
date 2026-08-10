@@ -6,6 +6,7 @@ from .companies.csl import CSLScraper
 from .companies.bhp import BHPScraper
 from .companies.cba import CBAScraper
 from .companies.col import COLScraper
+from .companies.tcl import TCLScraper
 from .companies.tls import TLSScraper
 from .companies.wes import WESScraper
 
@@ -16,6 +17,7 @@ REGISTRY: dict[str, type[BaseScraper]] = {
     "BHP": BHPScraper,
     "CBA": CBAScraper,
     "COL": COLScraper,
+    "TCL": TCLScraper,
     "TLS": TLSScraper,
     "WES": WESScraper,
 }
