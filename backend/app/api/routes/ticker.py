@@ -36,6 +36,12 @@ DEFAULT_TICKERS = {
         "sector": "Financials",
         "industry": "Banks",
     },
+    "COL": {
+        "company_name": "Coles Group Limited",
+        "exchange": "ASX",
+        "sector": "Consumer Staples",
+        "industry": "Food & Staples Retailing",
+    },
     "CSL": {
         "company_name": "CSL Limited",
         "exchange": "ASX",

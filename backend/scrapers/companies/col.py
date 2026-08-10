@@ -127,7 +127,14 @@ class COLScraper(BaseScraper):
 
     def _clean_title(self, title_text: str, row_text: str) -> str:
         if title_text:
-            return re.sub(r"\s+", " ", title_text).strip()
+            cleaned_title = re.sub(r"\s+", " ", title_text).strip()
+            cleaned_title = re.sub(
+                r"\bOpens in a new Window\b",
+                "",
+                cleaned_title,
+                flags=re.IGNORECASE,
+            )
+            return cleaned_title.strip(" -:\t")
 
         # Fallback when anchor text is empty but row text includes the title.
         cleaned = re.sub(r"\s+", " ", row_text).strip()
