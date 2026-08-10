@@ -136,8 +136,73 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
     assert result[0]["tags"] == ["ASX"]
 
 
-def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
-    """POST /sentiment/{ticker} wires ASX categories and Reddit summary together."""
+def test_bluesky_ticker_filter_requires_financial_context() -> None:
+    """Posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_bluesky_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
+def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
+    """Both public discussion sources are included in one summary request."""
+    from app.api.routes import category_sentiment
+
+    reddit_post = MagicMock(
+        title="ANZ earnings discussion",
+        raw_text="Investors are watching the result.",
+        url="https://reddit.com/example",
+        artifact_metadata={"score": 7},
+    )
+    bluesky_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="ASX investors are positive.",
+        url="https://bsky.app/example",
+        artifact_metadata={
+            "like_count": 3,
+            "repost_count": 2,
+            "reply_count": 1,
+            "quote_count": 0,
+        },
+    )
+    captured_posts = []
+
+    def fake_summary(**kwargs):
+        captured_posts.extend(kwargs["posts"])
+        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
+
+    with patch.object(
+        category_sentiment.artifact_crud,
+        "get_reddit_posts_for_ticker",
+        return_value=[reddit_post],
+    ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_bluesky_posts_for_ticker",
+        return_value=[bluesky_post],
+    ), patch.object(
+        category_sentiment.reddit_route,
+        "_summarise_reddit_posts",
+        side_effect=fake_summary,
+    ):
+        result = category_sentiment._summarise_recent_public_discussion(
+            ticker="ANZ",
+            db=MagicMock(),
+            days=30,
+            reddit_limit=50,
+            bluesky_limit=50,
+        )
+
+    assert result["summary"] == "Discussion is positive."
+    assert len(captured_posts) == 2
+    assert captured_posts[0]["score"] == 7
+    assert captured_posts[1]["score"] == 6
+
+
+def test_sentiment_pipeline_combines_asx_and_public_discussion() -> None:
+    """POST /sentiment/{ticker} wires ASX categories and public discussion together."""
     from app.api.routes import category_sentiment
 
     captured_categories = {}
@@ -165,7 +230,7 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
         return_value={"revenue": "ANZ revenue increased."},
     ), patch.object(
         category_sentiment,
-        "_summarise_recent_reddit",
+        "_summarise_recent_public_discussion",
         return_value={
             "summary": "Retail investors are mixed on ANZ.",
             "dominant_sentiment": "mixed",

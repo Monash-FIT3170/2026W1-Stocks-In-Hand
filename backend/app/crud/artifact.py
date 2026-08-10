@@ -1,3 +1,5 @@
+import re
+
 from sqlalchemy import Integer, cast, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
@@ -125,3 +127,72 @@ def get_reddit_posts_for_ticker(
         .limit(limit)
         .all()
     )
+
+
+def _is_bluesky_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
+    text = " ".join((artifact.title or "", artifact.raw_text or ""))
+    if not re.search(rf"(?<![A-Za-z0-9]){re.escape(ticker_symbol)}(?![A-Za-z0-9])", text, re.IGNORECASE):
+        return False
+
+    company_terms = tuple(
+        term
+        for term in (company_name, company_name.replace(" Holdings Limited", ""))
+        if term.lower() != ticker_symbol.lower()
+    )
+    finance_terms = (
+        "asx",
+        "share",
+        "stock",
+        "dividend",
+        "earnings",
+        "profit",
+        "revenue",
+        "investor",
+        "market",
+        "bank",
+        "portfolio",
+    )
+    lower_text = text.lower()
+    return any(
+        term.lower() in lower_text
+        for term in (*company_terms, f"{ticker_symbol} bank", *finance_terms)
+        if term
+    )
+
+
+def get_bluesky_posts_for_ticker(
+    db: Session,
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+) -> list[Artifact]:
+    ticker = (
+        db.query(Ticker)
+        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+        .first()
+    )
+    if not ticker:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    candidates = (
+        db.query(Artifact)
+        .filter(Artifact.source_type == SourceType.BLUESKY.value)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(
+            or_(
+                Artifact.title.ilike(f"%{ticker_symbol}%"),
+                Artifact.raw_text.ilike(f"%{ticker_symbol}%"),
+            )
+        )
+        .order_by(
+            Artifact.artifact_metadata["like_count"].as_integer().desc().nullslast()
+        )
+        .limit(limit * 3)
+        .all()
+    )
+    return [
+        artifact
+        for artifact in candidates
+        if _is_bluesky_ticker_post(artifact, ticker_symbol, ticker.company_name)
+    ][:limit]

@@ -268,17 +268,29 @@ def _categorise_recent_asx(ticker: str, db: Session, days: int, asx_limit: int, 
         return fallback_categories
 
 
-def _summarise_recent_reddit(ticker: str, db: Session, days: int, reddit_limit: int,):
-    posts = artifact_crud.get_reddit_posts_for_ticker(
+def _summarise_recent_public_discussion(
+    ticker: str,
+    db: Session,
+    days: int,
+    reddit_limit: int,
+    bluesky_limit: int,
+):
+    reddit_posts = artifact_crud.get_reddit_posts_for_ticker(
         db=db,
         ticker_symbol=ticker.upper(),
         days=days,
         limit=reddit_limit,
     )
+    bluesky_posts = artifact_crud.get_bluesky_posts_for_ticker(
+        db=db,
+        ticker_symbol=ticker.upper(),
+        days=days,
+        limit=bluesky_limit,
+    )
 
-    if not posts:
+    if not reddit_posts and not bluesky_posts:
         return {
-            "summary": f"No Reddit posts mentioning {ticker.upper()} in the last {days} days.",
+            "summary": f"No public discussion posts mentioning {ticker.upper()} in the last {days} days.",
             "dominant_sentiment": "neutral",
             "key_themes": [],
         }
@@ -290,18 +302,31 @@ def _summarise_recent_reddit(ticker: str, db: Session, days: int, reddit_limit: 
             "score": (artifact.artifact_metadata or {}).get("score", 0),
             "url": artifact.url or "",
         }
-        for artifact in posts
+        for artifact in reddit_posts
     ]
+    post_dicts.extend(
+        {
+            "title": artifact.title or "",
+            "body": artifact.raw_text or "",
+            "score": sum(
+                int((artifact.artifact_metadata or {}).get(key, 0) or 0)
+                for key in ("like_count", "repost_count", "reply_count", "quote_count")
+            ),
+            "url": artifact.url or "",
+        }
+        for artifact in bluesky_posts
+    )
 
     try:
         return reddit_route._summarise_reddit_posts(
             ticker_symbol=ticker.upper(),
             posts=post_dicts,
+            source_name="Reddit and Bluesky",
         )
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail="Reddit Groq summarisation request failed",
+            detail="Public discussion Groq summarisation request failed",
         ) from exc
 
 
@@ -312,6 +337,7 @@ def build_ticker_category_sentiment(
     days: int = DEFAULT_SENTIMENT_DAYS,
     asx_limit: int = 200,
     reddit_limit: int = 50,
+    bluesky_limit: int = 50,
     offset: int = 0,
     batch_size: int = 0,
     persist: bool = True,
@@ -332,11 +358,12 @@ def build_ticker_category_sentiment(
         )
 
     if not request_body.reddit_summary:
-        reddit_summary = _summarise_recent_reddit(
+        reddit_summary = _summarise_recent_public_discussion(
             ticker=ticker,
             db=db,
             days=days,
             reddit_limit=reddit_limit,
+            bluesky_limit=bluesky_limit,
         )
         category_map["user_discussion"] = str(reddit_summary.get("summary", ""))
 
@@ -365,6 +392,7 @@ def analyse_ticker_category_sentiments(
     days: int = DEFAULT_SENTIMENT_DAYS,
     asx_limit: int = 200,
     reddit_limit: int = 50,
+    bluesky_limit: int = 50,
     offset: int = 0,
     batch_size: int = 0,
     persist: bool = True,
@@ -376,6 +404,7 @@ def analyse_ticker_category_sentiments(
         days=days,
         asx_limit=asx_limit,
         reddit_limit=reddit_limit,
+        bluesky_limit=bluesky_limit,
         offset=offset,
         batch_size=batch_size,
         persist=persist,
