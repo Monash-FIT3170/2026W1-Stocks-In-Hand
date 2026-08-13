@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds the "testing" stage from backend/Dockerfile: same base image,
+      # same deps (requirements.txt + requirements-testing.txt) as production,
+      # so nothing drifts between what CI checks and what eventually ships.
+      - name: Build backend image (testing stage)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          target: testing
+          push: false
+          load: true
+          tags: stocks-in-hand-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # TODO: once tests exist, run them against this image, e.g.:
+      # docker run --rm stocks-in-hand-backend:ci pytest
+      - name: Run tests
+        run: echo "no backend tests yet"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Builds the "production" stage from frontend/Dockerfile (npm install +
+      # npm run build), matching what ships rather than a bare npm build.
+      - name: Build frontend image (production stage)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          target: production
+          push: false
+          load: true
+          tags: stocks-in-hand-frontend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # TODO: add a frontend test step here once tests exist
