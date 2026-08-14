@@ -1,0 +1,213 @@
+name: Prepare staging release
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_schedule:
+        description: Enable the weekly scrape in the reviewed change set
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      enable_analysis:
+        description: Allow Queue C to start analysis work
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      enable_bedrock:
+        description: Grant analysis access to Nova Micro
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      scheduled_tickers:
+        description: Comma-separated tickers for the weekly schedule
+        required: true
+        default: "ANZ,BHP,CBA,CSL,WES"
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build images and create change set
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+      PARAMETER_PATH_PREFIX: /stocks-in-hand/staging
+
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-prepare
+
+      - name: Resolve immutable release values
+        id: values
+        shell: bash
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          CFN_ROLE="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          {
+            echo "AWS_ACCOUNT_ID=$ACCOUNT_ID"
+            echo "ECR_REGISTRY=$REGISTRY"
+            echo "RELEASE_SHA=$GITHUB_SHA"
+            echo "CFN_ROLE_ARN=$CFN_ROLE"
+          } >> "$GITHUB_ENV"
+          {
+            echo "registry=$REGISTRY"
+            echo "release_sha=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Reject an existing immutable release tag
+        shell: bash
+        run: |
+          for image in api scraper analysis; do
+            if aws ecr describe-images \
+              --repository-name "stocks-in-hand-$image" \
+              --image-ids "imageTag=$RELEASE_SHA" >/dev/null 2>&1; then
+              echo "Release $RELEASE_SHA already exists in stocks-in-hand-$image" >&2
+              exit 1
+            fi
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to ECR
+        shell: bash
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.api
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-api:${{ steps.values.outputs.release_sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build and push scraper image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.scraper
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-scraper:${{ steps.values.outputs.release_sha }}
+          cache-from: type=gha,scope=scraper
+          cache-to: type=gha,mode=max,scope=scraper
+
+      - name: Build and push analysis image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.analysis
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-analysis:${{ steps.values.outputs.release_sha }}
+          cache-from: type=gha,scope=analysis
+          cache-to: type=gha,mode=max,scope=analysis
+
+      - name: Verify all release images exist
+        shell: bash
+        run: |
+          for image in api scraper analysis; do
+            aws ecr describe-images \
+              --repository-name "stocks-in-hand-$image" \
+              --image-ids "imageTag=$RELEASE_SHA"
+          done
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate the SAM template
+        shell: bash
+        run: sam validate --lint --template-file infra/template.yaml
+
+      - name: Create the SAM change set without executing it
+        shell: bash
+        run: |
+          sam deploy \
+            --template-file infra/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --role-arn "$CFN_ROLE_ARN" \
+            --no-confirm-changeset \
+            --no-execute-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "Environment=staging" \
+              "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
+              "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "ScheduleEnabled=${{ inputs.enable_schedule }}" \
+              "AnalysisEnabled=${{ inputs.enable_analysis }}" \
+              "BedrockEnabled=${{ inputs.enable_bedrock }}" \
+              "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
+              "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
+              "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+
+      - name: Export the change set for Person 1 review
+        id: change_set
+        shell: bash
+        run: |
+          CHANGE_SET_ARN="$(aws cloudformation list-change-sets \
+            --stack-name "$STACK_NAME" \
+            --query "reverse(sort_by(Summaries[?Status=='CREATE_COMPLETE'], &CreationTime))[0].ChangeSetId" \
+            --output text)"
+          if [ -z "$CHANGE_SET_ARN" ] || [ "$CHANGE_SET_ARN" = "None" ]; then
+            echo "No reviewable change set was created" >&2
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --output json > change-set.json
+          echo "change_set_arn=$CHANGE_SET_ARN" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Staging change set awaiting Person 1 review"
+            echo ""
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Change set: \`$CHANGE_SET_ARN\`"
+            echo ""
+            echo "Person 2 must not execute this change set until Person 1 approves it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the change-set evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-change-set-${{ steps.values.outputs.release_sha }}
+          path: change-set.json
+          if-no-files-found: error
+          retention-days: 14

@@ -1,3 +1,6 @@
+"use client"
+
+import { useEffect, useState } from "react"
 import { AppFrame } from "../../components/layout/AppFrame"
 import { SparkIcon } from "../../components/icons"
 import { BriefAside } from "../../components/ticker/BriefAside"
@@ -11,15 +14,56 @@ import styles from "../../page.module.css"
 // Ticker brief summary tab for "/ticker/[symbol]".
 // This route renders only DB-backed ticker overview data so missing data is visible
 // during MVP testing.
-export default async function TickerSummaryRoute({ params }) {
-  const symbol = params.symbol
-  let data, aside, categorySentiment
-  try {
-    ;[data, aside] = await Promise.all([
-      fetchTickerOverview(symbol),
-      fetchTickerBriefAside(symbol),
-    ])
-  } catch {
+export default function TickerSummaryRoute({ params }) {
+  const symbol = params.symbol.toUpperCase()
+  const [state, setState] = useState({
+    aside: null,
+    categorySentiment: null,
+    data: null,
+    error: false,
+    isLoading: true,
+  })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadTicker() {
+      try {
+        const [data, aside, categorySentiment] = await Promise.all([
+          fetchTickerOverview(symbol),
+          fetchTickerBriefAside(symbol),
+          fetchTickerCategorySentiment(symbol).catch((error) => ({
+            unavailable: true,
+            message: error.message,
+          })),
+        ])
+        if (!cancelled) {
+          setState({ aside, categorySentiment, data, error: false, isLoading: false })
+        }
+      } catch {
+        if (!cancelled) {
+          setState({ aside: null, categorySentiment: null, data: null, error: true, isLoading: false })
+        }
+      }
+    }
+
+    loadTicker()
+    return () => {
+      cancelled = true
+    }
+  }, [symbol])
+
+  if (state.isLoading) {
+    return (
+      <AppFrame active="home">
+        <section className={styles.contentPage}>
+          <div className={styles.emptyCard}><h3>Loading {symbol}...</h3></div>
+        </section>
+      </AppFrame>
+    )
+  }
+
+  if (state.error) {
     return (
       <AppFrame active="home">
         <section className={styles.contentPage}>
@@ -31,10 +75,8 @@ export default async function TickerSummaryRoute({ params }) {
       </AppFrame>
     )
   }
-  categorySentiment = await fetchTickerCategorySentiment(symbol).catch((error) => ({
-    unavailable: true,
-    message: error.message,
-  }))
+
+  const { data, aside, categorySentiment } = state
 
   return (
     <AppFrame active="home">

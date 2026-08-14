@@ -1,9 +1,7 @@
-import re
-from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
 
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import async_playwright
 
 from ..base import BaseScraper, Announcement
 
@@ -84,58 +82,21 @@ class WESScraper(BaseScraper):
 
                 pdf_url = href if href.startswith("http") else urljoin(self.source_url, href)
 
-                ann = Announcement(
-                    ticker=self.ticker,
-                    title=title,
-                    date=parsed_date,
-                    pdf_url=pdf_url,
-                    source_url=self.source_url,
-                    metadata={"raw_href": href, "raw_date": date_str},
+                announcements.append(
+                    Announcement(
+                        ticker=self.ticker,
+                        title=title,
+                        date=parsed_date,
+                        pdf_url=pdf_url,
+                        source_url=self.source_url,
+                        metadata={
+                            "raw_href": href,
+                            "raw_date": date_str,
+                            "source_id": href,
+                        },
+                    )
                 )
-
-                try:
-                    ann.local_path = await self._download_by_click(page, link, ann)
-                except Exception as e:
-                    print(f"[WES] Failed to download '{ann.title}': {e}")
-
-                announcements.append(ann)
 
             await browser.close()
 
         return announcements
-
-    async def _download_by_click(
-        self,
-        page: Page,
-        link,
-        announcement: Announcement,
-    ) -> Path:
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", announcement.title)
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
-
-        print(f"[WES] Clicking document link: {announcement.title}")
-
-        async with page.expect_download(timeout=120000) as download_info:
-            await link.click(modifiers=["Alt"])
-
-        download = await download_info.value
-        await download.save_as(dest)
-
-        if not dest.exists() or dest.stat().st_size == 0:
-            raise Exception("Downloaded file is empty")
-
-        print(f"[WES] Saved: {dest}")
-        return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "WES downloads are handled inside fetch_announcements via browser click"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

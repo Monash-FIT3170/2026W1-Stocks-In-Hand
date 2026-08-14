@@ -1,9 +1,13 @@
+from typing import Any
+
 from sqlalchemy import Integer, cast, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from uuid import UUID
 from app.models.artifact import Artifact
+from app.models.artifact_sentiment import ArtifactSentiment
+from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
 from datetime import datetime, timezone, timedelta
@@ -29,6 +33,69 @@ def get_all_artifacts(db: Session, limit: int = 200, offset: int = 0):
 
 def get_artifact_by_hash(db: Session, content_hash: str):
     return db.query(Artifact).filter(Artifact.content_hash == content_hash).first()
+
+
+def store_artifact_analysis(
+    db: Session,
+    *,
+    artifact_id: UUID,
+    raw_text: str,
+    metadata: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
+    sentiment: dict[str, Any] | None = None,
+) -> Artifact:
+    """Atomically store extracted text and the single analysis result rows."""
+    artifact = (
+        db.query(Artifact)
+        .filter(Artifact.id == artifact_id)
+        .with_for_update()
+        .first()
+    )
+    if artifact is None:
+        raise ValueError(f"Artifact {artifact_id} does not exist")
+
+    artifact.raw_text = raw_text
+    artifact.artifact_metadata = {
+        **(artifact.artifact_metadata or {}),
+        **(metadata or {}),
+    }
+
+    if summary is not None:
+        summary_row = (
+            db.query(ArtifactSummary)
+            .filter(ArtifactSummary.artifact_id == artifact_id)
+            .first()
+        )
+        if summary_row is None:
+            summary_row = ArtifactSummary(
+                artifact_id=artifact_id,
+                summary_text=str(summary["summary_text"]),
+            )
+            db.add(summary_row)
+        summary_row.summary_text = str(summary["summary_text"])
+        summary_row.model_used = summary.get("model_used")
+        summary_row.confidence_score = summary.get("confidence_score")
+
+    if sentiment is not None:
+        sentiment_row = (
+            db.query(ArtifactSentiment)
+            .filter(ArtifactSentiment.artifact_id == artifact_id)
+            .first()
+        )
+        if sentiment_row is None:
+            sentiment_row = ArtifactSentiment(
+                artifact_id=artifact_id,
+                sentiment_label=str(sentiment["sentiment_label"]),
+            )
+            db.add(sentiment_row)
+        sentiment_row.sentiment_label = str(sentiment["sentiment_label"])
+        sentiment_row.stance = sentiment.get("stance")
+        sentiment_row.confidence_score = sentiment.get("confidence_score")
+        sentiment_row.model_used = sentiment.get("model_used")
+
+    db.commit()
+    db.refresh(artifact)
+    return artifact
 
 def get_platform_by_name(db: Session, name: str):
     from app.models.information_platform import InformationPlatform

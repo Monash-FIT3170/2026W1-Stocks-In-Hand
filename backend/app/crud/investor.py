@@ -20,10 +20,12 @@ def get_investors(db: Session, skip: int = 0, limit: int = 100):
 
 def create_investor(db: Session, investor: InvestorCreate):
     password = investor.password
+    normalized_email = str(investor.email).strip().lower()
     db_investor = Investor(
-        email=investor.email,
+        email=normalized_email,
         username=investor.username,
-        hashed_password=f"{password}_hashed" if password else None
+        hashed_password=hash_password(password) if password else None,
+        role="user",
     )
     db.add(db_investor)
     db.commit()
@@ -36,10 +38,12 @@ def create_auth_investor(
     username: str,
     password: str,
 ):
+    normalized_email = email.strip().lower()
     db_investor = Investor(
-        email=email.strip().lower(),
+        email=normalized_email,
         username=username,
         hashed_password=hash_password(password),
+        role="user",
     )
     db.add(db_investor)
     db.commit()
@@ -58,7 +62,12 @@ def authenticate_investor(db: Session, email: str, password: str):
 
 def update_investor(db: Session, investor_id: UUID, data: dict):
     db_investor = get_investor(db, investor_id)
+    allowed = {"email", "username", "role"}
     for key, value in data.items():
+        if key not in allowed:
+            raise ValueError(f"Investor field '{key}' cannot be updated")
+        if key == "email":
+            value = str(value).strip().lower()
         setattr(db_investor, key, value)
     db.commit()
     db.refresh(db_investor)

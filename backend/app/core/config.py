@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from app.sources import SOURCES
+
 
 def _load_local_env() -> None:
     """Load backend/.env for local runs without overriding real env vars."""
@@ -34,10 +36,45 @@ class Settings:
         "DATABASE_URL",
         "postgresql://user:password@localhost:5432/spike"
     )
+    AWS_REGION: str = os.getenv("AWS_REGION", "ap-southeast-2")
+    DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
+    DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
+    SOURCE_URLS: dict[str, str] = {
+        ticker: os.getenv(f"{ticker}_SOURCE_URL", source.source_url)
+        for ticker, source in SOURCES.items()
+    }
+    SUPPORTED_TICKERS: list[str] = [
+        ticker.strip().upper()
+        for ticker in os.getenv(
+            "SUPPORTED_TICKERS",
+            ",".join(SOURCES),
+        ).split(",")
+        if ticker.strip()
+    ]
+    SCHEDULED_TICKERS: list[str] = [
+        ticker.strip().upper()
+        for ticker in os.getenv(
+            "SCHEDULED_TICKERS",
+            ",".join(SOURCES),
+        ).split(",")
+        if ticker.strip()
+    ]
+    DISCOVERY_LOOKBACK_DAYS: int = int(
+        os.getenv("DISCOVERY_LOOKBACK_DAYS", "30")
+    )
+    MAX_DOCUMENTS_PER_RUN: int = int(
+        os.getenv("MAX_DOCUMENTS_PER_RUN", "3")
+    )
+    MAX_DOCUMENT_BYTES: int = int(
+        os.getenv("MAX_DOCUMENT_BYTES", "10485760")
+    )
+    MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "100"))
+    MAX_OCR_PAGES: int = int(os.getenv("MAX_OCR_PAGES", "5"))
+    MAX_ANALYSIS_CHARS: int = int(
+        os.getenv("MAX_ANALYSIS_CHARS", "50000")
+    )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
-    REDDIT_SEED_SUBREDDIT: str = os.getenv("REDDIT_SEED_SUBREDDIT", "ASX")
-    REDDIT_SEED_LIMIT: int = int(os.getenv("REDDIT_SEED_LIMIT", "50"))
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
@@ -56,14 +93,5 @@ class Settings:
 
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "")
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
-
-    # Comma-separated list of ASX ticker symbols to scrape and summarise on
-    # first boot when the database has no artifacts (e.g. "ANZ,CBA,BHP").
-    # Leave empty to disable auto-seeding.
-    SEED_TICKERS: list[str] = [
-        t.strip().upper()
-        for t in os.getenv("SEED_TICKERS", "").split(",")
-        if t.strip()
-    ]
 
 settings = Settings()
