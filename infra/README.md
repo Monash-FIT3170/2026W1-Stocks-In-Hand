@@ -160,6 +160,12 @@ sam deploy \
   --config-env staging \
   --template-file infra/template.yaml \
   --no-execute-changeset \
+  --image-repositories \
+    "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
   --parameter-overrides \
     "Environment=staging" \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
@@ -280,6 +286,12 @@ sam deploy \
   --config-file infra/samconfig.toml \
   --config-env staging \
   --template-file infra/template.yaml \
+  --image-repositories \
+    "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
   --parameter-overrides \
     "Environment=staging" \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
@@ -385,6 +397,12 @@ sam deploy \
   --config-file infra/samconfig.toml \
   --config-env staging \
   --template-file infra/template.yaml \
+  --image-repositories \
+    "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+    "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+    "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
   --parameter-overrides \
     "Environment=staging" \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
