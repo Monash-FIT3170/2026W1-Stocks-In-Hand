@@ -147,6 +147,17 @@ def test_bluesky_ticker_filter_requires_financial_context() -> None:
     assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
 
 
+def test_mastodon_ticker_filter_requires_financial_context() -> None:
+    """Mastodon posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_mastodon_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
 # --- Mastodon route tests ---
 
 def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
@@ -179,8 +190,8 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
     assert result[0]["tags"] == ["ASX"]
 
 
-def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
-    """Both public discussion sources are included in one summary request."""
+def test_public_discussion_summary_combines_all_sources() -> None:
+    """All public discussion sources are included in one summary request."""
     from app.api.routes import category_sentiment
 
     reddit_post = MagicMock(
@@ -200,6 +211,16 @@ def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
             "quote_count": 0,
         },
     )
+    mastodon_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="Investors are positive about the result.",
+        url="https://aus.social/example",
+        artifact_metadata={
+            "favourites_count": 4,
+            "reblogs_count": 2,
+            "replies_count": 1,
+        },
+    )
     captured_posts = []
 
     def fake_summary(**kwargs):
@@ -215,6 +236,10 @@ def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
         "get_bluesky_posts_for_ticker",
         return_value=[bluesky_post],
     ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_mastodon_posts_for_ticker",
+        return_value=[mastodon_post],
+    ), patch.object(
         category_sentiment.reddit_route,
         "_summarise_reddit_posts",
         side_effect=fake_summary,
@@ -225,12 +250,14 @@ def test_public_discussion_summary_combines_reddit_and_bluesky() -> None:
             days=30,
             reddit_limit=50,
             bluesky_limit=50,
+            mastodon_limit=50,
         )
 
     assert result["summary"] == "Discussion is positive."
-    assert len(captured_posts) == 2
+    assert len(captured_posts) == 3
     assert captured_posts[0]["score"] == 7
     assert captured_posts[1]["score"] == 6
+    assert captured_posts[2]["score"] == 7
 
 
 def test_sentiment_pipeline_combines_asx_and_public_discussion() -> None:

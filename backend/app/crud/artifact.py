@@ -196,3 +196,49 @@ def get_bluesky_posts_for_ticker(
         for artifact in candidates
         if _is_bluesky_ticker_post(artifact, ticker_symbol, ticker.company_name)
     ][:limit]
+
+
+def _is_mastodon_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
+    return _is_bluesky_ticker_post(artifact, ticker_symbol, company_name)
+
+
+def get_mastodon_posts_for_ticker(
+    db: Session,
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+) -> list[Artifact]:
+    ticker = (
+        db.query(Ticker)
+        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+        .first()
+    )
+    if not ticker:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    candidates = (
+        db.query(Artifact)
+        .filter(Artifact.source_type == SourceType.MASTODON.value)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(
+            or_(
+                Artifact.title.ilike(f"%{ticker_symbol}%"),
+                Artifact.raw_text.ilike(f"%{ticker_symbol}%"),
+            )
+        )
+        .order_by(
+            (
+                Artifact.artifact_metadata["favourites_count"].as_integer()
+                + Artifact.artifact_metadata["reblogs_count"].as_integer()
+                + Artifact.artifact_metadata["replies_count"].as_integer()
+            ).desc().nullslast()
+        )
+        .limit(limit * 3)
+        .all()
+    )
+    return [
+        artifact
+        for artifact in candidates
+        if _is_mastodon_ticker_post(artifact, ticker_symbol, ticker.company_name)
+    ][:limit]

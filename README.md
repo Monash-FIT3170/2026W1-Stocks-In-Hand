@@ -86,7 +86,7 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
-| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts plus relevant Reddit and Bluesky posts, runs Groq categorisation/summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact. Params include `reddit_limit` and `bluesky_limit` |
+| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts plus relevant Reddit, Bluesky and Mastodon posts, runs Groq categorisation/summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact. Params include `reddit_limit`, `bluesky_limit` and `mastodon_limit` |
 
 ### Reddit (PRAW)
 | Method | Path | Description |

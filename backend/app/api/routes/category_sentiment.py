@@ -274,6 +274,7 @@ def _summarise_recent_public_discussion(
     days: int,
     reddit_limit: int,
     bluesky_limit: int,
+    mastodon_limit: int,
 ):
     reddit_posts = artifact_crud.get_reddit_posts_for_ticker(
         db=db,
@@ -287,8 +288,14 @@ def _summarise_recent_public_discussion(
         days=days,
         limit=bluesky_limit,
     )
+    mastodon_posts = artifact_crud.get_mastodon_posts_for_ticker(
+        db=db,
+        ticker_symbol=ticker.upper(),
+        days=days,
+        limit=mastodon_limit,
+    )
 
-    if not reddit_posts and not bluesky_posts:
+    if not reddit_posts and not bluesky_posts and not mastodon_posts:
         return {
             "summary": f"No public discussion posts mentioning {ticker.upper()} in the last {days} days.",
             "dominant_sentiment": "neutral",
@@ -316,12 +323,24 @@ def _summarise_recent_public_discussion(
         }
         for artifact in bluesky_posts
     )
+    post_dicts.extend(
+        {
+            "title": artifact.title or "",
+            "body": artifact.raw_text or "",
+            "score": sum(
+                int((artifact.artifact_metadata or {}).get(key, 0) or 0)
+                for key in ("favourites_count", "reblogs_count", "replies_count")
+            ),
+            "url": artifact.url or "",
+        }
+        for artifact in mastodon_posts
+    )
 
     try:
         return reddit_route._summarise_reddit_posts(
             ticker_symbol=ticker.upper(),
             posts=post_dicts,
-            source_name="Reddit and Bluesky",
+            source_name="Reddit, Bluesky and Mastodon",
         )
     except Exception as exc:
         raise HTTPException(
@@ -338,6 +357,7 @@ def build_ticker_category_sentiment(
     asx_limit: int = 200,
     reddit_limit: int = 50,
     bluesky_limit: int = 50,
+    mastodon_limit: int = 50,
     offset: int = 0,
     batch_size: int = 0,
     persist: bool = True,
@@ -364,13 +384,14 @@ def build_ticker_category_sentiment(
             days=days,
             reddit_limit=reddit_limit,
             bluesky_limit=bluesky_limit,
+            mastodon_limit=mastodon_limit,
         )
         category_map["user_discussion"] = str(reddit_summary.get("summary", ""))
 
     if not category_map:
         raise HTTPException(
             status_code=404,
-            detail="No ASX categories or Reddit summary text found",
+            detail="No ASX categories or public discussion summary text found",
         )
     if not any(text for text in category_map.values()):
         raise HTTPException(status_code=404, detail="All sentiment input text is empty")
@@ -393,6 +414,7 @@ def analyse_ticker_category_sentiments(
     asx_limit: int = 200,
     reddit_limit: int = 50,
     bluesky_limit: int = 50,
+    mastodon_limit: int = 50,
     offset: int = 0,
     batch_size: int = 0,
     persist: bool = True,
@@ -405,6 +427,7 @@ def analyse_ticker_category_sentiments(
         asx_limit=asx_limit,
         reddit_limit=reddit_limit,
         bluesky_limit=bluesky_limit,
+        mastodon_limit=mastodon_limit,
         offset=offset,
         batch_size=batch_size,
         persist=persist,
