@@ -41,6 +41,7 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
+from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
 
 # Every table the 0001_initial_minimal migration creates. Kept as an exact set so a
@@ -479,10 +480,10 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
     """Verify the artifact analysis chain can be written and read back.
 
     ``Ticker -> Artifact -> ArtifactSentiment / ArtifactSummary`` is the whole
-    analysis path that survived the schema refactor. ``parsing/storage.py``
-    writes all three in one pass, and the ticker overview and deep-dive
-    endpoints read them back through the ``sentiments`` and ``summaries``
-    backrefs, so both directions need to work.
+    analysis path that survived the schema refactor. ``crud.artifact.store_artifact_analysis``
+    (called from ``lambdas/analysis.py``) writes all three in one pass, and the
+    ticker overview and deep-dive endpoints read them back through the
+    ``sentiments`` and ``summaries`` backrefs, so both directions need to work.
     """
     ticker = Ticker(
         symbol=f"S{uuid.uuid4().hex[:8].upper()}",
@@ -537,9 +538,9 @@ def test_announcements_feed_and_trending_only_count_asx_artifacts(
 ) -> None:
     """Announcement APIs should count only ASX-sourced artifacts.
 
-    Duplicates are no longer filtered at read time: ``parsing/storage.py`` skips
-    them at insert time by ``content_hash``, so an announcement never reaches the
-    table twice.
+    Duplicates are no longer filtered at read time: artifact creation rejects
+    them at insert time by ``content_hash``/``source_document_identity``
+    uniqueness, so an announcement never reaches the table twice.
     """
     from datetime import date
 
@@ -678,13 +679,13 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
     assert created is True
     assert duplicate_created is False
     assert duplicate_run.id == run.id
-    assert run.status == "enqueueing"
+    assert run.status == ScrapeRunStatus.ENQUEUEING
 
     scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
     scrape_run_crud.mark_run_discovery_started(db_session, run.id)
     scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
     db_session.refresh(run)
-    assert run.status == "discovering"
+    assert run.status == ScrapeRunStatus.DISCOVERING
 
     canonical_url = f"https://example.test/{uuid.uuid4()}.pdf"
     artifact, artifact_created = scrape_run_crud.get_or_create_artifact(
@@ -773,11 +774,11 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
 
     db_session.refresh(run)
     db_session.refresh(artifact)
-    assert run.status == "completed"
+    assert run.status == ScrapeRunStatus.COMPLETED
     assert run.items_downloaded == 1
     assert run.items_analyzed == 1
-    assert artifact.download_status == "stored"
-    assert artifact.analysis_status == "completed"
+    assert artifact.download_status == DownloadStatus.STORED
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
     assert (
         db_session.query(ArtifactSummary)
         .filter(ArtifactSummary.artifact_id == artifact.id)
@@ -804,10 +805,10 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
     )
     db_session.refresh(run)
     db_session.refresh(artifact)
-    assert run.status == "completed"
+    assert run.status == ScrapeRunStatus.COMPLETED
     assert run.items_failed == 0
-    assert artifact.download_status == "stored"
-    assert artifact.analysis_status == "completed"
+    assert artifact.download_status == DownloadStatus.STORED
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
     assert (
         db_session.query(ArtifactSentiment)
         .filter(ArtifactSentiment.artifact_id == artifact.id)

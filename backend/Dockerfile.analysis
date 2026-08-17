@@ -20,7 +20,13 @@ RUN python -c "from transformers import AutoModelForSequenceClassification, Auto
 
 COPY app ${LAMBDA_TASK_ROOT}/app
 COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
-COPY parsing ${LAMBDA_TASK_ROOT}/parsing
+
+# Only the modules the analysis handler actually imports. parsing/env.py and
+# parsing/print_artifacts.py are local CLI-only tools and are deliberately not
+# shipped into the Lambda image.
+COPY parsing/__init__.py parsing/analysis.py parsing/classifier.py \
+    ${LAMBDA_TASK_ROOT}/parsing/
+COPY parsing/categories ${LAMBDA_TASK_ROOT}/parsing/categories
 
 # RapidOCR includes its ONNX models in the image, so scanned PDFs are analysed
 # without Textract, network calls, or a separate OCR service.

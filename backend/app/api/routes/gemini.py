@@ -8,7 +8,7 @@ from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.services import gemini as gemini_service
+from app.services import groq as gemini_service
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
 

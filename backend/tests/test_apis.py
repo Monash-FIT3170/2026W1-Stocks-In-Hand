@@ -169,7 +169,7 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:
     """Gemini summary parsing should return the four fields the UI uses."""
-    from app.services.gemini import parse_summary_response
+    from app.services.groq import parse_summary_response
 
     result = parse_summary_response(
         """
@@ -194,7 +194,7 @@ def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
     """Incomplete Gemini JSON should fail before storage uses it."""
     import pytest
 
-    from app.services.gemini import parse_summary_response
+    from app.services.groq import parse_summary_response
 
     with pytest.raises(ValueError, match="missing keys"):
         parse_summary_response('{"summary": "Only one field"}')

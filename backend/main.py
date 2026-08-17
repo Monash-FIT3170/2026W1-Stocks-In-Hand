@@ -34,6 +34,7 @@ from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
 from app.services import scrape_queue
 from app.sources import source_for_ticker
+from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
 
 
 app = FastAPI(title="StonksInHand API")
@@ -192,22 +193,14 @@ def scrape_ticker(
         idempotency_key=f"scrape:{symbol}:{request_key}",
     )
 
-    active_or_finished = {
-        "queued",
-        "discovering",
-        "downloading",
-        "analyzing",
-        "partial",
-        "completed",
-    }
-    if not created and run.status in active_or_finished:
+    if not created and run.status in RUN_ACTIVE_OR_FINISHED:
         return {
             "status": run.status,
             "ticker": symbol,
             "scrape_run_id": run.id,
         }
 
-    if not created and run.status == "failed":
+    if not created and run.status == ScrapeRunStatus.FAILED:
         run = scrape_run_crud.mark_run_enqueueing(db, run.id)
 
     message = QueueAMessage(
@@ -231,7 +224,7 @@ def scrape_ticker(
 
     scrape_run_crud.mark_run_queued_if_enqueueing(db, run.id)
     return {
-        "status": "queued",
+        "status": ScrapeRunStatus.QUEUED,
         "ticker": symbol,
         "scrape_run_id": run.id,
     }

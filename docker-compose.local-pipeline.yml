@@ -1,0 +1,132 @@
+# Overlay that runs the discovery -> download -> analysis pipeline locally,
+# against LocalStack instead of AWS. Combine with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local-pipeline.yml up --build
+#
+# Then POST /scrape/{ticker} against the API works locally instead of always
+# 503ing (see the "Local pipeline development" section in the README). Not
+# used in AWS -- infra/template.yaml creates the real SQS/S3 resources there.
+#
+# All backend-image services here share one build via the `image:` tag below
+# so docker compose only builds the backend image once.
+services:
+  backend:
+    image: stocks-in-hand-backend:local
+    environment:
+      DISCOVERY_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-discovery
+      RAW_DOCUMENT_BUCKET: stocks-in-hand-local-raw
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+    depends_on:
+      localstack:
+        condition: service_healthy
+      pipeline-bootstrap:
+        condition: service_completed_successfully
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: sqs,s3
+      DEFAULT_REGION: ap-southeast-2
+      # Without this, LocalStack returns subdomain-style queue URLs
+      # (sqs.<region>.localhost.localstack.cloud) meant for host-side
+      # access, which containers on this Docker network can't resolve.
+      # Path-style URLs (http://localstack:4566/<account>/<queue>) match
+      # the hardcoded *_QUEUE_URL values below.
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - "4566:4566"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pipeline-bootstrap:
+    image: stocks-in-hand-backend:local
+    environment:
+      RAW_DOCUMENT_BUCKET: stocks-in-hand-local-raw
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+    command: ["python", "scripts/local_pipeline_bootstrap.py"]
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+  discovery-worker:
+    image: stocks-in-hand-backend:local
+    environment:
+      # `python scripts/local_worker.py` puts scripts/ on sys.path, not
+      # /app, so lambdas/app/parsing wouldn't otherwise be importable.
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+      DOWNLOAD_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-download
+      DISCOVERY_LOOKBACK_DAYS: "30"
+      MAX_DOCUMENTS_PER_RUN: "3"
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+      WORKER_HANDLER: lambdas.discovery.handler
+      WORKER_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-discovery
+    command: ["python", "scripts/local_worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  download-worker:
+    image: stocks-in-hand-backend:local
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+      RAW_DOCUMENT_BUCKET: stocks-in-hand-local-raw
+      MAX_DOCUMENT_BYTES: "10485760"
+      MAX_DOCX_UNCOMPRESSED_BYTES: "20971520"
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+      WORKER_HANDLER: lambdas.download.handler
+      WORKER_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-download
+    command: ["python", "scripts/local_worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  analysis-worker:
+    image: stocks-in-hand-backend:local
+    env_file:
+      - ./backend/.env
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+      RAW_DOCUMENT_BUCKET: stocks-in-hand-local-raw
+      MAX_PDF_PAGES: "100"
+      MAX_OCR_PAGES: "5"
+      MAX_OCR_PIXELS_PER_PAGE: "8000000"
+      MAX_ANALYSIS_CHARS: "50000"
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+      WORKER_HANDLER: lambdas.analysis.handler
+      WORKER_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-analysis
+    command: ["python", "scripts/local_worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy

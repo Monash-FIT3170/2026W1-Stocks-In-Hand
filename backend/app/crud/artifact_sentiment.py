@@ -14,7 +14,7 @@ def get_sentiments_by_artifact(db: Session, artifact_id: UUID):
     return db.query(ArtifactSentiment).filter(ArtifactSentiment.artifact_id == artifact_id).all()
 
 
-def upsert_artifact_sentiment(
+def stage_artifact_sentiment(
     db: Session,
     *,
     artifact_id: UUID,
@@ -23,7 +23,15 @@ def upsert_artifact_sentiment(
     confidence_score: Decimal | float | None = None,
     model_used: str | None = None,
 ) -> ArtifactSentiment:
-    """Create or update the single sentiment row for an artifact."""
+    """Find-or-create the single sentiment row for an artifact and stage
+    field changes on it, without committing.
+
+    Use this (instead of `upsert_artifact_sentiment`) when the caller is
+    already managing its own transaction and commit/retry — e.g.
+    `crud.artifact.store_artifact_analysis`, which stages the artifact,
+    summary, and sentiment rows together and commits them in one
+    transaction. Standalone callers should use `upsert_artifact_sentiment`.
+    """
     row = (
         db.query(ArtifactSentiment)
         .filter(ArtifactSentiment.artifact_id == artifact_id)
@@ -39,6 +47,28 @@ def upsert_artifact_sentiment(
     row.stance = stance
     row.confidence_score = confidence_score
     row.model_used = model_used
+    return row
+
+
+def upsert_artifact_sentiment(
+    db: Session,
+    *,
+    artifact_id: UUID,
+    sentiment_label: str,
+    stance: str | None = None,
+    confidence_score: Decimal | float | None = None,
+    model_used: str | None = None,
+) -> ArtifactSentiment:
+    """Create or update the single sentiment row for an artifact, retrying
+    once if a concurrent writer raced us to create the row."""
+    row = stage_artifact_sentiment(
+        db,
+        artifact_id=artifact_id,
+        sentiment_label=sentiment_label,
+        stance=stance,
+        confidence_score=confidence_score,
+        model_used=model_used,
+    )
     try:
         db.commit()
         db.refresh(row)

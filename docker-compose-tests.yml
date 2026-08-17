@@ -26,7 +26,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ./backend/_test_output:/test_output
+      - ./backend/_test_output:/app/_test_output
 
   frontend:
     build:

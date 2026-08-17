@@ -17,6 +17,7 @@ from app.api.deps import require_admin_investor
 from app.messages import QueueAMessage, QueueBMessage
 from app.schemas.investor import InvestorUpdate
 from app.services import scrape_queue
+from app.status import ScrapeRunStatus
 
 
 def test_queue_a_normalises_ticker_and_serialises_identifiers() -> None:
@@ -83,7 +84,7 @@ def test_enqueue_discovery_sends_validated_json(monkeypatch: pytest.MonkeyPatch)
     assert '"ticker":"CSL"' in call["MessageBody"]
 
 
-def _run(status: str = "enqueueing") -> MagicMock:
+def _run(status: str = ScrapeRunStatus.ENQUEUEING) -> MagicMock:
     run = MagicMock()
     run.id = uuid4()
     run.status = status
@@ -112,7 +113,7 @@ def test_scrape_endpoint_creates_run_and_enqueues(monkeypatch: pytest.MonkeyPatc
     )
 
     assert result == {
-        "status": "queued",
+        "status": ScrapeRunStatus.QUEUED,
         "ticker": "CSL",
         "scrape_run_id": run.id,
     }
@@ -127,7 +128,7 @@ def test_scrape_endpoint_creates_run_and_enqueues(monkeypatch: pytest.MonkeyPatc
 def test_duplicate_active_request_returns_same_run_without_second_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run = _run("discovering")
+    run = _run(ScrapeRunStatus.DISCOVERING)
     monkeypatch.setattr(
         main.scrape_run_crud,
         "get_or_create_queued_run",
@@ -144,14 +145,14 @@ def test_duplicate_active_request_returns_same_run_without_second_send(
     )
 
     assert result["scrape_run_id"] == run.id
-    assert result["status"] == "discovering"
+    assert result["status"] == ScrapeRunStatus.DISCOVERING
     enqueue.assert_not_called()
 
 
 def test_duplicate_enqueueing_request_resends_queue_a(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run = _run("enqueueing")
+    run = _run(ScrapeRunStatus.ENQUEUEING)
     monkeypatch.setattr(
         main.scrape_run_crud,
         "get_or_create_queued_run",
@@ -173,7 +174,7 @@ def test_duplicate_enqueueing_request_resends_queue_a(
         db=MagicMock(),
     )
 
-    assert result["status"] == "queued"
+    assert result["status"] == ScrapeRunStatus.QUEUED
     enqueue.assert_called_once()
     mark_queued.assert_called_once()
 

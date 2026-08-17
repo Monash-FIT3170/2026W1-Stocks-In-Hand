@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from app.sources import SOURCES
+
 from .base import BaseScraper, Announcement
 from .companies.anz import ANZScraper
 from .companies.csl import CSLScraper
@@ -7,7 +9,11 @@ from .companies.bhp import BHPScraper
 from .companies.cba import CBAScraper
 from .companies.wes import WESScraper
 
-# Add one import and one line here each time a new company is onboarded.
+# Add one import and one line here each time a new company is onboarded, and
+# add a matching entry to app.sources.SOURCES (the ticker catalog the AWS
+# pipeline uses for adapter/URL lookups). The two are kept in sync by the
+# check below rather than by one being derived from the other, since this
+# dict's values (scraper classes) have no equivalent in app.sources.
 REGISTRY: dict[str, type[BaseScraper]] = {
     "ANZ": ANZScraper,
     "BHP": BHPScraper,
@@ -15,6 +21,15 @@ REGISTRY: dict[str, type[BaseScraper]] = {
     "CSL": CSLScraper,
     "WES": WESScraper,
 }
+
+_missing_scraper = set(SOURCES) - set(REGISTRY)
+_missing_source = set(REGISTRY) - set(SOURCES)
+if _missing_scraper or _missing_source:
+    raise RuntimeError(
+        "scrapers.registry.REGISTRY and app.sources.SOURCES have drifted: "
+        f"tickers in SOURCES with no scraper: {sorted(_missing_scraper) or 'none'}; "
+        f"tickers in REGISTRY with no source definition: {sorted(_missing_source) or 'none'}"
+    )
 
 
 def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:

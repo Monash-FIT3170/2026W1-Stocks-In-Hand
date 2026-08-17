@@ -19,6 +19,7 @@ from pydantic import ValidationError
 import main
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
+from app.status import ScrapeRunStatus
 from lambdas import discovery, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument
@@ -154,7 +155,7 @@ def test_bhp_discovery_message_preserves_article_resolution_metadata(
     monkeypatch.setattr(discovery, "database_session", fake_session)
     monkeypatch.setattr(
         "app.crud.scrape_run.get_scrape_run",
-        lambda *_args: SimpleNamespace(status="queued"),
+        lambda *_args: SimpleNamespace(status=ScrapeRunStatus.QUEUED),
     )
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_run_discovery_started",
@@ -194,7 +195,7 @@ def test_bhp_discovery_message_preserves_article_resolution_metadata(
 def test_api_enqueues_enabled_non_csl_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run = SimpleNamespace(id=uuid4(), status="enqueueing")
+    run = SimpleNamespace(id=uuid4(), status=ScrapeRunStatus.ENQUEUEING)
     enqueue = MagicMock(return_value="message-id")
     monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", list(SOURCES))
     monkeypatch.setattr(
