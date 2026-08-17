@@ -557,7 +557,7 @@ Resources:
                   - cloudformation:CreateStack
                   - cloudformation:UpdateStack
                 Resource: !Sub >-
-                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-deployment-test-*/*
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-depl-test-*/*
                 Condition:
                   ArnEquals:
                     cloudformation:RoleArn: !GetAtt DeploymentTestCloudFormationExecutionRole.Arn
@@ -572,12 +572,12 @@ Resources:
                   - cloudformation:ListChangeSets
                   - cloudformation:ListStackResources
                 Resource: !Sub >-
-                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-deployment-test-*/*
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-depl-test-*/*
               - Sid: DeleteDeploymentTestStacks
                 Effect: Allow
                 Action: cloudformation:DeleteStack
                 Resource: !Sub >-
-                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-deployment-test-*/*
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-depl-test-*/*
               - Sid: InspectNewApplicationTemplate
                 Effect: Allow
                 Action: cloudformation:GetTemplateSummary

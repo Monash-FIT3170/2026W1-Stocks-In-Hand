@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      STACK_NAME: stocks-in-hand-deployment-test-${{ github.run_id }}
+      STACK_NAME: stocks-in-hand-depl-test-${{ github.run_id }}
       PARAMETER_PATH_PREFIX: /stocks-in-hand/deployment-test/${{ github.run_id }}
       IMAGE_TAG: deployment-test-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -286,7 +286,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
-      STACK_NAME: stocks-in-hand-deployment-test-${{ github.run_id }}
+      STACK_NAME: stocks-in-hand-depl-test-${{ github.run_id }}
       PARAMETER_PATH_PREFIX: /stocks-in-hand/deployment-test/${{ github.run_id }}
       IMAGE_TAG: deployment-test-${{ github.run_id }}-${{ github.run_attempt }}
 
