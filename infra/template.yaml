@@ -389,7 +389,7 @@ Resources:
           - lambdas.analysis.handler
       Architectures:
         - x86_64
-      MemorySize: 6144
+      MemorySize: 3008
       Timeout: 720
       EphemeralStorage:
         Size: 1024
