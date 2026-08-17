@@ -602,6 +602,7 @@ Resources:
                   - s3:DeleteBucket
                   - s3:GetBucketLocation
                   - s3:ListBucket
+                  - s3:ListBucketVersions
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-depl-test-*-${AWS::AccountId}-raw"
                   - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-depl-test-*-${AWS::AccountId}-frontend"
