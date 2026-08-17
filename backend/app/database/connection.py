@@ -25,6 +25,11 @@ if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
     # Lambda execution environments already scale horizontally. Avoid retaining
     # one SQLAlchemy pool per warm environment when using Supabase's pooler.
     _engine_options["poolclass"] = NullPool
+elif "pooler.supabase.com" in settings.DATABASE_URL:
+    # Supabase Session Pooler has a per-project client-connection cap. Cap
+    # SQLAlchemy's own pool below the Supabase limit and recycle connections
+    # so idle ones don't get killed by the pooler.
+    _engine_options.update(pool_size=5, max_overflow=5, pool_recycle=1800)
 
 engine = create_engine(settings.DATABASE_URL, **_engine_options)
 

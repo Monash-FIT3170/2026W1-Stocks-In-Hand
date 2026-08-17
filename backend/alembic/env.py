@@ -15,7 +15,10 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# configparser (used by alembic) treats "%" as an interpolation marker, so
+# any percent-encoded characters in a Supabase password would raise
+# "invalid interpolation syntax". Escape them by doubling.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

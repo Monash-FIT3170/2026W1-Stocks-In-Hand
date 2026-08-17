@@ -1,17 +1,4 @@
 services:
-  db:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: spike
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d spike"]
-      interval: 5s
-      retries: 5
-
   backend:
     # Contains api key for groq usage
     env_file:
@@ -19,15 +6,9 @@ services:
     build:
       context: ./backend
       target: production
-    environment:
-      DATABASE_URL: postgresql://user:password@db:5432/spike
-      SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
-    depends_on:
-      db:
-        condition: service_healthy
     healthcheck:
       test: "curl localhost:8000/health"
       interval: 10s
@@ -48,6 +29,3 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-
-volumes:
-  postgres_data:
