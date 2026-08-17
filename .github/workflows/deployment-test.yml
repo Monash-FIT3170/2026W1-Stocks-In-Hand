@@ -1,0 +1,371 @@
+name: Deployment test
+
+on:
+  push:
+    branches:
+      - deployment-test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-deployment-test
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+
+jobs:
+  deploy:
+    name: Deploy and smoke-test an isolated stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      STACK_NAME: stocks-in-hand-deployment-test-${{ github.run_id }}
+      PARAMETER_PATH_PREFIX: /stocks-in-hand/deployment-test/${{ github.run_id }}
+      IMAGE_TAG: deployment-test-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Check out the deployment-test revision
+        uses: actions/checkout@v4
+
+      - name: Prepare diagnostic evidence directory
+        shell: bash
+        run: mkdir -p deployment-evidence
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_TEST_ROLE_ARN }}
+          role-session-name: stocks-in-hand-deployment-test
+
+      - name: Resolve isolated deployment values
+        id: values
+        shell: bash
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          ENVIRONMENT_NAME="depl-test-${GITHUB_RUN_ID: -8}"
+          CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-deployment-test-execution"
+          {
+            echo "AWS_ACCOUNT_ID=$ACCOUNT_ID"
+            echo "ECR_REGISTRY=$REGISTRY"
+            echo "ENVIRONMENT_NAME=$ENVIRONMENT_NAME"
+            echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
+          } >> "$GITHUB_ENV"
+          echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
+          {
+            echo "Test stack: $STACK_NAME"
+            echo "Test environment: $ENVIRONMENT_NAME"
+            echo "Image tag: $IMAGE_TAG"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the per-run runtime configuration
+        shell: bash
+        run: |
+          # This is deliberately non-production data. The smoke test verifies
+          # SSM access at Lambda startup without exposing the Supabase password
+          # to code pushed to the deployment-test branch.
+          aws ssm put-parameter \
+            --name "$PARAMETER_PATH_PREFIX/database-url" \
+            --type SecureString \
+            --value "postgresql://deployment-test:placeholder@localhost:5432/deployment_test?sslmode=require" \
+            --overwrite
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to the isolated ECR repositories
+        shell: bash
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" |
+            docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.api
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-deployment-test-api:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=deployment-test-api
+          cache-to: type=gha,mode=max,scope=deployment-test-api
+
+      - name: Build and push scraper image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.scraper
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-deployment-test-scraper:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=deployment-test-scraper
+          cache-to: type=gha,mode=max,scope=deployment-test-scraper
+
+      - name: Build and push analysis image
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.analysis
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.values.outputs.registry }}/stocks-in-hand-deployment-test-analysis:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=deployment-test-analysis
+          cache-to: type=gha,mode=max,scope=deployment-test-analysis
+
+      - name: Verify all test images exist
+        shell: bash
+        run: |
+          for image in api scraper analysis; do
+            aws ecr describe-images \
+              --repository-name "stocks-in-hand-deployment-test-$image" \
+              --image-ids "imageTag=$IMAGE_TAG"
+          done
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate the SAM template
+        shell: bash
+        run: sam validate --lint --template-file infra/template.yaml
+
+      - name: Create the isolated change set
+        shell: bash
+        run: |
+          sam deploy \
+            --template-file infra/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --role-arn "$CFN_ROLE_ARN" \
+            --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-deployment-test-api" \
+            --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-deployment-test-api" \
+            --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-deployment-test-scraper" \
+            --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-deployment-test-scraper" \
+            --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-deployment-test-analysis" \
+            --no-confirm-changeset \
+            --no-execute-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "Environment=$ENVIRONMENT_NAME" \
+              "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
+              "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "AlarmEmailSubscriptionEnabled=false" \
+              "ScheduleEnabled=false" \
+              "AnalysisEnabled=false" \
+              "BedrockEnabled=false" \
+              "ScheduledTickers=ANZ" \
+              "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-deployment-test-api:$IMAGE_TAG" \
+              "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-deployment-test-scraper:$IMAGE_TAG" \
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-deployment-test-analysis:$IMAGE_TAG"
+
+      - name: Capture and execute the test change set
+        shell: bash
+        run: |
+          CHANGE_SET_ARN="$(aws cloudformation list-change-sets \
+            --stack-name "$STACK_NAME" \
+            --query "reverse(sort_by(Summaries[?Status=='CREATE_COMPLETE'], &CreationTime))[0].ChangeSetId" \
+            --output text)"
+          if [ -z "$CHANGE_SET_ARN" ] || [ "$CHANGE_SET_ARN" = "None" ]; then
+            echo "No executable deployment-test change set was created" >&2
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --output json > deployment-evidence/change-set.json
+          aws cloudformation execute-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME"
+          aws cloudformation wait stack-create-complete --stack-name "$STACK_NAME"
+          echo "CHANGE_SET_ARN=$CHANGE_SET_ARN" >> "$GITHUB_ENV"
+          echo "Change set: $CHANGE_SET_ARN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the static frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+        run: |
+          npm ci
+          npm run build
+          test -f out/index.html
+
+      - name: Resolve test frontend resources
+        shell: bash
+        run: |
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+          DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendDistributionId'].OutputValue" \
+            --output text)"
+          FRONTEND_URL="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+            --output text)"
+          {
+            echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
+            echo "DISTRIBUTION_ID=$DISTRIBUTION_ID"
+            echo "FRONTEND_URL=$FRONTEND_URL"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish the test frontend
+        shell: bash
+        run: |
+          aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" \
+            --delete \
+            --cache-control "no-cache"
+          aws s3 sync frontend/out/_next/static "s3://$FRONTEND_BUCKET/_next/static" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"
+
+      - name: Smoke-test CloudFront, API Gateway, Lambda and SSM startup
+        shell: bash
+        run: |
+          aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          for attempt in {1..40}; do
+            response="$(curl --fail --silent --show-error "$FRONTEND_URL/api/health" || true)"
+            if jq -e '.status == "ok"' >/dev/null <<<"$response"; then
+              echo "Smoke test passed: $FRONTEND_URL/api/health"
+              exit 0
+            fi
+            echo "Health endpoint is not ready yet (attempt $attempt/40)."
+            sleep 15
+          done
+          echo "Health endpoint did not become ready" >&2
+          exit 1
+
+      - name: Capture deployment diagnostics
+        if: always()
+        shell: bash
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --output json > deployment-evidence/stack.json || true
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --output json > deployment-evidence/stack-events.json || true
+          {
+            echo "stack_name=$STACK_NAME"
+            echo "environment_name=${ENVIRONMENT_NAME:-unresolved}"
+            echo "image_tag=$IMAGE_TAG"
+            echo "change_set_arn=${CHANGE_SET_ARN:-not-created}"
+          } > deployment-evidence/context.txt
+
+      - name: Upload deployment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-test-evidence-${{ github.run_id }}
+          path: deployment-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  teardown:
+    name: Tear down isolated stack and images
+    needs: deploy
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      STACK_NAME: stocks-in-hand-deployment-test-${{ github.run_id }}
+      PARAMETER_PATH_PREFIX: /stocks-in-hand/deployment-test/${{ github.run_id }}
+      IMAGE_TAG: deployment-test-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_TEST_ROLE_ARN }}
+          role-session-name: stocks-in-hand-deployment-test-cleanup
+
+      - name: Resolve exact resources to remove
+        shell: bash
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          ENVIRONMENT_NAME="depl-test-${GITHUB_RUN_ID: -8}"
+          {
+            echo "ENVIRONMENT_NAME=$ENVIRONMENT_NAME"
+            echo "RAW_BUCKET=stocks-in-hand-$ENVIRONMENT_NAME-$ACCOUNT_ID-raw"
+            echo "FRONTEND_BUCKET=stocks-in-hand-$ENVIRONMENT_NAME-$ACCOUNT_ID-frontend"
+          } >> "$GITHUB_ENV"
+
+      - name: Delete the CloudFormation stack
+        shell: bash
+        run: |
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            aws cloudformation delete-stack --stack-name "$STACK_NAME"
+            aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+          else
+            echo "No stack exists for this run."
+          fi
+
+      - name: Empty and delete retained test buckets
+        shell: bash
+        run: |
+          empty_versioned_bucket() {
+            local bucket="$1"
+            local objects
+            if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+              echo "Bucket $bucket does not exist."
+              return 0
+            fi
+            while true; do
+              objects="$(aws s3api list-object-versions --bucket "$bucket" --output json | jq -c '([.Versions[]?, .DeleteMarkers[]?] | map({Key, VersionId}) | .[:1000])')"
+              if [ "$objects" = "[]" ]; then
+                break
+              fi
+              aws s3api delete-objects \
+                --bucket "$bucket" \
+                --delete "{\"Objects\":$objects,\"Quiet\":true}"
+            done
+            aws s3api delete-bucket --bucket "$bucket"
+          }
+          empty_versioned_bucket "$RAW_BUCKET"
+          empty_versioned_bucket "$FRONTEND_BUCKET"
+
+      - name: Remove per-run configuration and images
+        shell: bash
+        run: |
+          if aws ssm get-parameter \
+            --name "$PARAMETER_PATH_PREFIX/database-url" >/dev/null 2>&1; then
+            aws ssm delete-parameter --name "$PARAMETER_PATH_PREFIX/database-url"
+          fi
+          for image in api scraper analysis; do
+            repository="stocks-in-hand-deployment-test-$image"
+            if aws ecr describe-images \
+              --repository-name "$repository" \
+              --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
+              aws ecr batch-delete-image \
+                --repository-name "$repository" \
+                --image-ids "imageTag=$IMAGE_TAG"
+            fi
+          done
+
+      - name: Verify stack removal
+        shell: bash
+        run: |
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1; then
+            echo "Deployment-test stack still exists after cleanup" >&2
+            exit 1
+          fi
+          echo "Deployment-test stack and its per-run resources were removed."

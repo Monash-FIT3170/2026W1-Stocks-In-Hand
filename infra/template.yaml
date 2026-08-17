@@ -6,8 +6,8 @@ Parameters:
   Environment:
     Type: String
     Default: staging
-    AllowedValues:
-      - staging
+    AllowedPattern: ^[a-z][a-z0-9-]{0,25}$
+    ConstraintDescription: Must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens.
   ParameterPathPrefix:
     Type: String
     Default: /stocks-in-hand/staging
@@ -15,6 +15,13 @@ Parameters:
   OperationsEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  AlarmEmailSubscriptionEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Whether to create the SNS email subscription for alarm notifications.
   ScheduleEnabled:
     Type: String
     Default: "false"
@@ -49,15 +56,18 @@ Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
   IsAnalysisEnabled: !Equals [!Ref AnalysisEnabled, "true"]
   IsBedrockEnabled: !Equals [!Ref BedrockEnabled, "true"]
+  IsAlarmEmailSubscriptionEnabled: !Equals [!Ref AlarmEmailSubscriptionEnabled, "true"]
 
 Resources:
   AlarmTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub stocks-in-hand-${Environment}-alarms
-      Subscription:
-        - Endpoint: !Ref OperationsEmail
-          Protocol: email
+      Subscription: !If
+        - IsAlarmEmailSubscriptionEnabled
+        - - Endpoint: !Ref OperationsEmail
+            Protocol: email
+        - !Ref AWS::NoValue
 
   DiscoveryDeadLetterQueue:
     Type: AWS::SQS::Queue

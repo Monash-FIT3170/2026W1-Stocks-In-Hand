@@ -80,15 +80,18 @@ jobs:
             echo "release_sha=$GITHUB_SHA"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Reject an existing immutable release tag
+      - name: Detect existing immutable release images
+        id: image_state
         shell: bash
         run: |
           for image in api scraper analysis; do
             if aws ecr describe-images \
               --repository-name "stocks-in-hand-$image" \
               --image-ids "imageTag=$RELEASE_SHA" >/dev/null 2>&1; then
-              echo "Release $RELEASE_SHA already exists in stocks-in-hand-$image" >&2
-              exit 1
+              echo "$image_exists=true" >> "$GITHUB_OUTPUT"
+              echo "Reusing existing immutable $image image for $RELEASE_SHA"
+            else
+              echo "$image_exists=false" >> "$GITHUB_OUTPUT"
             fi
           done
 
@@ -102,6 +105,7 @@ jobs:
             docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
       - name: Build and push API image
+        if: steps.image_state.outputs.api_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: backend
@@ -114,6 +118,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=api
 
       - name: Build and push scraper image
+        if: steps.image_state.outputs.scraper_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: backend
@@ -126,6 +131,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=scraper
 
       - name: Build and push analysis image
+        if: steps.image_state.outputs.analysis_exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: backend
