@@ -72,6 +72,14 @@ def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
     return next_metadata
 
 
+def _has_current_summary(metadata: dict) -> bool:
+    """Return whether metadata includes both summary copy and clarity lists."""
+    return bool(metadata.get("about")) and all(
+        isinstance(metadata.get(key), list)
+        for key in gemini_service.SUMMARY_LIST_KEYS
+    )
+
+
 @router.post("/categorise/recent")
 def categorise_recent_artifacts(
     ticker: str,
@@ -146,7 +154,7 @@ def summarise_ticker_artifacts(
 
     for artifact in artifacts:
         metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        if metadata.get("about"):
+        if _has_current_summary(metadata):
             skipped += 1
             continue
 
