@@ -568,6 +568,7 @@ Resources:
                 Action:
                   - cloudformation:DeleteChangeSet
                   - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackResource
                   - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStacks
                   - cloudformation:ExecuteChangeSet
