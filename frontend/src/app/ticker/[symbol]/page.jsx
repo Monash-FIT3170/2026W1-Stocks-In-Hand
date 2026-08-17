@@ -96,14 +96,67 @@ export default function TickerSummaryRoute({ params }) {
                 <CitationLinks sources={data.sources} />
               </article>
               <article className={styles.sentimentCard}>
-                <h2>{data.sentiment_label}</h2>
+                <div className={styles.sentimentHeader}>
+                  <div>
+                    <span className={styles.sentimentEyebrow}>Market Sentiment</span>
+                    <h2>{data.sentiment_label || "Neutral"}</h2>
+                  </div>
+
+                  <strong className={styles.sentimentScore}>
+                    {data.public_sentiment_pct || "N/A"}
+                  </strong>
+                </div>
+
                 <p>
-                  Current saved signals are classified as {(data.sentiment_label || "neutral").toLowerCase()}.
-                  Public sentiment coverage is {data.public_sentiment_pct}.
+                  Current saved signals are classified as{" "}
+                  {(data.sentiment_label || "neutral").toLowerCase()}.
                 </p>
+
                 <div className={styles.sentimentBar}>
                   <span>Public Sentiment</span>
-                  <strong>{data.public_sentiment_pct}</strong>
+                  <strong>{data.public_sentiment_pct || "N/A"}</strong>
+                </div>
+
+                <div className={styles.analysisSection}>
+                  <h3>Key Risks</h3>
+
+                  {data.risks?.length > 0 ? (
+                    <ul className={styles.riskList}>
+                      {data.risks.map((risk, index) => (
+                        <li key={index}>{risk}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className={styles.analysisEmpty}>
+                      No key risks are currently available.
+                    </p>
+                  )}
+                </div>
+
+                <div className={styles.analysisSection}>
+                  <h3>Key Themes</h3>
+
+                  {data.themes?.length > 0 ? (
+                    <div className={styles.themeList}>
+                      {data.themes.map((theme, index) => (
+                        <span key={index} className={styles.themeTag}>
+                          {theme}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={styles.analysisEmpty}>
+                      No key themes are currently available.
+                    </p>
+                  )}
+                </div>
+
+                <div className={styles.analysisSection}>
+                  <h3>Current Narrative</h3>
+
+                  <p className={styles.narrativeText}>
+                    {data.narrative || "No narrative analysis is currently available."}
+                  </p>
                 </div>
               </article>
               <CategorySentiment sentiment={categorySentiment} />
