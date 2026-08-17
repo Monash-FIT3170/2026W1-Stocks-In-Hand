@@ -188,6 +188,11 @@ Resources:
                   - apigateway:POST
                   - apigateway:PUT
                 Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
+              - Sid: TagApplicationApiGateway
+                Effect: Allow
+                Action:
+                  - apigateway:POST
+                Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*"
               - Sid: ManageApplicationCloudFront
                 Effect: Allow
                 Action:
