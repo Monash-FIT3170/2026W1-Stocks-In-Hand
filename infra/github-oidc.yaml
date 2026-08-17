@@ -187,6 +187,7 @@ Resources:
                   - apigateway:PATCH
                   - apigateway:POST
                   - apigateway:PUT
+                  - apigateway:TagResource
                 Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
               - Sid: TagApplicationApiGateway
                 Effect: Allow
@@ -376,6 +377,7 @@ Resources:
                   - apigateway:PATCH
                   - apigateway:POST
                   - apigateway:PUT
+                  - apigateway:TagResource
                 Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
               - Sid: TagApiGateway
                 Effect: Allow
