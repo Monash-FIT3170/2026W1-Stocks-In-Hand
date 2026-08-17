@@ -219,10 +219,17 @@ jobs:
             --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
             --output text)"
+          API_ID="$(aws cloudformation describe-stack-resource \
+            --stack-name "$STACK_NAME" \
+            --logical-resource-id ServerlessHttpApi \
+            --query 'StackResourceDetail.PhysicalResourceId' \
+            --output text)"
           {
             echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
             echo "DISTRIBUTION_ID=$DISTRIBUTION_ID"
             echo "FRONTEND_URL=$FRONTEND_URL"
+            echo "API_ID=$API_ID"
+            echo "API_URL=https://$API_ID.execute-api.$AWS_REGION.amazonaws.com"
           } >> "$GITHUB_ENV"
 
       - name: Publish the test frontend
@@ -241,13 +248,43 @@ jobs:
         shell: bash
         run: |
           aws cloudfront wait distribution-deployed --id "$DISTRIBUTION_ID"
+          mkdir -p deployment-evidence/http
+          aws apigatewayv2 get-api --api-id "$API_ID" --output json \
+            > deployment-evidence/http/api.json
+          aws apigatewayv2 get-stages --api-id "$API_ID" --output json \
+            > deployment-evidence/http/stages.json
+          aws apigatewayv2 get-routes --api-id "$API_ID" --output json \
+            > deployment-evidence/http/routes.json
+          aws apigatewayv2 get-integrations --api-id "$API_ID" --output json \
+            > deployment-evidence/http/integrations.json
+
+          check_health() {
+            local name="$1"
+            local url="$2"
+            local response_file="deployment-evidence/http/${name}-attempt-${attempt}.txt"
+            local status
+            status="$(curl --silent --show-error --output "$response_file" --write-out '%{http_code}' "$url" || true)"
+            echo "$name: HTTP ${status:-curl-failed} ($url)"
+            if [ "$status" = "200" ] && jq -e '.status == "ok"' < "$response_file" >/dev/null 2>&1; then
+              return 0
+            fi
+            return 1
+          }
+
           for attempt in {1..40}; do
-            response="$(curl --fail --silent --show-error "$FRONTEND_URL/api/health" || true)"
-            if jq -e '.status == "ok"' >/dev/null <<<"$response"; then
-              echo "Smoke test passed: $FRONTEND_URL/api/health"
+            direct_ok=false
+            edge_ok=false
+            if check_health direct-api "$API_URL/api/health"; then
+              direct_ok=true
+            fi
+            if check_health cloudfront "$FRONTEND_URL/api/health"; then
+              edge_ok=true
+            fi
+            if [ "$direct_ok" = true ] && [ "$edge_ok" = true ]; then
+              echo "Smoke test passed: API Gateway and CloudFront both returned /api/health."
               exit 0
             fi
-            echo "Health endpoint is not ready yet (attempt $attempt/40)."
+            echo "Health endpoint is not ready yet (attempt $attempt/40; direct=$direct_ok, edge=$edge_ok)."
             sleep 15
           done
           echo "Health endpoint did not become ready" >&2

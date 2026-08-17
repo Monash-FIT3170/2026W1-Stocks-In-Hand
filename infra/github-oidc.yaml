@@ -620,6 +620,16 @@ Resources:
                 Effect: Allow
                 Action: cloudfront:CreateInvalidation
                 Resource: "*"
+              - Sid: InspectDeploymentTestApiGateway
+                Effect: Allow
+                Action: apigateway:GET
+                Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*"
+              - Sid: InspectDeploymentTestCloudFront
+                Effect: Allow
+                Action:
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                Resource: "*"
 
 Outputs:
   GitHubDeploymentRoleArn:
