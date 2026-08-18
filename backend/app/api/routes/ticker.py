@@ -72,6 +72,30 @@ DEFAULT_TICKERS = {
         "sector": "Consumer Discretionary",
         "industry": "Consumer Staples Distribution & Retail",
     },
+    "WDS": {
+        "company_name": "Woodside Energy Group Limited",
+        "exchange": "ASX",
+        "sector": "Energy",
+        "industry": "Oil, Gas & Consumable Fuels",
+    },
+    "MQG": {
+        "company_name": "Macquarie Group Limited",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Capital Markets",
+    },
+    "ORG": {
+        "company_name": "Origin Energy Limited",
+        "exchange": "ASX",
+        "sector": "Energy",
+        "industry": "Oil, Gas & Consumable Fuels",
+    },
+    "RIO": {
+        "company_name": "Rio Tinto Limited",
+        "exchange": "ASX",
+        "sector": "Materials",
+        "industry": "Diversified Metals & Mining",
+    },
 }
 
 
