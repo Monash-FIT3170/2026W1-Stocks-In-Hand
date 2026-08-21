@@ -1,0 +1,324 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Minimal GitHub OIDC roles for the Stocks In Hand staging deployment.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: Monash-FIT3170/2026W1-Stocks-In-Hand
+    AllowedPattern: ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$
+  GitHubEnvironment:
+    Type: String
+    Default: staging
+    AllowedPattern: ^[A-Za-z0-9_.-]+$
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: Required only when the account already has the GitHub OIDC provider.
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      ClientIdList:
+        - sts.amazonaws.com
+      Url: https://token.actions.githubusercontent.com
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stocks-in-hand-cloudformation-execution
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployStocksInHandApplication
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ManageApplicationRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRolePolicies
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/stocks-in-hand-*"
+              - Sid: PassApplicationRoles
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/stocks-in-hand-*"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService:
+                      - lambda.amazonaws.com
+                      - scheduler.amazonaws.com
+              - Sid: ManageApplicationFunctions
+                Effect: Allow
+                Action:
+                  - lambda:AddPermission
+                  - lambda:CreateAlias
+                  - lambda:CreateFunction
+                  - lambda:DeleteAlias
+                  - lambda:DeleteFunction
+                  - lambda:GetAlias
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:ListAliases
+                  - lambda:ListTags
+                  - lambda:ListVersionsByFunction
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                Resource: !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:stocks-in-hand-*"
+              - Sid: ManageApplicationEventSources
+                Effect: Allow
+                Action:
+                  - lambda:CreateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:ListEventSourceMappings
+                  - lambda:UpdateEventSourceMapping
+                Resource: "*"
+              - Sid: ManageApplicationQueues
+                Effect: Allow
+                Action:
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
+                Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:stocks-in-hand-*"
+              - Sid: ManageApplicationBuckets
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetBucket*
+                  - s3:GetLifecycleConfiguration
+                  - s3:ListBucket
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutBucket*
+                  - s3:PutLifecycleConfiguration
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-*-${AWS::AccountId}-raw"
+                  - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-*-${AWS::AccountId}-frontend"
+              - Sid: ManageApplicationTopics
+                Effect: Allow
+                Action:
+                  - sns:CreateTopic
+                  - sns:DeleteTopic
+                  - sns:GetTopicAttributes
+                  - sns:ListSubscriptionsByTopic
+                  - sns:SetTopicAttributes
+                  - sns:Subscribe
+                  - sns:TagResource
+                  - sns:Unsubscribe
+                  - sns:UntagResource
+                Resource: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:stocks-in-hand-*"
+              - Sid: ManageApplicationLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:ListTagsForResource
+                  - logs:PutRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/stocks-in-hand-*"
+              - Sid: ManageApplicationAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                Resource: !Sub "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:stocks-in-hand-*"
+              - Sid: ManageApplicationSchedules
+                Effect: Allow
+                Action:
+                  - scheduler:CreateSchedule
+                  - scheduler:DeleteSchedule
+                  - scheduler:GetSchedule
+                  - scheduler:ListTagsForResource
+                  - scheduler:TagResource
+                  - scheduler:UntagResource
+                  - scheduler:UpdateSchedule
+                Resource: !Sub "arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/stocks-in-hand-*"
+              - Sid: ManageApplicationApiGateway
+                Effect: Allow
+                Action:
+                  - apigateway:DELETE
+                  - apigateway:GET
+                  - apigateway:PATCH
+                  - apigateway:POST
+                  - apigateway:PUT
+                Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
+              - Sid: TagApplicationApiGateway
+                Effect: Allow
+                Action:
+                  - apigateway:POST
+                Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*"
+              - Sid: ManageApplicationCloudFront
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:CreateFunction
+                  - cloudfront:CreateOriginAccessControl
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:DeleteFunction
+                  - cloudfront:DeleteOriginAccessControl
+                  - cloudfront:DescribeFunction
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:GetFunction
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:GetOriginAccessControlConfig
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:PublishFunction
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:UpdateFunction
+                  - cloudfront:UpdateOriginAccessControl
+                Resource: "*"
+              - Sid: UseServerlessTransform
+                Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+
+  GitHubDeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stocks-in-hand-github-staging
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub >-
+                  repo:${GitHubRepository}:environment:${GitHubEnvironment}
+      Policies:
+        - PolicyName: DeployStaging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PushApplicationImages
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/stocks-in-hand-api"
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/stocks-in-hand-scraper"
+                  - !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/stocks-in-hand-analysis"
+              - Sid: LoginToEcr
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: CreateApplicationChangeSets
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-staging/*
+                Condition:
+                  ArnEquals:
+                    cloudformation:RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+              - Sid: ReviewAndExecuteApplicationChangeSets
+                Effect: Allow
+                Action:
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:ListChangeSets
+                  - cloudformation:ListStackResources
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/stocks-in-hand-staging/*
+              - Sid: InspectNewApplicationTemplate
+                Effect: Allow
+                Action: cloudformation:GetTemplateSummary
+                Resource: "*"
+              - Sid: UseCloudFormationExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+              - Sid: PublishStaticFrontend
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:s3:::stocks-in-hand-staging-${AWS::AccountId}-frontend
+              - Sid: PublishStaticFrontendObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:s3:::stocks-in-hand-staging-${AWS::AccountId}-frontend/*
+              - Sid: InvalidateFrontendCache
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: "*"
+
+Outputs:
+  GitHubDeploymentRoleArn:
+    Value: !GetAtt GitHubDeploymentRole.Arn
+  CloudFormationExecutionRoleArn:
+    Value: !GetAtt CloudFormationExecutionRole.Arn

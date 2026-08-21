@@ -11,30 +11,35 @@ function getErrorMessage(data, fallback) {
   if (Array.isArray(data.detail)) {
     return data.detail.map((error) => error.msg).join(", ")
   }
-
   if (typeof data.detail === "string") {
     return data.detail
   }
-
   return fallback
 }
 
 async function fetchJson(path, fallback, options = {}) {
-  const response = await apiFetch(path, {
-    credentials: "include",
-    ...options,
-  })
-  const data = await response.json().catch(() => null)
+  try {
+    const response = await apiFetch(path, {
+      credentials: "include",
+      ...options,
+    })
+    const data = await response.json().catch(() => null)
 
-  if (response.status === 404 && fallback !== undefined) {
-    return fallback
+    if (response.status === 404 && fallback !== undefined) {
+      return fallback
+    }
+
+    if (!response.ok) {
+      throw new Error(getErrorMessage(data || {}, "Could not complete request"))
+    }
+
+    return data
+  } catch (err) {
+    if (fallback !== undefined) {
+      return fallback
+    }
+    throw err
   }
-
-  if (!response.ok) {
-    throw new Error(getErrorMessage(data || {}, "Could not load watchlist"))
-  }
-
-  return data
 }
 
 function getStatusTone(status) {
@@ -42,11 +47,9 @@ function getStatusTone(status) {
   if (value.includes("negative") || value.includes("bearish") || value.includes("critical")) {
     return "red"
   }
-
   if (value.includes("positive") || value.includes("bullish") || value.includes("high conviction")) {
     return "green"
   }
-
   return "orange"
 }
 
@@ -55,16 +58,11 @@ function formatStatusLabel(value) {
   if (!cleaned) {
     return "Monitoring"
   }
-
   const label = cleaned.replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
   return label.toLowerCase().includes("sentiment") ? label : `${label} Sentiment`
 }
 
 function getStockBrief(stock) {
-  const reportText = stock.latestReport?.report_text
-  if (reportText && typeof reportText === "string") {
-    return reportText.length > 150 ? `${reportText.slice(0, 147)}...` : reportText
-  }
   const about = stock.latestArtifact?.artifact_metadata?.about
   if (about && typeof about === "string") {
     return about.length > 150 ? `${about.slice(0, 147)}...` : about
@@ -76,19 +74,12 @@ function getTickerStatus(ticker) {
   if (ticker.latestSentiment?.sentiment_label) {
     return formatStatusLabel(ticker.latestSentiment.sentiment_label)
   }
-
   if (ticker.latestSentiment?.stance) {
     return formatStatusLabel(ticker.latestSentiment.stance)
   }
-
-  if (ticker.latestAlert?.severity) {
-    return `${ticker.latestAlert.severity} Alert`
-  }
-
   if (ticker.sector) {
     return `${ticker.sector} Monitoring`
   }
-
   return "Monitoring"
 }
 
@@ -96,89 +87,44 @@ function getArtifactDate(artifact) {
   return artifact?.published_at || artifact?.created_at || artifact?.scraped_at || null
 }
 
-function sortByNewestDate(items, getDate) {
-  return [...items].sort((a, b) => new Date(getDate(b) || 0) - new Date(getDate(a) || 0))
-}
-
 function formatRelativeDate(value) {
   if (!value) {
     return "Not available"
   }
-
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return "Not available"
   }
-
   const diffMs = Date.now() - date.getTime()
   const diffDays = Math.floor(diffMs / 86400000)
 
-  if (diffDays <= 0) {
-    return "Today"
-  }
-
-  if (diffDays === 1) {
-    return "Yesterday"
-  }
-
+  if (diffDays <= 0) return "Today"
+  if (diffDays === 1) return "Yesterday"
   return `${diffDays} days ago`
 }
 
-function alertTone(alert) {
-  const value = `${alert.severity || ""} ${alert.alert_type || ""}`.toLowerCase()
-  if (value.includes("high") || value.includes("critical") || value.includes("negative")) {
-    return "red"
-  }
-
-  if (value.includes("medium") || value.includes("mixed") || value.includes("warning")) {
-    return "orange"
-  }
-
-  return "green"
-}
-
-async function findLatestSentiment(artifacts) {
-  const recentArtifacts = sortByNewestDate(
-    artifacts.filter((artifact) => !artifact.is_duplicate),
-    getArtifactDate
-  ).slice(0, 5)
-
-  for (const artifact of recentArtifacts) {
-    const sentiments = await fetchJson(`/artifact-sentiments/artifact/${artifact.id}`, [])
-    if (Array.isArray(sentiments) && sentiments.length) {
-      return sortByNewestDate(sentiments, (sentiment) => sentiment.created_at)[0]
-    }
-  }
-
-  return null
-}
-
 async function loadTickerDetails(watchlistTicker) {
-  const ticker = await fetchJson(`/tickers/${watchlistTicker.ticker_id}`)
-  const [latestReport, artifacts] = await Promise.all([
-    fetchJson(`/reports/ticker/${watchlistTicker.ticker_id}/latest`, null),
-    fetchJson(`/artifacts/ticker/${watchlistTicker.ticker_id}`, []),
-  ])
-  const sortedArtifacts = sortByNewestDate(
-    artifacts.filter((artifact) => !artifact.is_duplicate),
-    getArtifactDate
-  )
+  const ticker = await fetchJson(`/tickers/${watchlistTicker.ticker_id}`, null)
+  if (!ticker) return null
+
+  const artifacts = await fetchJson(`/artifacts/ticker/${watchlistTicker.ticker_id}`, [])
+  const sortedArtifacts = Array.isArray(artifacts)
+    ? [...artifacts].sort((a, b) => new Date(getArtifactDate(b) || 0) - new Date(getArtifactDate(a) || 0))
+    : []
+
   const latestArtifact = sortedArtifacts[0] || null
-  const latestSentiment = await findLatestSentiment(sortedArtifacts)
 
   return {
     ...ticker,
     added_at: watchlistTicker.added_at,
     latestArtifact,
-    latestReport,
-    latestSentiment,
-    lastBriefAt: latestReport?.generated_at || getArtifactDate(latestArtifact),
+    latestSentiment: null, // Avoid N+1 sentiment waterfall calls
+    lastBriefAt: getArtifactDate(latestArtifact),
   }
 }
 
 export default function WatchlistRoute() {
   const [state, setState] = useState({
-    alerts: [],
     error: "",
     investor: null,
     investorId: null,
@@ -199,7 +145,7 @@ export default function WatchlistRoute() {
     }
 
     try {
-      const me = await fetchJson("/auth/me")
+      const me = await fetchJson("/auth/me", null)
       const investor = me?.investor || null
       const investorId = investor?.id
 
@@ -207,48 +153,29 @@ export default function WatchlistRoute() {
         throw new Error("Could not identify the signed-in investor.")
       }
 
-      const watchlists = await fetchJson(`/watchlists/investor/${investorId}`, [])
+      // Use the newly authenticated /watchlists/me endpoint
+      const watchlists = await fetchJson("/watchlists/me", [])
       const watchlist = watchlists[0] || null
       const watchlistTickers = watchlist
         ? await fetchJson(`/watchlist-tickers/${watchlist.id}`, [])
         : []
-      const [tickerDetails, alerts] = await Promise.all([
-        Promise.all(
-          watchlistTickers.map((item) => loadTickerDetails(item))
-        ),
-        fetchJson(`/alerts/investor/${investorId}`, []),
-      ])
 
-      const watchlistTickerIds = new Set(watchlistTickers.map((item) => item.ticker_id))
-      const visibleAlerts = alerts
-        .filter((alert) => watchlistTickerIds.has(alert.ticker_id))
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-
-      const tickers = tickerDetails.map((ticker) => {
-        const tickerAlerts = visibleAlerts.filter((alert) => alert.ticker_id === ticker.id)
-        return {
-          ...ticker,
-          alertCount: tickerAlerts.filter((alert) => !alert.is_read).length,
-          latestAlert: tickerAlerts[0] || null,
-        }
-      })
+      const tickersData = await Promise.all(
+        watchlistTickers.map((item) => loadTickerDetails(item))
+      )
 
       setState({
-        alerts: visibleAlerts,
         error: "",
         investor,
         investorId,
         isLoading: false,
-        tickers,
+        tickers: tickersData.filter(Boolean),
         watchlist,
       })
     } catch (err) {
       setState((current) => ({
         ...current,
-        error:
-          err instanceof TypeError
-            ? "Could not reach the backend. Make sure the API is running on port 8000."
-            : err.message,
+        error: err instanceof TypeError ? "Could not reach the backend." : err.message,
         isLoading: false,
       }))
     }
@@ -256,7 +183,6 @@ export default function WatchlistRoute() {
 
   useEffect(() => {
     let isMounted = true
-
     loadWatchlist({ showLoading: true }).catch((err) => {
       if (isMounted) {
         setState((current) => ({
@@ -266,29 +192,21 @@ export default function WatchlistRoute() {
         }))
       }
     })
-
     return () => {
       isMounted = false
     }
   }, [loadWatchlist])
 
-  const tickerSymbolsById = useMemo(
-    () => new Map(state.tickers.map((ticker) => [ticker.id, ticker.symbol])),
-    [state.tickers]
-  )
   const watchedTickerIds = useMemo(
     () => new Set(state.tickers.map((ticker) => ticker.id)),
     [state.tickers]
   )
+
   const filteredAvailableTickers = useMemo(() => {
     const query = tickerQuery.trim().toLowerCase()
-
     return (Array.isArray(availableTickers) ? availableTickers : [])
       .filter((ticker) => {
-        if (!query) {
-          return true
-        }
-
+        if (!query) return true
         return (
           ticker.symbol.toLowerCase().includes(query) ||
           ticker.company_name.toLowerCase().includes(query)
@@ -300,21 +218,14 @@ export default function WatchlistRoute() {
   async function openAddCompany() {
     setIsAddOpen(true)
     setAddError("")
-
-    if (availableTickers.length) {
-      return
-    }
+    if (availableTickers.length) return
 
     setIsTickerListLoading(true)
     try {
       const result = await fetchJson("/tickers/?limit=500", [])
       setAvailableTickers(Array.isArray(result) ? result : [])
     } catch (err) {
-      setAddError(
-        err instanceof TypeError
-          ? "Could not reach the backend. Make sure the API is running on port 8000."
-          : err.message
-      )
+      setAddError(err.message)
     } finally {
       setIsTickerListLoading(false)
     }
@@ -331,29 +242,17 @@ export default function WatchlistRoute() {
     if (state.watchlist) {
       return state.watchlist
     }
-
     if (!state.investorId) {
       throw new Error("Could not identify the signed-in investor.")
     }
 
-    const watchlist = await fetchJson("/watchlists/", undefined, {
+    const watchlist = await fetchJson("/watchlists/", null, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        investor_id: state.investorId,
-        name: "My Watchlist",
-      }),
+      body: JSON.stringify({ name: "My Watchlist" }),
     })
     setState((current) => ({ ...current, watchlist }))
     return watchlist
-  }
-
-  async function clearAlerts() {
-    const ids = state.alerts.map((a) => a.id)
-    setState((current) => ({ ...current, alerts: [] }))
-    await Promise.allSettled(
-      ids.map((id) => fetchJson(`/alerts/${id}`, undefined, { method: "DELETE" }))
-    )
   }
 
   async function addCompany(ticker) {
@@ -362,17 +261,13 @@ export default function WatchlistRoute() {
 
     try {
       const watchlist = await ensureWatchlist()
-      await fetchJson(`/watchlist-tickers/${watchlist.id}/${ticker.id}`, undefined, {
+      await fetchJson(`/watchlist-tickers/${watchlist.id}/${ticker.id}`, null, {
         method: "POST",
       })
       await loadWatchlist()
       closeAddCompany()
     } catch (err) {
-      setAddError(
-        err instanceof TypeError
-          ? "Could not reach the backend. Make sure the API is running on port 8000."
-          : err.message
-      )
+      setAddError(err.message)
       setAddingTickerId(null)
     }
   }
@@ -384,7 +279,7 @@ export default function WatchlistRoute() {
       tickers: current.tickers.filter((t) => t.id !== ticker.id),
     }))
     try {
-      await fetchJson(`/watchlist-tickers/${state.watchlist.id}/${ticker.id}`, undefined, {
+      await fetchJson(`/watchlist-tickers/${state.watchlist.id}/${ticker.id}`, null, {
         method: "DELETE",
       })
     } catch {
@@ -400,10 +295,12 @@ export default function WatchlistRoute() {
         <div className={styles.watchlistHero}>
           <div>
             <h1>Portfolio Intel</h1>
-            <p>{investorName ? `Monitoring ${investorName}'s saved ASX companies for structural shifts and sentiment swings.` : "Sign in to load your saved ASX portfolio from the database."}</p>
+            <p>{investorName ? `Monitoring ${investorName}'s saved ASX companies.` : "Sign in to view your watchlist."}</p>
             <h2>Active Watchlist</h2>
           </div>
-          <button className={styles.primaryAction} onClick={openAddCompany} type="button"><PlusIcon /> Add company</button>
+          <button className={styles.primaryAction} onClick={openAddCompany} type="button">
+            <PlusIcon /> Add company
+          </button>
         </div>
         <div className={styles.watchlistLayout}>
           <section>
@@ -411,12 +308,18 @@ export default function WatchlistRoute() {
               {state.isLoading ? "Loading Watchlist" : `${state.tickers.length} Entities Tracking`}
             </div>
             <div className={styles.watchGrid}>
-              {state.isLoading ? (
-                <article className={styles.emptyCard}><h3>Loading watchlist</h3><p>Fetching your saved companies</p></article>
-              ) : null}
-              {state.error ? (
-                <article className={styles.emptyCard}><h3>Could not load watchlist</h3><p>{state.error}</p></article>
-              ) : null}
+              {state.isLoading && (
+                <article className={styles.emptyCard}>
+                  <h3>Loading watchlist</h3>
+                  <p>Fetching your saved companies</p>
+                </article>
+              )}
+              {state.error && (
+                <article className={styles.emptyCard}>
+                  <h3>Could not load watchlist</h3>
+                  <p>{state.error}</p>
+                </article>
+              )}
               {!state.isLoading && !state.error && state.tickers.map((stock) => {
                 const status = getTickerStatus(stock)
                 const tone = getStatusTone(status)
@@ -426,12 +329,19 @@ export default function WatchlistRoute() {
                     <Link className={styles.stockCardLink} href={`/ticker/${stock.symbol}`}>
                       <div className={styles.stockTop}>
                         <div className={`${styles.stockAvatar} ${styles[tone]}`}>{stock.symbol[0]}</div>
-                        <div><h3>{stock.company_name}</h3><p>{stock.exchange}: {stock.symbol}</p></div>
-                        {stock.alertCount ? <span className={styles.alertBadge}>{stock.alertCount}</span> : null}
+                        <div>
+                          <h3>{stock.company_name}</h3>
+                          <p>{stock.exchange}: {stock.symbol}</p>
+                        </div>
                       </div>
-                      <div className={`${styles.stockStatus} ${styles[tone]}`}><span /> {status}</div>
-                      {getStockBrief(stock) ? <p className={styles.stockBrief}>{getStockBrief(stock)}</p> : null}
-                      <div className={styles.stockFooter}><span>Last brief: {formatRelativeDate(stock.lastBriefAt)}</span><strong>&gt;</strong></div>
+                      <div className={`${styles.stockStatus} ${styles[tone]}`}>
+                        <span /> {status}
+                      </div>
+                      {getStockBrief(stock) && <p className={styles.stockBrief}>{getStockBrief(stock)}</p>}
+                      <div className={styles.stockFooter}>
+                        <span>Last brief: {formatRelativeDate(stock.lastBriefAt)}</span>
+                        <strong>&gt;</strong>
+                      </div>
                     </Link>
                     <button
                       aria-label={`Remove ${stock.symbol} from watchlist`}
@@ -444,40 +354,22 @@ export default function WatchlistRoute() {
                   </article>
                 )
               })}
-              {!state.isLoading && !state.error && !state.tickers.length ? (
-                <article className={styles.emptyCard}><h3>No companies yet</h3><p>Add a company to start monitoring</p></article>
-              ) : null}
-              <button className={styles.emptyCard} onClick={openAddCompany} type="button"><PlusIcon /><h3>Add to Watchlist</h3><p>Monitor your next move</p></button>
+              {!state.isLoading && !state.error && !state.tickers.length && (
+                <article className={styles.emptyCard}>
+                  <h3>No companies yet</h3>
+                  <p>Add a company to start monitoring</p>
+                </article>
+              )}
+              <button className={styles.emptyCard} onClick={openAddCompany} type="button">
+                <PlusIcon />
+                <h3>Add to Watchlist</h3>
+                <p>Monitor your next move</p>
+              </button>
             </div>
           </section>
-          <aside className={styles.alertsPanel}>
-            <div className={styles.alertsHeader}><h2>Alerts Feed</h2><button onClick={clearAlerts} type="button">Clear all</button></div>
-            <div className={styles.alertTimeline}>
-              {state.isLoading ? (
-                <article className={styles.alertItem}>
-                  <div className={`${styles.timelineDotSmall} ${styles.green}`} />
-                  <div className={styles.alertCard}><span>Loading</span><p>Fetching recent alerts</p></div>
-                </article>
-              ) : null}
-              {!state.isLoading && !state.error && state.alerts.map((alert) => (
-                <article className={styles.alertItem} key={alert.id}>
-                  <div className={`${styles.timelineDotSmall} ${styles[alertTone(alert)]}`} />
-                  <div className={styles.alertCard}>
-                    <span>{tickerSymbolsById.get(alert.ticker_id) || "ASX"} - {formatRelativeDate(alert.created_at)}</span>
-                    <p>{alert.message || alert.title}</p>
-                  </div>
-                </article>
-              ))}
-              {!state.isLoading && !state.error && !state.alerts.length ? (
-                <article className={styles.alertItem}>
-                  <div className={`${styles.timelineDotSmall} ${styles.green}`} />
-                  <div className={styles.alertCard}><span>No alerts</span><p>Your watchlist has no recent alerts.</p></div>
-                </article>
-              ) : null}
-            </div>
-          </aside>
         </div>
-        {isAddOpen ? (
+
+        {isAddOpen && (
           <div className={styles.watchlistModalBackdrop} role="presentation">
             <section aria-modal="true" className={styles.watchlistModal} role="dialog">
               <div className={styles.watchlistModalHeader}>
@@ -497,9 +389,9 @@ export default function WatchlistRoute() {
                   value={tickerQuery}
                 />
               </label>
-              {addError ? <p className={styles.watchlistModalError}>{addError}</p> : null}
+              {addError && <p className={styles.watchlistModalError}>{addError}</p>}
               <div className={styles.watchlistTickerList}>
-                {isTickerListLoading ? <p>Loading companies...</p> : null}
+                {isTickerListLoading && <p>Loading companies...</p>}
                 {!isTickerListLoading && filteredAvailableTickers.map((ticker) => {
                   const alreadyAdded = watchedTickerIds.has(ticker.id)
                   return (
@@ -515,16 +407,10 @@ export default function WatchlistRoute() {
                     </button>
                   )
                 })}
-                {!isTickerListLoading && !filteredAvailableTickers.length && availableTickers.length === 0 ? (
-                  <p>No companies in the database yet. The data pipeline may still be running.</p>
-                ) : null}
-                {!isTickerListLoading && !filteredAvailableTickers.length && availableTickers.length > 0 ? (
-                  <p>No companies match your search.</p>
-                ) : null}
               </div>
             </section>
           </div>
-        ) : null}
+        )}
       </section>
     </AppFrame>
   )

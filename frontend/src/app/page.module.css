@@ -16,14 +16,12 @@
 .selectedChip,
 .authSubmit,
 .authSwap button,
-.alertsHeader button,
 .historyButton,
 .cardActions button,
 .resultCard {
   border: 0;
 }
 
-.alertsHeader button,
 .authSwap button,
 .cardActions button,
 .resultCard {
@@ -189,11 +187,9 @@
 .announcementCard,
 .stockCard,
 .emptyCard,
-.alertsPanel,
 .authCard,
 .metricCard,
 .sideCard,
-.sideCardWhite,
 .storyCard,
 .sentimentCard,
 .timelineCard,
@@ -485,7 +481,7 @@
 .watchlistLayout {
   display: grid;
   gap: 32px;
-  grid-template-columns: minmax(0, 2fr) minmax(320px, 0.95fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .announcementCard {
@@ -720,7 +716,6 @@
 
 .storyHeading h2,
 .sideCard h2,
-.sideCardWhite h2,
 .watchlistHero h2 {
   align-items: center;
   display: flex;
@@ -932,11 +927,6 @@
   text-transform: uppercase;
 }
 
-.sideCardWhite {
-  background: white;
-  padding: 28px 24px;
-}
-
 .sideCard > div:not(.sideCardTitle) {
   align-items: center;
   border-bottom: 1px solid var(--line);
@@ -978,18 +968,6 @@
   position: absolute;
   top: 9px;
   width: 7px;
-}
-
-.sideCardWhite h3 {
-  color: var(--green);
-  font-size: 14px;
-  letter-spacing: 0.5px;
-  margin: 24px 0 12px;
-  text-transform: uppercase;
-}
-
-.sideCardWhite .rumoured {
-  color: #9a5d00;
 }
 
 .claim {
@@ -1045,19 +1023,16 @@
 }
 
 .timelineDot.green,
-.timelineDotSmall.green,
 .stockStatus.green span {
   background: var(--green);
 }
 
 .timelineDot.orange,
-.timelineDotSmall.orange,
 .stockStatus.orange span {
   background: var(--orange);
 }
 
 .timelineDot.red,
-.timelineDotSmall.red,
 .stockStatus.red span {
   background: var(--red);
 }
@@ -1096,9 +1071,9 @@
 
 /*
   Watchlist dashboard.
-  Contains the signed-in portfolio layout: watchlist cards, empty add card, alert
-  feed, and timeline dots. These controls are static for the prototype, so future
-  add/remove/clear/history behavior can be wired without redesigning the cards.
+  Contains the signed-in portfolio layout: watchlist cards and the empty add card.
+  These controls are static for the prototype, so future add/remove/history behavior
+  can be wired without redesigning the cards.
 */
 .watchlistHero h1,
 .announcementsHero h1 {
@@ -1206,18 +1181,6 @@
   font-weight: 700;
 }
 
-.alertBadge {
-  background: #be123c;
-  border-radius: 50%;
-  color: white;
-  font-size: 12px;
-  font-weight: 850;
-  height: 20px;
-  margin-left: auto;
-  text-align: center;
-  width: 20px;
-}
-
 .stockStatus {
   align-items: center;
   display: flex;
@@ -1297,65 +1260,6 @@ button.emptyCard:hover {
   width: 34px;
 }
 
-.alertsPanel {
-  background: var(--panel);
-  padding: 28px 24px;
-}
-
-.alertsHeader {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-.alertsHeader h2 {
-  margin: 0;
-}
-
-.alertsHeader button {
-  color: var(--green);
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.alertTimeline {
-  border-left: 1px solid #d9dedf;
-  display: grid;
-  gap: 30px;
-  margin: 32px 0 0 4px;
-  padding-left: 24px;
-}
-
-.alertItem {
-  position: relative;
-}
-
-.timelineDotSmall {
-  border-radius: 50%;
-  height: 8px;
-  left: -29px;
-  position: absolute;
-  top: 8px;
-  width: 8px;
-}
-
-.alertCard {
-  background: white;
-  border-radius: 28px;
-  padding: 18px 16px;
-}
-
-.alertCard span {
-  color: var(--faint);
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.alertCard p {
-  color: var(--muted);
-  line-height: 1.45;
-  margin: 6px 0 0;
-}
 
 .historyButton {
   background: transparent;

@@ -10,7 +10,10 @@ lists and implement extract(), then append to CATEGORIES in categories/__init__.
 """
 from __future__ import annotations
 
-from categories import CATEGORIES, ReportCategory
+try:
+    from .categories import CATEGORIES, ReportCategory
+except ImportError:  # Support the existing direct CLI execution.
+    from categories import CATEGORIES, ReportCategory
 
 
 def classify(

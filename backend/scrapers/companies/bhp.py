@@ -1,11 +1,9 @@
 import re
-import subprocess
-from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
-from typing import Any
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import httpx
+from playwright.async_api import Error as PlaywrightError, async_playwright
 
 from app.services.title_normalization import normalise_title
 from ..base import BaseScraper, Announcement
@@ -36,6 +34,7 @@ class BHPScraper(BaseScraper):
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
+                    "--disable-http2",
                     "--headless=new",
                 ],
             )
@@ -53,11 +52,36 @@ class BHPScraper(BaseScraper):
 
             page = await context.new_page()
 
-            await page.goto(
-                self.source_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
+            try:
+                await page.goto(
+                    self.source_url,
+                    # BHP currently keeps some page resources open
+                    # indefinitely; the committed HTML is enough for links.
+                    wait_until="commit",
+                    timeout=30_000,
+                )
+            except PlaywrightError:
+                # Some Chromium/AWS networks fail BHP's HTTP/2 negotiation
+                # even though the same public page works over HTTP/1.1.
+                await page.close()
+                page = await context.new_page()
+                async with httpx.AsyncClient(
+                    timeout=30.0,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ) as client:
+                    response = await client.get(self.source_url)
+                    response.raise_for_status()
+                static_html = re.sub(
+                    r"<script\b[^>]*>.*?</script>",
+                    "",
+                    response.text,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                await page.set_content(
+                    static_html,
+                    wait_until="domcontentloaded",
+                    timeout=30_000,
+                )
 
             await page.wait_for_timeout(3000)
 
@@ -65,41 +89,25 @@ class BHPScraper(BaseScraper):
 
             print(f"[BHP] Found {len(article_links)} article links")
 
+            # Resolving each article to its final document is downloader work.
+            # Queue B carries the stable article URL so discovery remains fast
+            # and performs no document requests.
             for item in article_links:
-                try:
-                    pdf_url = await self._extract_pdf_from_article(
-                        context,
-                        item["article_url"],
+                announcements.append(
+                    Announcement(
+                        ticker=self.ticker,
+                        title=item["title"],
+                        date=item["date"],
+                        pdf_url=item["article_url"],
+                        source_url=self.source_url,
+                        metadata={
+                            "article_url": item["article_url"],
+                            "source_id": item["article_url"],
+                        },
                     )
-
-                    if not pdf_url:
-                        print(f"[BHP] No PDF found for: {item['title']}")
-                        continue
-
-                    announcements.append(
-                        Announcement(
-                            ticker=self.ticker,
-                            title=item["title"],
-                            date=item["date"],
-                            pdf_url=pdf_url,
-                            source_url=item["article_url"],
-                            metadata={
-                                "listing_url": self.source_url,
-                                "article_url": item["article_url"],
-                            },
-                        )
-                    )
-
-                except Exception as e:
-                    print(f"[BHP] Failed to process article {item['article_url']}: {e}")
+                )
 
             announcements = self._dedupe_announcements(announcements)
-
-            for ann in announcements:
-                try:
-                    ann.local_path = await self._download_via_browser(context, ann)
-                except Exception as e:
-                    print(f"[BHP] Failed to download '{ann.title}': {e}")
 
             await browser.close()
 
@@ -161,57 +169,6 @@ class BHPScraper(BaseScraper):
 
         return any(term in url_lower or term in text_lower for term in useful_terms)
 
-    async def _extract_pdf_from_article(
-        self,
-        context: Any,
-        article_url: str,
-    ) -> str | None:
-        page = await context.new_page()
-
-        try:
-            await page.goto(
-                article_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-
-            await page.wait_for_timeout(1500)
-
-            # Most likely case: the article contains a normal PDF link.
-            pdf_links = await page.query_selector_all("a[href*='.pdf']")
-
-            for link in pdf_links:
-                href = await link.get_attribute("href")
-
-                if not href:
-                    continue
-
-                full_url = urljoin(article_url, href)
-
-                if self._looks_like_pdf(full_url):
-                    return full_url
-
-            # Fallback: sometimes the PDF URL may be in the page HTML but not a visible link.
-            html = await page.content()
-            match = re.search(r'https?://[^"\']+\.pdf', html)
-
-            if match:
-                return match.group(0)
-
-            relative_match = re.search(r'["\']([^"\']+\.pdf)["\']', html)
-
-            if relative_match:
-                return urljoin(article_url, relative_match.group(1))
-
-            return None
-
-        finally:
-            await page.close()
-
-    def _looks_like_pdf(self, url: str) -> bool:
-        return ".pdf" in url.lower()
-
-
     def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
         seen: set[str] = set()
         result = []
@@ -265,46 +222,3 @@ class BHPScraper(BaseScraper):
                     pass
 
         return None
-
-    async def _download_via_browser(self, context, announcement: Announcement) -> Path:
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", " ".join(announcement.title.split()))
-        clean_title = clean_title[:120].strip("_") or "announcement"
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
-
-        result = subprocess.run(
-            [
-                "wget",
-                "--timeout=120",
-                "--tries=2",
-                "--user-agent=Mozilla/5.0",
-                "--header",
-                f"Referer: {self.source_url}",
-                "-O",
-                str(dest),
-                announcement.pdf_url,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            raise Exception(f"Failed to download PDF with wget: {result.stderr[-500:]}")
-
-        if dest.read_bytes()[:4] != b"%PDF":
-            raise Exception(f"Downloaded file is not a PDF: {announcement.pdf_url}")
-
-        print(f"[BHP] Saved: {dest}")
-        return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "BHP downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

@@ -5,24 +5,22 @@ application's point of view. It does not only check that SQLAlchemy can create a
 single table; it also checks that the real migrated schema and the ORM
 relationships used by the API can work together.
 
-The tests are split into two groups:
-- Postgres integration checks that use ``settings.DATABASE_URL``. These tests
-  validate the same database backend used by Docker and production-like runs.
-- A lightweight SQLite smoke test for the legacy ``Result`` table. That table
-  is independent from the main stock/report schema, so it can be tested without
-  requiring Postgres.
+The tests run against Postgres using ``settings.DATABASE_URL``, the same database
+backend used by Docker and production-like runs. If Postgres is not available they
+skip themselves, which keeps local test runs useful while still giving the Docker
+test environment a real database verification path.
 
-If Postgres is not available, the Postgres-specific tests skip themselves. This
-keeps local test runs useful while still giving the Docker test environment a
-real database verification path.
+The schema these tests cover is the simplified 10-table schema created by the
+``0001_initial_minimal`` migration.
 """
 
 import sys
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from collections.abc import Iterator
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi import Request
@@ -38,13 +36,44 @@ import app.models  # noqa: F401
 from app.core.config import settings
 from app.database.base import Base
 from app.models.artifact import Artifact
-from app.models.claim import Claim
-from app.models.claim_source import ClaimSource
-from app.models.market_data import MarketData
-from app.models.report import Report
-from app.models.report_claim import ReportClaim
-from app.models.result import Result
+from app.models.artifact_sentiment import ArtifactSentiment
+from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
+from app.models.watchlist import Watchlist
+from app.models.watchlist_ticker import WatchlistTicker
+
+
+# Every table the 0001_initial_minimal migration creates. Kept as an exact set so a
+# model that drifts from the migration in either direction fails this file.
+EXPECTED_TABLES = {
+    "artifacts",
+    "artifact_sentiments",
+    "artifact_summaries",
+    "auth_sessions",
+    "information_platforms",
+    "investors",
+    "scrape_runs",
+    "tickers",
+    "watchlists",
+    "watchlist_tickers",
+}
+
+# Tables removed by the schema refactor. If one of these comes back it means a stale
+# migration ran, or a model was reintroduced without the schema being reconsidered.
+DROPPED_TABLES = {
+    "alerts",
+    "artifact_chunks",
+    "artifact_topics",
+    "claims",
+    "claim_sources",
+    "extracted_facts",
+    "llm_runs",
+    "market_data",
+    "reports",
+    "report_claims",
+    "results",
+    "topics",
+}
 
 
 def _database_engine() -> Engine:
@@ -81,7 +110,7 @@ def db_session() -> Iterator[Session]:
     After the test finishes, the outer transaction is rolled back. This keeps
     the database clean even though individual tests call ``commit()`` to verify
     real database write behavior. Without this rollback wrapper, test records
-    such as generated tickers and reports would remain in the shared test
+    such as generated tickers and artifacts would remain in the shared test
     database after each run.
     """
     engine = _database_engine()
@@ -112,28 +141,28 @@ def test_sqlalchemy_mappers_configure() -> None:
     - ``back_populates`` names that do not match on both sides;
     - joins that cannot be inferred from the declared foreign keys.
 
-    This is especially important for the report database flow, because
-    ``crud/report.py`` expects to navigate from reports to report claims, then
-    claims, claim sources, and source artifacts.
+    This matters most after a schema change that deletes models: a surviving
+    relationship still pointing at a deleted class fails here rather than at
+    request time.
     """
     configure_mappers()
 
 
-def test_migrated_database_has_expected_tables() -> None:
-    """Verify that the migrated database contains the backend's core tables.
+def test_migrated_database_matches_the_minimal_schema() -> None:
+    """The migrated database should contain exactly the 10 tables and no more.
 
     The application relies on Alembic migrations to create the real Postgres
     schema. This test introspects the connected database and confirms that the
-    tables required by the current models exist.
+    tables required by the current models exist, and that the tables removed by
+    the schema refactor are actually gone.
 
     It protects against cases where:
     - the database container started but migrations did not run;
     - a migration accidentally omitted a model table;
-    - a table was renamed in code but not reflected in the migration.
+    - a table was renamed in code but not reflected in the migration;
+    - a database predating the refactor was reused instead of recreated.
 
-    The assertion checks for a required subset instead of exact equality so the
-    database can contain Alembic's own version table or other harmless support
-    tables.
+    ``alembic_version`` is Alembic's own bookkeeping table and is ignored.
     """
     engine = _database_engine()
     try:
@@ -141,32 +170,34 @@ def test_migrated_database_has_expected_tables() -> None:
     finally:
         engine.dispose()
 
-    expected_tables = {
-        "alerts",
-        "artifacts",
-        "artifact_chunks",
-        "artifact_sentiments",
-        "artifact_summaries",
-        "artifact_topics",
-        "auth_sessions",
-        "claim_sources",
-        "claims",
-        "extracted_facts",
-        "information_platforms",
-        "investors",
-        "llm_runs",
-        "market_data",
-        "reports",
-        "report_claims",
-        "results",
-        "scrape_runs",
-        "tickers",
-        "topics",
-        "watchlists",
-        "watchlist_tickers",
-    }
+    table_names.discard("alembic_version")
 
-    assert expected_tables.issubset(table_names)
+    assert table_names == EXPECTED_TABLES
+    assert not (table_names & DROPPED_TABLES)
+
+
+def test_models_and_migration_agree_on_columns() -> None:
+    """Every ORM column should exist in the migrated database, and vice versa.
+
+    A model column with no matching database column fails at query time with a
+    confusing ``UndefinedColumn`` error from Postgres, usually only on the one
+    endpoint that touches it. Comparing the two directly turns that into an
+    explicit failure naming the table and column.
+    """
+    engine = _database_engine()
+    try:
+        inspector = inspect(engine)
+        for table_name in sorted(EXPECTED_TABLES):
+            db_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            model_columns = {
+                column.name for column in Base.metadata.tables[table_name].columns
+            }
+            assert model_columns == db_columns, (
+                f"{table_name}: model columns {sorted(model_columns)} "
+                f"!= database columns {sorted(db_columns)}"
+            )
+    finally:
+        engine.dispose()
 
 
 def test_password_hashing_verifies_and_rejects_wrong_password() -> None:
@@ -193,7 +224,6 @@ def test_sign_up_sets_session_cookie_and_me_loads_investor(db_session: Session) 
     """Signing up creates a DB session and exposes it through an httpOnly cookie."""
     from app.api.deps import get_current_investor
     from app.api.routes.auth import sign_up
-    from app.core.config import settings
     from app.models.auth_session import AuthSession
     from app.schemas.auth import SignUpRequest
 
@@ -233,7 +263,6 @@ def test_sign_up_sets_session_cookie_and_me_loads_investor(db_session: Session) 
 def test_sign_out_deletes_session(db_session: Session) -> None:
     """Signing out removes the matching DB session."""
     from app.api.routes.auth import sign_out, sign_up
-    from app.core.config import settings
     from app.models.auth_session import AuthSession
     from app.schemas.auth import SignUpRequest
 
@@ -278,7 +307,6 @@ def test_sign_in_accepts_valid_credentials_and_rejects_invalid_password(
     from fastapi import HTTPException
 
     from app.api.routes.auth import sign_in, sign_up
-    from app.core.config import settings
     from app.models.auth_session import AuthSession
     from app.schemas.auth import SignInRequest, SignUpRequest
 
@@ -335,14 +363,12 @@ def test_auth_me_rejects_missing_session_cookie(db_session: Session) -> None:
     assert exc_info.value.status_code == 401
 
 
-def test_watchlist_and_alert_contracts_keep_investor_id_and_old_crud_signature(
+def test_watchlist_contract_keeps_investor_id_and_old_crud_signature(
     db_session: Session,
 ) -> None:
-    """Shared watchlist/alert contracts should remain backward-compatible."""
-    from app.crud import alert as alert_crud
+    """The shared watchlist contract should remain backward-compatible."""
     from app.crud import investor as investor_crud
     from app.crud import watchlist as watchlist_crud
-    from app.schemas.alert import AlertCreate
     from app.schemas.investor import InvestorCreate
     from app.schemas.watchlist import WatchlistCreate
 
@@ -354,145 +380,50 @@ def test_watchlist_and_alert_contracts_keep_investor_id_and_old_crud_signature(
         ),
     )
 
-    ticker = Ticker(
-        symbol=f"C{uuid.uuid4().hex[:8].upper()}",
-        company_name="Contract Test Limited",
-        exchange="ASX",
+    watchlist = watchlist_crud.create_watchlist(
+        db_session,
+        WatchlistCreate(investor_id=investor.id, name="MVP Watchlist"),
     )
-    db_session.add(ticker)
-    db_session.flush()
-
-    watchlist_payload = WatchlistCreate(investor_id=investor.id, name="MVP Watchlist")
-    alert_payload = AlertCreate(
-        investor_id=investor.id,
-        ticker_id=ticker.id,
-        alert_type="price",
-        title="Contract alert",
-        message="Still accepts investor_id",
-    )
-
-    watchlist = watchlist_crud.create_watchlist(db_session, watchlist_payload)
-    alert = alert_crud.create_alert(db_session, alert_payload)
 
     assert watchlist.investor_id == investor.id
-    assert alert.investor_id == investor.id
 
 
-def test_database_can_persist_report_claim_relationships(
-    db_session: Session,
-) -> None:
-    """Verify the main report evidence relationship can be written and read.
+def test_watchlist_tickers_link_investors_to_tickers(db_session: Session) -> None:
+    """Verify the watchlist join table can be written and read back.
 
-    This is the most important database integration test for the report system.
-    It creates a small, realistic chain of related records:
-
-    ``Ticker -> Report -> ReportClaim -> Claim -> ClaimSource -> Artifact``
-
-    That chain mirrors how the API expects report data to work:
-    - a ticker identifies the listed company;
-    - a report belongs to a ticker;
-    - a claim belongs to the same ticker;
-    - ``report_claims`` links the report to the claim;
-    - ``claim_sources`` links the claim to the source artifact that supports it.
-
-    After committing the records, the test loads the report again and navigates
-    through the ORM relationships. This verifies both sides of the database
-    implementation: the foreign keys can store valid data, and the SQLAlchemy
-    relationships can read that data back in the shape used by the API.
+    ``watchlist_tickers`` uses a composite primary key of (watchlist_id,
+    ticker_id) rather than a surrogate id. This is the shape the watchlist page
+    depends on when it lists a member's saved companies.
     """
-    unique_suffix = uuid.uuid4().hex[:8].upper()
+    from app.crud import investor as investor_crud
+    from app.schemas.investor import InvestorCreate
+
+    investor = investor_crud.create_investor(
+        db_session,
+        InvestorCreate(
+            email=f"watch-{uuid.uuid4().hex}@example.com",
+            username="Watchlist Test",
+        ),
+    )
     ticker = Ticker(
-        symbol=f"T{unique_suffix}",
-        company_name="Database Test Limited",
+        symbol=f"W{uuid.uuid4().hex[:8].upper()}",
+        company_name="Watchlist Test Limited",
         exchange="ASX",
     )
-    db_session.add(ticker)
+    watchlist = Watchlist(investor_id=investor.id, name="Join Table Watchlist")
+    db_session.add_all([ticker, watchlist])
     db_session.flush()
 
-    report = Report(
-        ticker_id=ticker.id,
-        report_title="Database Test Report",
-        report_text="A generated report body.",
-        report_type="daily",
-        model_used="test-model",
-    )
-    claim = Claim(
-        ticker_id=ticker.id,
-        claim_text="The company reported stronger revenue.",
-        claim_type="financial",
-        reliability_label="high",
-        generated_by_model="test-model",
-    )
-    artifact = Artifact(
-        ticker_id=ticker.id,
-        artifact_type="news",
-        title="Revenue update",
-        raw_text="The company reported stronger revenue.",
-        content_hash=f"test-{uuid.uuid4()}",
-    )
-    db_session.add_all([report, claim, artifact])
-    db_session.flush()
-
-    report_claim = ReportClaim(
-        report_id=report.id,
-        claim_id=claim.id,
-        display_order=1,
-    )
-    claim_source = ClaimSource(
-        claim_id=claim.id,
-        artifact_id=artifact.id,
-        evidence_text="The company reported stronger revenue.",
-        url="https://example.test/revenue-update",
-    )
-    db_session.add_all([report_claim, claim_source])
+    db_session.add(WatchlistTicker(watchlist_id=watchlist.id, ticker_id=ticker.id))
     db_session.commit()
 
-    saved_report = db_session.execute(
-        select(Report).where(Report.id == report.id)
+    saved = db_session.execute(
+        select(WatchlistTicker).where(WatchlistTicker.watchlist_id == watchlist.id)
     ).scalar_one()
 
-    assert saved_report.report_claims[0].display_order == 1
-    assert saved_report.report_claims[0].claim.claim_text == claim.claim_text
-    assert saved_report.report_claims[0].claim.claim_sources[0].artifact.title == (
-        "Revenue update"
-    )
+    assert saved.ticker_id == ticker.id
+    assert saved.added_at is not None
 
-
-def test_database_can_create_table_insert_and_read_result(tmp_path: Path) -> None:
-    """Verify the standalone sentiment ``Result`` table can store data.
-
-    ``Result`` is separate from the stock/report schema. It is used by the
-    simple sentiment analysis endpoints in ``main.py`` and does not depend on
-    Postgres-specific UUID or JSONB columns.
-
-    This test intentionally uses a temporary SQLite database because it is a
-    fast smoke test for basic SQLAlchemy behavior:
-    - create the ``results`` table;
-    - insert one sentiment result;
-    - read it back with a query;
-    - confirm the stored values match what was inserted.
-
-    The broader schema is covered by the Postgres tests above. This one remains
-    narrow so it can run quickly in environments without a database server.
-    """
-    database_url = f"sqlite:///{tmp_path / 'test.db'}"
-    engine = create_engine(database_url)
-    TestingSessionLocal = sessionmaker(bind=engine)
-
-    Base.metadata.create_all(bind=engine, tables=[Result.__table__])
-
-    with TestingSessionLocal() as session:
-        result = Result(text="ASX headline", label="positive", score=0.95)
-        session.add(result)
-        session.commit()
-
-    with TestingSessionLocal() as session:
-        saved_result = session.execute(
-            select(Result).where(Result.text == "ASX headline")
-        ).scalar_one()
-
-    assert saved_result.label == "positive"
-    assert saved_result.score == 0.95
 
 def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     """Verify a Reddit post artifact can be written and read back.
@@ -501,7 +432,6 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     artifact_type='reddit_post', a content_hash, and artifact_metadata JSONB.
     """
     from app.models.information_platform import InformationPlatform
-    from datetime import datetime, timezone
 
     platform = InformationPlatform(
         name="Reddit-Test",
@@ -545,10 +475,74 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.artifact_metadata["subreddit"] == "ASX"
 
 
-def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
+def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None:
+    """Verify the artifact analysis chain can be written and read back.
+
+    ``Ticker -> Artifact -> ArtifactSentiment / ArtifactSummary`` is the whole
+    analysis path that survived the schema refactor. ``parsing/storage.py``
+    writes all three in one pass, and the ticker overview and deep-dive
+    endpoints read them back through the ``sentiments`` and ``summaries``
+    backrefs, so both directions need to work.
+    """
+    ticker = Ticker(
+        symbol=f"S{uuid.uuid4().hex[:8].upper()}",
+        company_name="Sentiment Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    artifact = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="dividend_announcement",
+        title="Dividend timetable update",
+        raw_text="The company confirmed its dividend payment date.",
+        content_hash=f"analysis-{uuid.uuid4()}",
+        published_at=datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc),
+    )
+    db_session.add(artifact)
+    db_session.flush()
+
+    db_session.add_all([
+        ArtifactSentiment(
+            artifact_id=artifact.id,
+            sentiment_label="positive",
+            stance="positive",
+            confidence_score=0.87,
+            model_used="test-finbert",
+        ),
+        ArtifactSummary(
+            artifact_id=artifact.id,
+            summary_text="The dividend payment date was confirmed.",
+            model_used="test-groq",
+        ),
+    ])
+    db_session.commit()
+
+    saved = db_session.execute(
+        select(Artifact).where(Artifact.id == artifact.id)
+    ).scalar_one()
+
+    assert saved.ticker.symbol == ticker.symbol
+    assert saved.sentiments[0].sentiment_label == "positive"
+    assert float(saved.sentiments[0].confidence_score) == pytest.approx(0.87)
+    assert saved.summaries[0].summary_text == (
+        "The dividend payment date was confirmed."
+    )
+
+
+def test_announcements_feed_and_trending_only_count_asx_artifacts(
     db_session: Session,
 ) -> None:
-    """Announcement APIs should count only non-duplicate ASX artifacts."""
+    """Announcement APIs should count only ASX-sourced artifacts.
+
+    Duplicates are no longer filtered at read time: ``parsing/storage.py`` skips
+    them at insert time by ``content_hash``, so an announcement never reaches the
+    table twice.
+    """
+    from datetime import date
+
     from app.api.routes.announcement import (
         list_announcements,
         list_trending_announcements,
@@ -565,7 +559,7 @@ def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
     db_session.flush()
 
     published_at = datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc)
-    visible = Artifact(
+    announcement = Artifact(
         ticker_id=ticker.id,
         source_type="asx_announcement",
         artifact_type="dividend_announcement",
@@ -573,17 +567,6 @@ def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
         raw_text="Dividend announcement body",
         published_at=published_at,
         content_hash=f"visible-{uuid.uuid4()}",
-        is_duplicate=False,
-    )
-    duplicate = Artifact(
-        ticker_id=ticker.id,
-        source_type="asx_announcement",
-        artifact_type="dividend_announcement",
-        title="Duplicate dividend update",
-        raw_text="Duplicate announcement body",
-        published_at=published_at,
-        content_hash=f"duplicate-{uuid.uuid4()}",
-        is_duplicate=True,
     )
     reddit = Artifact(
         ticker_id=ticker.id,
@@ -593,9 +576,8 @@ def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
-        is_duplicate=False,
     )
-    db_session.add_all([visible, duplicate, reddit])
+    db_session.add_all([announcement, reddit])
     db_session.commit()
 
     announcements = list_announcements(
@@ -605,8 +587,7 @@ def test_announcements_feed_and_trending_exclude_duplicate_artifacts(
     )
     announcement_ids = {item.id for item in announcements}
 
-    assert visible.id in announcement_ids
-    assert duplicate.id not in announcement_ids
+    assert announcement.id in announcement_ids
     assert reddit.id not in announcement_ids
 
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
@@ -619,7 +600,7 @@ def test_ticker_brief_aside_returns_empty_database_state(
     db_session: Session,
 ) -> None:
     """The ticker sidebar API should not fall back to mocked values."""
-    from app.api.routes.ticker import get_ticker_brief_aside
+    from app.api.routes import ticker as ticker_route
 
     symbol = f"E{uuid.uuid4().hex[:8].upper()}"
     ticker = Ticker(
@@ -630,7 +611,8 @@ def test_ticker_brief_aside_returns_empty_database_state(
     db_session.add(ticker)
     db_session.commit()
 
-    result = get_ticker_brief_aside(symbol.lower(), db=db_session)
+    with patch.object(ticker_route, "_live_quote", return_value=None):
+        result = ticker_route.get_ticker_brief_aside(symbol.lower(), db=db_session)
 
     assert result["key_numbers"] == [
         {"label": "Current price", "value": "N/A"},
@@ -638,71 +620,197 @@ def test_ticker_brief_aside_returns_empty_database_state(
         {"label": "Latest filing", "value": "No filings yet"},
         {"label": "Latest type", "value": "No filings yet"},
     ]
-    assert result["market_intelligence"] == {"confirmed": [], "rumoured": []}
     assert result["themes"] == []
 
 
-def test_ticker_brief_aside_uses_market_artifact_and_claim_data(
-    db_session: Session,
-) -> None:
-    """The ticker sidebar API should derive values from persisted records."""
-    from app.api.routes.ticker import get_ticker_brief_aside
+def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
+    """The overview API should format the live quote it is given.
 
-    symbol = f"B{uuid.uuid4().hex[:8].upper()}"
+    The quote is fetched from Yahoo at request time rather than stored, so the
+    lookup is patched here and only the formatting and failure handling are
+    under test.
+    """
+    from app.api.routes import ticker as ticker_route
+
+    symbol = f"Q{uuid.uuid4().hex[:8].upper()}"
     ticker = Ticker(
         symbol=symbol,
-        company_name="Brief Sidebar Test Limited",
+        company_name="Quote Test Limited",
         exchange="ASX",
     )
     db_session.add(ticker)
-    db_session.flush()
-
-    db_session.add_all([
-        MarketData(
-            ticker_id=ticker.id,
-            price_date=date(2040, 1, 1),
-            close_price=10,
-        ),
-        MarketData(
-            ticker_id=ticker.id,
-            price_date=date(2040, 1, 2),
-            close_price=11,
-        ),
-    ])
-
-    artifact = Artifact(
-        ticker_id=ticker.id,
-        source_type="asx_announcement",
-        artifact_type="dividend_announcement",
-        title="Dividend update",
-        raw_text="Dividend announcement body",
-        published_at=datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc),
-        content_hash=f"brief-{uuid.uuid4()}",
-        artifact_metadata={"category": "DividendAnnouncement"},
-        is_duplicate=False,
-    )
-    claim = Claim(
-        ticker_id=ticker.id,
-        claim_text="The dividend was increased.",
-        claim_type="financial",
-        reliability_label="high",
-    )
-    db_session.add_all([artifact, claim])
-    db_session.flush()
-    db_session.add(ClaimSource(
-        claim_id=claim.id,
-        artifact_id=artifact.id,
-        evidence_text="The dividend was increased.",
-        url="https://example.test/dividend",
-    ))
     db_session.commit()
 
-    result = get_ticker_brief_aside(symbol, db=db_session)
+    with patch.object(ticker_route, "_live_quote", return_value=(31.25, 30.0)):
+        result = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
 
-    assert {"label": "Current price", "value": "$11.00"} in result["key_numbers"]
-    assert {"label": "Day change", "value": "+10.00%"} in result["key_numbers"]
-    assert {"label": "Latest filing", "value": "Jan 2040"} in result["key_numbers"]
-    assert {"label": "Latest type", "value": "Dividend Announcement"} in result["key_numbers"]
-    assert result["market_intelligence"]["confirmed"] == ["The dividend was increased."]
-    assert result["market_intelligence"]["rumoured"] == []
-    assert result["themes"] == ["Dividend Announcement activity"]
+    assert result["current_price"] == "$31.25"
+    assert result["day_change"] == "+4.17%"
+
+    with patch.object(ticker_route, "_live_quote", return_value=None):
+        unavailable = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
+
+    assert unavailable["current_price"] == "N/A"
+    assert unavailable["day_change"] == "N/A"
+
+
+def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
+    """Duplicate queue work updates one artifact and one pair of results."""
+    from app.crud import artifact as artifact_crud
+    from app.crud import scrape_run as scrape_run_crud
+    from app.models.artifact_sentiment import ArtifactSentiment
+    from app.models.artifact_summary import ArtifactSummary
+
+    request_key = f"test:{uuid.uuid4()}"
+    run, created = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=request_key,
+    )
+    duplicate_run, duplicate_created = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=request_key,
+    )
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate_run.id == run.id
+    assert run.status == "enqueueing"
+
+    scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
+    scrape_run_crud.mark_run_discovery_started(db_session, run.id)
+    scrape_run_crud.mark_run_queued_if_enqueueing(db_session, run.id)
+    db_session.refresh(run)
+    assert run.status == "discovering"
+
+    canonical_url = f"https://example.test/{uuid.uuid4()}.pdf"
+    artifact, artifact_created = scrape_run_crud.get_or_create_artifact(
+        db_session,
+        scrape_run_id=run.id,
+        canonical_url=canonical_url,
+        document_url=canonical_url,
+        source_adapter="csl",
+        source_id="csl-test-document",
+        title="CSL test announcement",
+    )
+    duplicate_artifact, duplicate_artifact_created = (
+        scrape_run_crud.get_or_create_artifact(
+            db_session,
+            scrape_run_id=run.id,
+            canonical_url=canonical_url,
+            document_url=canonical_url,
+            source_adapter="csl",
+            source_id="csl-test-document",
+        )
+    )
+    assert artifact_created is True
+    assert duplicate_artifact_created is False
+    assert duplicate_artifact.id == artifact.id
+
+    second_run, _ = scrape_run_crud.get_or_create_queued_run(
+        db_session,
+        ticker="CSL",
+        source_url="https://investors.csl.com/investors/asx-announcements",
+        idempotency_key=f"test:{uuid.uuid4()}",
+    )
+    prior_artifact, prior_artifact_created = scrape_run_crud.get_or_create_artifact(
+        db_session,
+        scrape_run_id=second_run.id,
+        canonical_url=canonical_url,
+        document_url=canonical_url,
+        source_adapter="csl",
+        source_id="csl-test-document",
+    )
+    assert prior_artifact_created is False
+    assert prior_artifact.id == artifact.id
+    assert prior_artifact.scrape_run_id == run.id
+
+    scrape_run_crud.mark_artifact_download_started(db_session, artifact.id)
+    scrape_run_crud.mark_artifact_stored(
+        db_session,
+        artifact.id,
+        checksum_sha256="a" * 64,
+        s3_bucket="raw-documents",
+        s3_key=f"raw/CSL/{artifact.id}/{'a' * 64}.pdf",
+        content_type="application/pdf",
+        file_size_bytes=128,
+    )
+    scrape_run_crud.mark_artifact_analysis_started(db_session, artifact.id)
+
+    analysis = {
+        "raw_text": "CSL announced a test result.",
+        "metadata": {"page_count": 1},
+        "summary": {
+            "summary_text": "CSL announced a test result.",
+            "model_used": "test-summary",
+        },
+        "sentiment": {
+            "sentiment_label": "neutral",
+            "confidence_score": 0.9,
+            "model_used": "test-finbert",
+        },
+    }
+    artifact_crud.store_artifact_analysis(
+        db_session,
+        artifact_id=artifact.id,
+        **analysis,
+    )
+    artifact_crud.store_artifact_analysis(
+        db_session,
+        artifact_id=artifact.id,
+        **analysis,
+    )
+    scrape_run_crud.mark_artifact_analysis_completed(db_session, artifact.id)
+    scrape_run_crud.mark_artifact_analysis_completed(db_session, artifact.id)
+    scrape_run_crud.mark_run_discovery_completed(
+        db_session,
+        run.id,
+        items_found=1,
+    )
+
+    db_session.refresh(run)
+    db_session.refresh(artifact)
+    assert run.status == "completed"
+    assert run.items_downloaded == 1
+    assert run.items_analyzed == 1
+    assert artifact.download_status == "stored"
+    assert artifact.analysis_status == "completed"
+    assert (
+        db_session.query(ArtifactSummary)
+        .filter(ArtifactSummary.artifact_id == artifact.id)
+        .count()
+        == 1
+    )
+
+    scrape_run_crud.mark_run_discovery_started(db_session, run.id)
+    scrape_run_crud.mark_run_discovery_completed(db_session, run.id, items_found=1)
+    scrape_run_crud.mark_run_discovery_failed(
+        db_session,
+        run.id,
+        error="late duplicate failed",
+    )
+    scrape_run_crud.mark_artifact_download_failed(
+        db_session,
+        artifact.id,
+        error="late duplicate download failed",
+    )
+    scrape_run_crud.mark_artifact_analysis_failed(
+        db_session,
+        artifact.id,
+        error="late duplicate analysis failed",
+    )
+    db_session.refresh(run)
+    db_session.refresh(artifact)
+    assert run.status == "completed"
+    assert run.items_failed == 0
+    assert artifact.download_status == "stored"
+    assert artifact.analysis_status == "completed"
+    assert (
+        db_session.query(ArtifactSentiment)
+        .filter(ArtifactSentiment.artifact_id == artifact.id)
+        .count()
+        == 1
+    )

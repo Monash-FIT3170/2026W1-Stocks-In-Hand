@@ -83,7 +83,6 @@ hr.div { border: none; border-top: 1px solid #21262d; margin: 12px 0; }
     <a id="nav-artifacts"  onclick="loadTable('artifacts')"  class="active">Artifacts  <span class="cnt" id="cnt-artifacts">…</span></a>
     <a id="nav-tickers"    onclick="loadTable('tickers')">Tickers    <span class="cnt" id="cnt-tickers">…</span></a>
     <a id="nav-platforms"  onclick="loadTable('platforms')">Platforms  <span class="cnt" id="cnt-platforms">…</span></a>
-    <a id="nav-topics"     onclick="loadTable('topics')">Topics     <span class="cnt" id="cnt-topics">…</span></a>
     <a id="nav-investors"  onclick="loadTable('investors')">Investors  <span class="cnt" id="cnt-investors">…</span></a>
   </nav>
 
@@ -110,7 +109,6 @@ const TABLES = {
       { key: 'source_type',   label: 'Source',    render: v => v ? badge(v, 'bs') : '—' },
       { key: '_ticker',       label: 'Ticker' },
       { key: 'published_at',  label: 'Published', render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
-      { key: 'is_duplicate',  label: 'Dup',       render: v => v ? '<span style="color:#f0883e">Yes</span>' : 'No', cls: 'mono' },
     ],
     filterKey: 'artifact_type',
     searchKeys: ['title','artifact_type','source_type'],
@@ -134,17 +132,8 @@ const TABLES = {
       { key: 'platform_type',     label: 'Type',       cls: 'mono' },
       { key: 'base_url',          label: 'Base URL' },
       { key: 'scrape_enabled',    label: 'Scraping',   render: v => v ? '<span style="color:#56d364">Yes</span>' : 'No' },
-      { key: 'credibility_score', label: 'Credibility', cls: 'mono' },
     ],
     searchKeys: ['name','platform_type'],
-  },
-  topics: {
-    endpoint: '/topics',
-    columns: [
-      { key: 'name',       label: 'Name' },
-      { key: 'created_at', label: 'Created', render: v => v ? v.slice(0,10) : '—', cls: 'mono' },
-    ],
-    searchKeys: ['name'],
   },
   investors: {
     endpoint: '/investors',
@@ -323,12 +312,6 @@ function renderArtifact(a) {
 
     <div class="f"><div class="fl">Scraped</div>
       <div class="fv">${a.scraped_at ? a.scraped_at.slice(0,19).replace('T',' ') : '—'}</div></div>
-
-    <div class="f"><div class="fl">Duplicate</div>
-      <div class="fv">${a.is_duplicate ? '<span style="color:#f0883e">Yes</span>' : 'No'}</div></div>
-
-    <div class="f"><div class="fl">Credibility</div>
-      <div class="fv ${!a.credibility_label?'muted':''}">${esc(a.credibility_label||'none')}</div></div>
 
     <div class="f"><div class="fl">URL</div>
       <div class="fv">${a.url ? `<a href="${esc(a.url)}" target="_blank">${esc(a.url)}</a>` : '<span class="muted">none</span>'}</div></div>

@@ -23,6 +23,12 @@ _LEADING_LABELS = re.compile(
     flags=re.IGNORECASE,
 )
 
+_GENERIC_DATED_TITLE = re.compile(
+    r"^(?:exchange|media|news|asx) releases?"
+    r"(?:\s+\d{1,2}\s+[A-Za-z]+\s+\d{4})?$",
+    flags=re.IGNORECASE,
+)
+
 
 def _slug_title(url: str | None) -> str | None:
     if not url:
@@ -64,7 +70,10 @@ def normalise_title(
         match = re.search(re.escape(slug_title), cleaned, flags=re.IGNORECASE)
         if match:
             cleaned = cleaned[match.start():match.end()]
-        elif len(cleaned) > max_length and len(slug_title) <= max_length:
+        elif (
+            len(cleaned) > max_length
+            or _GENERIC_DATED_TITLE.fullmatch(cleaned)
+        ) and len(slug_title) <= max_length:
             cleaned = slug_title[0].upper() + slug_title[1:]
 
     if len(cleaned) > max_length:

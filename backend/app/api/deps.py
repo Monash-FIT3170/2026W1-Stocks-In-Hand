@@ -52,3 +52,15 @@ def get_current_investor(
         )
 
     return investor
+
+
+def require_admin_investor(
+    current_investor: Investor = Depends(get_current_investor),
+) -> Investor:
+    """Restrict cost-bearing and account-management operations to admins."""
+    if (current_investor.role or "").lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required",
+        )
+    return current_investor

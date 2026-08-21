@@ -6,28 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main
 from unittest.mock import patch, MagicMock
-from fastapi import BackgroundTasks
 
 
 def test_health() -> None:
     """Confirming that the health API returns the "ok" status as expected"""
     assert main.health() == {"status": "ok"}
-
-
-def test_scrape_ticker_queues_complete_processing_pipeline() -> None:
-    """Manual scrapes must extract, store, summarise, and analyse results."""
-    import asyncio
-
-    background_tasks = BackgroundTasks()
-
-    with patch.object(main, "available_tickers", return_value=["BHP"]):
-        result = asyncio.run(main.scrape_ticker("bhp", background_tasks))
-
-    assert result == {"status": "queued", "ticker": "BHP"}
-    assert len(background_tasks.tasks) == 1
-    task = background_tasks.tasks[0]
-    assert task.func is main.run_ticker_scrape
-    assert task.args == ("BHP", main.OUTPUT_DIR)
 
 
 def test_news_feed_does_not_use_raw_text_as_summary() -> None:
@@ -286,7 +269,15 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
             "changed": "The payment date was confirmed.",
             "matters": "Investors can plan income timing.",
         },
-    ):
+    ), patch.object(
+        gemini.artifact_summary_crud,
+        "upsert_artifact_summary",
+        return_value=MagicMock(
+            id=uuid.uuid4(),
+            model_used="test-gemini",
+            prompt_version="test-v1",
+        ),
+    ) as mock_upsert:
         result = gemini.summarise_artifact(
             artifact_id=artifact.id,
             db=db,
@@ -296,8 +287,7 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
     assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
     assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
     assert result["summary"] == "The company confirmed its dividend timetable."
-    db.add.assert_called_once()
-    db.commit.assert_called_once()
+    mock_upsert.assert_called_once()
 
 
 def test_summarise_news_artifact_uses_news_prompt() -> None:

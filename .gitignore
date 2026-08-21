@@ -6,6 +6,7 @@
 **/_data
 **/_test_output
 output
+PERSON1_AWS_DEPLOYMENT_PLAN.md
 discover.py
 
 ####################################################################################################
@@ -17,6 +18,7 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+.claude
 # C extensions
 *.so
 
