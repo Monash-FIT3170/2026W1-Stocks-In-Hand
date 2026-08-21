@@ -1,0 +1,93 @@
+name: Execute approved staging change set
+
+on:
+  workflow_dispatch:
+    inputs:
+      change_set_arn:
+        description: Change-set ARN approved by Person 1
+        required: true
+        type: string
+      approval_reference:
+        description: Person 1 approval reference
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-execute
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    name: Person 2 executes reviewed change set
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-execute
+
+      - name: Verify the approved change set
+        id: verify
+        shell: bash
+        env:
+          CHANGE_SET_ARN: ${{ inputs.change_set_arn }}
+        run: |
+          EXECUTION_STATUS="$(aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --query ExecutionStatus \
+            --output text)"
+          if [ "$EXECUTION_STATUS" != "AVAILABLE" ]; then
+            echo "Change set is not available: $EXECUTION_STATUS" >&2
+            exit 1
+          fi
+          STACK_STATUS="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].StackStatus' \
+            --output text)"
+          if [ "$STACK_STATUS" = "REVIEW_IN_PROGRESS" ]; then
+            echo "waiter=stack-create-complete" >> "$GITHUB_OUTPUT"
+          else
+            echo "waiter=stack-update-complete" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Execute the approved change set
+        shell: bash
+        env:
+          CHANGE_SET_ARN: ${{ inputs.change_set_arn }}
+        run: |
+          aws cloudformation execute-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME"
+
+      - name: Wait for CloudFormation
+        shell: bash
+        run: |
+          aws cloudformation wait "${{ steps.verify.outputs.waiter }}" \
+            --stack-name "$STACK_NAME"
+
+      - name: Record deployment outputs
+        shell: bash
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Outputs' \
+            --output table
+          {
+            echo "### Approved staging change set executed"
+            echo ""
+            echo "Approval: ${{ inputs.approval_reference }}"
+            echo ""
+            echo "Change set: \`${{ inputs.change_set_arn }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

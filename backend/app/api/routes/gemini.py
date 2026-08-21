@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.crud import artifact as artifact_crud
+from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
-from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.services import gemini as gemini_service
 
@@ -123,15 +123,13 @@ def summarise_ticker_artifacts(
                 next_metadata[key] = value
         artifact.artifact_metadata = next_metadata
 
-        db_summary = ArtifactSummary(
+        artifact_summary_crud.upsert_artifact_summary(
+            db,
             artifact_id=artifact.id,
             summary_text=_summary_text(artifact.title or "Untitled ASX announcement", summary),
             model_used=gemini_service.active_model_name(),
         )
-        db.add(db_summary)
         processed += 1
-
-    db.commit()
 
     return {
         "ticker": symbol.upper(),
@@ -177,7 +175,8 @@ def summarise_artifact(
             next_metadata[key] = value
     artifact.artifact_metadata = next_metadata
 
-    db_summary = ArtifactSummary(
+    db_summary = artifact_summary_crud.upsert_artifact_summary(
+        db,
         artifact_id=artifact.id,
         summary_text=_summary_text(
             artifact.title or "Untitled ASX announcement",
@@ -185,9 +184,6 @@ def summarise_artifact(
         ),
         model_used=gemini_service.active_model_name(),
     )
-    db.add(db_summary)
-    db.commit()
-    db.refresh(db_summary)
 
     return {
         "artifact_id": artifact.id,

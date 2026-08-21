@@ -1,3 +1,6 @@
+"use client"
+
+import { useEffect, useState } from "react"
 import { AnnouncementCard } from "../../../components/announcements/AnnouncementCard"
 import { AppFrame } from "../../../components/layout/AppFrame"
 import { BriefAside } from "../../../components/ticker/BriefAside"
@@ -8,21 +11,53 @@ import styles from "../../../page.module.css"
 
 // Ticker brief news tab for "/ticker/[symbol]/news".
 // This reuses AnnouncementCard and renders only DB-backed ticker announcements.
-async function fetchNews(symbol) {
-  const [news, overview, aside] = await Promise.all([
-    fetchTickerNews(symbol),
-    fetchTickerOverview(symbol),
-    fetchTickerBriefAside(symbol),
-  ])
-  return { news, overview, aside }
-}
+export default function TickerNewsRoute({ params }) {
+  const symbol = params.symbol.toUpperCase()
+  const [state, setState] = useState({
+    aside: null,
+    error: false,
+    isLoading: true,
+    news: [],
+    overview: null,
+  })
 
-export default async function TickerNewsRoute({ params }) {
-  const symbol = params.symbol
-  let news, overview, aside
-  try {
-    ;({ news, overview, aside } = await fetchNews(symbol))
-  } catch {
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadNews() {
+      try {
+        const [news, overview, aside] = await Promise.all([
+          fetchTickerNews(symbol),
+          fetchTickerOverview(symbol),
+          fetchTickerBriefAside(symbol),
+        ])
+        if (!cancelled) {
+          setState({ aside, error: false, isLoading: false, news, overview })
+        }
+      } catch {
+        if (!cancelled) {
+          setState({ aside: null, error: true, isLoading: false, news: [], overview: null })
+        }
+      }
+    }
+
+    loadNews()
+    return () => {
+      cancelled = true
+    }
+  }, [symbol])
+
+  if (state.isLoading) {
+    return (
+      <AppFrame active="home">
+        <section className={styles.contentPage}>
+          <div className={styles.emptyCard}><h3>Loading {symbol} news...</h3></div>
+        </section>
+      </AppFrame>
+    )
+  }
+
+  if (state.error) {
     return (
       <AppFrame active="home">
         <section className={styles.contentPage}>
@@ -34,6 +69,8 @@ export default async function TickerNewsRoute({ params }) {
       </AppFrame>
     )
   }
+
+  const { news, overview, aside } = state
 
   return (
     <AppFrame active="home">

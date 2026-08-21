@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey
+from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -7,6 +7,12 @@ from app.database.base import Base
 
 class ArtifactSentiment(Base):
     __tablename__ = "artifact_sentiments"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            name="uq_artifact_sentiments_artifact",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id"), nullable=False)

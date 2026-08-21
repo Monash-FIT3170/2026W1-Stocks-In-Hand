@@ -388,7 +388,15 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
             "changed": "The payment date was confirmed.",
             "matters": "Investors can plan income timing.",
         },
-    ):
+    ), patch.object(
+        gemini.artifact_summary_crud,
+        "upsert_artifact_summary",
+        return_value=MagicMock(
+            id=uuid.uuid4(),
+            model_used="test-gemini",
+            prompt_version="test-v1",
+        ),
+    ) as mock_upsert:
         result = gemini.summarise_artifact(
             artifact_id=artifact.id,
             db=db,
@@ -398,5 +406,4 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
     assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
     assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
     assert result["summary"] == "The company confirmed its dividend timetable."
-    db.add.assert_called_once()
-    db.commit.assert_called_once()
+    mock_upsert.assert_called_once()

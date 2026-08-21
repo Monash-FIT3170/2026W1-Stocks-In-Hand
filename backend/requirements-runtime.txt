@@ -1,0 +1,4 @@
+boto3==1.43.58
+pydantic==2.13.4
+psycopg2-binary==2.9.12
+sqlalchemy==2.0.51
