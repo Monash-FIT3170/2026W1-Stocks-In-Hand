@@ -14,11 +14,10 @@ from app.core.config import settings
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
 from app.crud import ticker as ticker_crud
-from app.models.artifact_summary import ArtifactSummary
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
 from app.schemas.ticker import TickerCreate
-from app.services import gemini as summary_service
+from app.services import news_summary
 from app.services.title_normalization import normalise_title
 
 
@@ -224,42 +223,6 @@ def _get_or_create_platform(db: Session):
     )
 
 
-def _summary_text(title: str, summary: dict[str, str]) -> str:
-    parts = [
-        summary.get("summary"),
-        summary.get("about"),
-        summary.get("changed"),
-        summary.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    return "\n\n".join(cleaned) or title
-
-
-def _summarise_and_store_news_artifact(
-    db: Session,
-    artifact,
-    article: NewsArticle,
-) -> None:
-    summary = summary_service.summarise_news_article(
-        title=article.title,
-        source_name=article.source_name,
-        raw_text=article.raw_text,
-    )
-    metadata = dict(artifact.artifact_metadata or {})
-    for key in ("summary", "about", "changed", "matters"):
-        value = summary.get(key)
-        if value:
-            metadata[key] = value
-    artifact.artifact_metadata = metadata
-    db.add(ArtifactSummary(
-        artifact_id=artifact.id,
-        summary_text=_summary_text(article.title, summary),
-        model_used=summary_service.active_model_name(),
-        prompt_version=summary_service.NEWS_SUMMARY_PROMPT_VERSION,
-    ))
-    db.commit()
-
-
 def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]:
     """Fetch Marketaux articles and persist new ones as news artifacts."""
     articles = fetch_news(symbol, limit)
@@ -281,14 +244,9 @@ def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]
             existing = artifact_crud.get_artifact_by_hash(db, content_hash)
             if existing:
                 result["skipped_duplicates"] += 1
-                metadata = (
-                    existing.artifact_metadata
-                    if isinstance(existing.artifact_metadata, dict)
-                    else {}
-                )
-                if not metadata.get("about"):
+                if not news_summary.has_news_summary_metadata(existing):
                     try:
-                        _summarise_and_store_news_artifact(db, existing, article)
+                        news_summary.summarise_news_artifact(db, existing)
                         result["summarised"] += 1
                     except Exception as exc:  # noqa: BLE001
                         db.rollback()
@@ -328,7 +286,7 @@ def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]
             )
             result["created"] += 1
             try:
-                _summarise_and_store_news_artifact(db, artifact, article)
+                news_summary.summarise_news_artifact(db, artifact)
                 result["summarised"] += 1
             except Exception as exc:  # noqa: BLE001
                 db.rollback()

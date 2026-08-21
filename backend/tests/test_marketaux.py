@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from app.api.routes import news
 from app.schemas.artifact import ArtifactType, SourceType
@@ -175,8 +176,8 @@ def test_correct_news_artifact_is_created() -> None:
         "create_artifact",
         return_value=MagicMock(id=uuid.uuid4(), artifact_metadata={}),
     ) as create_artifact, patch.object(
-        marketaux,
-        "_summarise_and_store_news_artifact",
+        marketaux.news_summary,
+        "summarise_news_artifact",
     ) as summarise_artifact:
         result = marketaux.fetch_and_store_news("BHP", 10, db)
 
@@ -192,34 +193,6 @@ def test_correct_news_artifact_is_created() -> None:
     assert artifact.artifact_metadata["text_used"] == "description"
     assert artifact.artifact_metadata["symbols"] == ["BHP.AX"]
     summarise_artifact.assert_called_once()
-
-
-def test_news_summary_is_stored_in_artifact_metadata() -> None:
-    db = MagicMock()
-    article = _article()
-    artifact = MagicMock()
-    artifact.id = uuid.uuid4()
-    artifact.artifact_metadata = {"provider": "marketaux"}
-
-    with patch.object(
-        marketaux.summary_service,
-        "summarise_news_article",
-        return_value={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The story covers BHP's quarterly copper production.",
-            "changed": "Reported copper output increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        },
-    ):
-        marketaux._summarise_and_store_news_artifact(db, artifact, article)
-
-    assert artifact.artifact_metadata["about"] == (
-        "The story covers BHP's quarterly copper production."
-    )
-    summary_row = db.add.call_args.args[0]
-    assert summary_row.artifact_id == artifact.id
-    assert summary_row.prompt_version == "groq-news-summary-v1"
-    db.commit.assert_called_once()
 
 
 def test_news_fetch_route_response_shape() -> None:
@@ -242,3 +215,69 @@ def test_news_fetch_route_response_shape() -> None:
 
     assert result == expected
     fetch_and_store.assert_called_once_with("bhp", 5, ANY)
+
+
+def test_news_summarise_route_response_shape() -> None:
+    expected = {
+        "ticker": "BHP",
+        "candidates": 3,
+        "summarised": 2,
+        "skipped": 1,
+        "errors": [],
+    }
+
+    with patch.object(
+        news.news_summary,
+        "summarise_news_for_symbol",
+        return_value=expected,
+    ) as summarise_news:
+        result = news.summarise_symbol_news("bhp", limit=25, db=MagicMock())
+
+    assert result == expected
+    summarise_news.assert_called_once_with(ANY, "bhp", limit=25)
+
+
+def test_news_summarise_route_missing_ticker_maps_to_404() -> None:
+    with patch.object(
+        news.news_summary,
+        "summarise_news_for_symbol",
+        side_effect=ValueError("Ticker 'BHP' not found"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            news.summarise_symbol_news("BHP", db=MagicMock())
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Ticker 'BHP' not found"
+
+
+def test_news_sentiment_route_response_shape() -> None:
+    expected = {
+        "ticker": "BHP",
+        "candidates": 3,
+        "analysed": 2,
+        "skipped": 1,
+        "errors": [],
+    }
+
+    with patch.object(
+        news.news_sentiment,
+        "analyse_news_sentiment_for_symbol",
+        return_value=expected,
+    ) as analyse_news_sentiment:
+        result = news.analyse_symbol_news_sentiment("bhp", limit=25, db=MagicMock())
+
+    assert result == expected
+    analyse_news_sentiment.assert_called_once_with(ANY, "bhp", limit=25)
+
+
+def test_news_sentiment_route_missing_ticker_maps_to_404() -> None:
+    with patch.object(
+        news.news_sentiment,
+        "analyse_news_sentiment_for_symbol",
+        side_effect=ValueError("Ticker 'BHP' not found"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            news.analyse_symbol_news_sentiment("BHP", db=MagicMock())
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Ticker 'BHP' not found"
