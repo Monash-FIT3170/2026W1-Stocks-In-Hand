@@ -7,6 +7,14 @@ on:
         description: Previous full Git SHA stored in the frontend bucket
         required: true
         type: string
+      auth_provider:
+        description: Authentication mode of the retained frontend release
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - cognito
       compatibility_reference:
         description: Person 2 compatibility confirmation
         required: true
@@ -64,14 +72,16 @@ jobs:
           fi
           if ! aws s3api head-object \
             --bucket "$FRONTEND_BUCKET" \
-            --key "_releases/$RELEASE_SHA/index.html" >/dev/null; then
-            echo "Stored frontend release does not exist: $RELEASE_SHA" >&2
+            --key "_releases/$RELEASE_SHA/${{ inputs.auth_provider }}/index.html" >/dev/null; then
+            echo "Stored frontend release does not exist for the selected authentication mode" >&2
             exit 1
           fi
           aws s3 sync \
-            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
+            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA/${{ inputs.auth_provider }}" \
             "s3://$FRONTEND_BUCKET" \
             --delete \
+            --exclude "_READY" \
+            --exclude "_candidates/*" \
             --exclude "_releases/*"
           aws cloudfront create-invalidation \
             --distribution-id "$DISTRIBUTION_ID" \
@@ -80,6 +90,8 @@ jobs:
             echo "### Staging frontend rollback started"
             echo ""
             echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Authentication mode: \`${{ inputs.auth_provider }}\`"
             echo ""
             echo "Compatibility confirmation: ${{ inputs.compatibility_reference }}"
           } >> "$GITHUB_STEP_SUMMARY"

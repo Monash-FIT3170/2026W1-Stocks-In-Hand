@@ -3,8 +3,7 @@
 import { useRouter } from "next/navigation"
 import { useEffect } from "react"
 import { apiFetch } from "../lib/api"
-
-const AUTH_STORAGE_KEY = "stonks_signed_in"
+import { isCognitoAuthEnabled, signOutFromCognito } from "../../auth/cognito"
 
 export default function SignOutRoute() {
   const router = useRouter()
@@ -12,12 +11,15 @@ export default function SignOutRoute() {
   useEffect(() => {
     async function signOut() {
       try {
-        await apiFetch("/auth/sign-out", {
-          method: "POST",
-          credentials: "include",
-        })
+        if (isCognitoAuthEnabled()) {
+          await signOutFromCognito()
+        } else {
+          await apiFetch("/auth/sign-out", {
+            method: "POST",
+            credentials: "include",
+          })
+        }
       } finally {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY)
         router.replace("/")
       }
     }

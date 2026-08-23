@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import time
-from pathlib import Path
 import traceback
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 # Make app modules importable from parsing directory
@@ -13,29 +14,30 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 # db components
+from app.crud import artifact as artifact_crud
+from app.crud import information_platform as platform_crud
+from app.crud import ticker as ticker_crud
 from app.database.connection import SessionLocal
-from app.models.ticker import Ticker
-from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.services import groq as groq_service
-from app.services import sentiment as sentiment_service
+from app.models.information_platform import InformationPlatform
+from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
-from app.crud import artifact as artifact_crud
-from app.crud import ticker as ticker_crud
-from app.crud import information_platform as platform_crud
+from app.services import sentiment as sentiment_service
+from app.services import summary as summary_service
 
 if TYPE_CHECKING:
-    from scrapers.base import Announcement
     from categories.base import ReportCategory
+
+    from scrapers.base import Announcement
 
 # Maps parsing category class names to typed ArtifactType enum values.
 # Categories not listed here are stored as ASX_ANNOUNCEMENT_OTHER.
 _CATEGORY_TO_ARTIFACT_TYPE: dict[str, ArtifactType] = {
     "DividendAnnouncement": ArtifactType.DIVIDEND_ANNOUNCEMENT,
     "SecurityNotification": ArtifactType.SECURITY_NOTIFICATION,
-    "LeadershipChange":     ArtifactType.LEADERSHIP_CHANGE,
+    "LeadershipChange": ArtifactType.LEADERSHIP_CHANGE,
 }
 
 
@@ -125,7 +127,7 @@ def _summarise_and_store_artifact(
         return
 
     try:
-        summary = groq_service.summarise_announcement(
+        summary = summary_service.summarise_announcement(
             title=artifact.title or "Untitled ASX announcement",
             category=category_name,
             extracted_data=extracted_data,
@@ -145,6 +147,12 @@ def _summarise_and_store_artifact(
         value = summary.get(key)
         if value:
             metadata[key] = value
+    metadata["analysis_provenance"] = {
+        "environment": os.getenv("ANALYSIS_ENVIRONMENT", "runtime"),
+        "provider": summary_service.active_provider_name(),
+        "model": summary_service.active_model_name(),
+        "prompt_version": summary_service.active_prompt_version(),
+    }
     artifact.artifact_metadata = metadata
 
     db.add(ArtifactSummary(
@@ -153,7 +161,7 @@ def _summarise_and_store_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=groq_service.active_model_name(),
+        model_used=summary_service.active_model_name(),
     ))
     db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")

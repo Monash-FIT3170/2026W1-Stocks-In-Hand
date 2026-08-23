@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin_investor
 from app.crud import artifact as artifact_crud
 from app.crud import artifact_sentiment as artifact_sentiment_crud
 from app.api.routes import reddit as reddit_route
 from app.database.connection import get_db
 from app.models.artifact import Artifact
+from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.schemas.category_sentiment import CategorySentimentRequest
 from app.schemas.category_sentiment import CategorySentimentResponse
@@ -369,6 +371,7 @@ def analyse_ticker_category_sentiments(
     batch_size: int = 0,
     persist: bool = True,
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     return build_ticker_category_sentiment(
         ticker=ticker,

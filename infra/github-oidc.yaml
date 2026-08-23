@@ -188,6 +188,32 @@ Resources:
                   - apigateway:POST
                   - apigateway:PUT
                 Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
+              - Sid: CreateApplicationCognitoUserPool
+                Effect: Allow
+                Action: cognito-idp:CreateUserPool
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: StocksInHand
+                    aws:RequestTag/Environment: !Ref GitHubEnvironment
+              - Sid: ManageApplicationCognitoUserPool
+                Effect: Allow
+                Action:
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:ListTagsForResource
+                  - cognito-idp:ListUserPoolClients
+                  - cognito-idp:SetUserPoolMfaConfig
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:UpdateUserPoolClient
+                Resource: !Sub "arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: StocksInHand
+                    aws:ResourceTag/Environment: !Ref GitHubEnvironment
               - Sid: TagApplicationApiGateway
                 Effect: Allow
                 Action:

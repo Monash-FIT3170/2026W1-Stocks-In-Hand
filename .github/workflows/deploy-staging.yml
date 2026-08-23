@@ -3,6 +3,15 @@ name: Prepare staging release
 on:
   workflow_dispatch:
     inputs:
+      auth_provider:
+        description: Backend authentication provider for this change set
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - dual
+          - cognito
       enable_schedule:
         description: Enable the weekly scrape in the reviewed change set
         required: true
@@ -54,6 +63,31 @@ jobs:
     steps:
       - name: Check out the selected commit
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-api.txt
+            backend/requirements-testing.txt
+
+      - name: Install backend test dependencies
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r backend/requirements-api.txt \
+            -r backend/requirements-testing.txt \
+            pypdf==6.14.2 \
+            defusedxml==0.7.1 \
+            playwright==1.61.0
+
+      - name: Run backend tests and security checks
+        shell: bash
+        run: |
+          python -m pytest -q backend/tests
+          python -m bandit -q -r backend/app backend/main.py
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v6.1.2
@@ -180,6 +214,7 @@ jobs:
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "AuthProvider=${{ inputs.auth_provider }}" \
               "ScheduleEnabled=${{ inputs.enable_schedule }}" \
               "AnalysisEnabled=${{ inputs.enable_analysis }}" \
               "BedrockEnabled=${{ inputs.enable_bedrock }}" \

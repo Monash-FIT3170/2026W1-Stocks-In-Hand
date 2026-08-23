@@ -3,29 +3,8 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 import { apiFetch } from "../../lib/api"
+import { isCognitoAuthEnabled } from "../../../auth/cognito"
 import styles from "./AppFrame.module.css"
-
-const AUTH_STORAGE_KEY = "stonks_signed_in"
-
-function hasStoredSession() {
-  if (typeof window === "undefined") {
-    return false
-  }
-
-  return window.localStorage.getItem(AUTH_STORAGE_KEY) === "true"
-}
-
-function storeSessionHint(isSignedIn) {
-  if (typeof window === "undefined") {
-    return
-  }
-
-  if (isSignedIn) {
-    window.localStorage.setItem(AUTH_STORAGE_KEY, "true")
-  } else {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY)
-  }
-}
 
 // Shared app chrome for every prototype page.
 // Use this component when a page should have the standard StonksInHand nav and footer.
@@ -41,7 +20,7 @@ export function AppFrame({
 
   useEffect(() => {
     let cancelled = false
-    setHasSession(signedIn || hasStoredSession())
+    setHasSession(signedIn)
 
     async function loadSession() {
       try {
@@ -54,23 +33,14 @@ export function AppFrame({
         }
 
         if (response.ok) {
-          storeSessionHint(true)
           setHasSession(true)
           return
         }
 
-        if (response.status === 401) {
-          storeSessionHint(false)
-          setHasSession(false)
-          return
-        }
-
         if (!response.ok) {
-          storeSessionHint(false)
           setHasSession(false)
         }
       } catch {
-        storeSessionHint(false)
         setHasSession(false)
       }
     }
@@ -91,6 +61,7 @@ export function AppFrame({
             <Link className={active === "home" ? styles.activeNavLink : styles.navLink} href="/">Home</Link>
             <Link className={active === "announcements" ? styles.activeNavLink : styles.navLink} href="/announcements">Announcements</Link>
             {hasSession && <Link className={active === "watchlist" ? styles.activeNavLink : styles.navLink} href="/watchlist">My Watchlist</Link>}
+            {hasSession && isCognitoAuthEnabled() ? <Link className={styles.navLink} href="/mfa-setup">Security</Link> : null}
           </nav>
           <Link className={styles.signInButton} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Logout" : "Sign In"}</Link>
         </div>

@@ -1,0 +1,156 @@
+name: Prepare staging frontend
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full Git SHA approved for the frontend release
+        required: true
+        type: string
+      auth_provider:
+        description: Authentication mode compiled into this candidate
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - cognito
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-frontend-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build immutable frontend candidate
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      AUTH_PROVIDER: ${{ inputs.auth_provider }}
+
+    steps:
+      - name: Validate the release inputs
+        shell: bash
+        run: |
+          if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_sha must be a full 40-character Git SHA" >&2
+            exit 1
+          fi
+
+      - name: Check out the approved release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-frontend-prepare
+
+      - name: Resolve public application configuration
+        shell: bash
+        run: |
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+          COGNITO_USER_POOL_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" \
+            --output text)"
+          COGNITO_APP_CLIENT_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolClientId'].OutputValue" \
+            --output text)"
+          if [ -z "$FRONTEND_BUCKET" ] || [ "$FRONTEND_BUCKET" = "None" ]; then
+            echo "The staging stack is missing the frontend bucket output" >&2
+            exit 1
+          fi
+          if [ "$AUTH_PROVIDER" = "cognito" ]; then
+            for value in "$COGNITO_USER_POOL_ID" "$COGNITO_APP_CLIENT_ID"; do
+              if [ -z "$value" ] || [ "$value" = "None" ]; then
+                echo "The staging stack is missing a required Cognito output" >&2
+                exit 1
+              fi
+            done
+          fi
+          {
+            echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
+            echo "NEXT_PUBLIC_AUTH_PROVIDER=$AUTH_PROVIDER"
+            echo "NEXT_PUBLIC_COGNITO_USER_POOL_ID=$COGNITO_USER_POOL_ID"
+            echo "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=$COGNITO_APP_CLIENT_ID"
+            echo "NEXT_PUBLIC_AWS_REGION=$AWS_REGION"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build the static frontend candidate
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+        run: |
+          npm ci
+          npm test
+          npm run build
+          test -f out/index.html
+
+      - name: Package the review artifact
+        shell: bash
+        run: |
+          tar -czf "frontend-$RELEASE_SHA-$AUTH_PROVIDER.tar.gz" -C frontend/out .
+          sha256sum "frontend-$RELEASE_SHA-$AUTH_PROVIDER.tar.gz" \
+            > "frontend-$RELEASE_SHA-$AUTH_PROVIDER.sha256"
+
+      - name: Upload the immutable candidate
+        shell: bash
+        run: |
+          CANDIDATE_URI="s3://$FRONTEND_BUCKET/_candidates/$RELEASE_SHA/$AUTH_PROVIDER"
+          if aws s3api head-object \
+            --bucket "$FRONTEND_BUCKET" \
+            --key "_candidates/$RELEASE_SHA/$AUTH_PROVIDER/_READY" >/dev/null 2>&1; then
+            echo "Candidate already exists for this SHA and authentication mode" >&2
+            exit 1
+          fi
+          aws s3 sync frontend/out "$CANDIDATE_URI" \
+            --cache-control "no-cache"
+          aws s3 sync frontend/out/_next/static "$CANDIDATE_URI/_next/static" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3api put-object \
+            --bucket "$FRONTEND_BUCKET" \
+            --key "_candidates/$RELEASE_SHA/$AUTH_PROVIDER/_READY" \
+            --body /dev/null
+
+      - name: Upload candidate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ inputs.release_sha }}-${{ inputs.auth_provider }}
+          path: |
+            frontend-${{ inputs.release_sha }}-${{ inputs.auth_provider }}.tar.gz
+            frontend-${{ inputs.release_sha }}-${{ inputs.auth_provider }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record the candidate
+        shell: bash
+        run: |
+          {
+            echo "### Frontend candidate awaiting cutover approval"
+            echo ""
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Authentication mode: \`$AUTH_PROVIDER\`"
+          } >> "$GITHUB_STEP_SUMMARY"

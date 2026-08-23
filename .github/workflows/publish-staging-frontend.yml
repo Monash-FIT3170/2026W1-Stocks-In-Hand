@@ -4,7 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Full Git SHA approved for the frontend release
+        description: Full Git SHA of the approved frontend candidate
+        required: true
+        type: string
+      auth_provider:
+        description: Authentication mode of the approved candidate
+        required: true
+        type: choice
+        options:
+          - legacy
+          - cognito
+      approval_reference:
+        description: Review reference for this candidate and cutover
         required: true
         type: string
 
@@ -18,71 +29,32 @@ concurrency:
 
 jobs:
   publish:
-    name: Build and publish static frontend
+    name: Publish approved static frontend candidate
     runs-on: ubuntu-latest
     environment: staging
     env:
       AWS_REGION: ap-southeast-2
       STACK_NAME: stocks-in-hand-staging
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      AUTH_PROVIDER: ${{ inputs.auth_provider }}
 
     steps:
-      - name: Validate the release SHA
+      - name: Validate the release inputs
         shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
           if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "release_sha must be a full 40-character Git SHA" >&2
             exit 1
           fi
 
-      - name: Check out the approved release
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.release_sha }}
-
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          role-session-name: stocks-in-hand-frontend
+          role-session-name: stocks-in-hand-frontend-publish
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build the static frontend
-        working-directory: frontend
-        env:
-          NEXT_PUBLIC_API_BASE_URL: /api
-        run: |
-          npm ci
-          npm run build
-          test -f out/index.html
-
-      - name: Package the rollback artifact
-        shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
-        run: |
-          tar -czf "frontend-$RELEASE_SHA.tar.gz" -C frontend/out .
-          sha256sum "frontend-$RELEASE_SHA.tar.gz" > "frontend-$RELEASE_SHA.sha256"
-
-      - name: Upload the rollback artifact to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-${{ inputs.release_sha }}
-          path: |
-            frontend-${{ inputs.release_sha }}.tar.gz
-            frontend-${{ inputs.release_sha }}.sha256
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Resolve frontend resources
+      - name: Verify the stack and approved candidate
         shell: bash
         run: |
           FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
@@ -93,33 +65,61 @@ jobs:
             --stack-name "$STACK_NAME" \
             --query "Stacks[0].Outputs[?OutputKey=='FrontendDistributionId'].OutputValue" \
             --output text)"
+          STACK_AUTH_PROVIDER="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AuthProvider'].OutputValue" \
+            --output text)"
+          for value in "$FRONTEND_BUCKET" "$DISTRIBUTION_ID" "$STACK_AUTH_PROVIDER"; do
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "The staging stack is missing a required frontend output" >&2
+              exit 1
+            fi
+          done
+          if [ "$STACK_AUTH_PROVIDER" != "$AUTH_PROVIDER" ] \
+            && [ "$STACK_AUTH_PROVIDER" != "dual" ]; then
+            echo "Backend mode is $STACK_AUTH_PROVIDER, candidate mode is $AUTH_PROVIDER" >&2
+            exit 1
+          fi
+          if ! aws s3api head-object \
+            --bucket "$FRONTEND_BUCKET" \
+            --key "_candidates/$RELEASE_SHA/$AUTH_PROVIDER/_READY" >/dev/null; then
+            echo "The approved frontend candidate does not exist" >&2
+            exit 1
+          fi
           {
             echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
             echo "DISTRIBUTION_ID=$DISTRIBUTION_ID"
           } >> "$GITHUB_ENV"
 
-      - name: Preserve the release snapshot
+      - name: Preserve the mode-specific release snapshot
         shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
         run: |
-          aws s3 sync frontend/out \
-            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
-            --cache-control "no-cache"
-          aws s3 sync frontend/out/_next/static \
-            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA/_next/static" \
-            --cache-control "public,max-age=31536000,immutable"
+          CANDIDATE_URI="s3://$FRONTEND_BUCKET/_candidates/$RELEASE_SHA/$AUTH_PROVIDER"
+          RELEASE_URI="s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA/$AUTH_PROVIDER"
+          aws s3 sync "$CANDIDATE_URI" "$RELEASE_URI"
 
       - name: Publish the active frontend
         shell: bash
         run: |
-          aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" \
+          CANDIDATE_URI="s3://$FRONTEND_BUCKET/_candidates/$RELEASE_SHA/$AUTH_PROVIDER"
+          aws s3 sync "$CANDIDATE_URI" "s3://$FRONTEND_BUCKET" \
             --delete \
-            --exclude "_releases/*" \
-            --cache-control "no-cache"
-          aws s3 sync frontend/out/_next/static \
-            "s3://$FRONTEND_BUCKET/_next/static" \
-            --cache-control "public,max-age=31536000,immutable"
+            --exclude "_READY" \
+            --exclude "_candidates/*" \
+            --exclude "_releases/*"
           aws cloudfront create-invalidation \
             --distribution-id "$DISTRIBUTION_ID" \
             --paths "/*"
+
+      - name: Record the publication
+        shell: bash
+        run: |
+          {
+            echo "### Approved staging frontend published"
+            echo ""
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Authentication mode: \`$AUTH_PROVIDER\`"
+            echo ""
+            echo "Approval: ${{ inputs.approval_reference }}"
+          } >> "$GITHUB_STEP_SUMMARY"

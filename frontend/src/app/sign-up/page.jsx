@@ -6,19 +6,22 @@ import { useState } from "react"
 import { AuthField } from "../components/auth/AuthField"
 import { AppFrame } from "../components/layout/AppFrame"
 import { apiFetch } from "../lib/api"
+import {
+  createCognitoAccount,
+  getCognitoErrorMessage,
+  isCognitoAuthEnabled,
+} from "../../auth/cognito"
 import styles from "../page.module.css"
 
-const AUTH_STORAGE_KEY = "stonks_signed_in"
+const PENDING_EMAIL_KEY = "stonks_pending_email"
 
 function getErrorMessage(data, fallback) {
   if (Array.isArray(data.detail)) {
     return data.detail.map((error) => error.msg).join(", ")
   }
-
   if (typeof data.detail === "string") {
     return data.detail
   }
-
   return fallback
 }
 
@@ -41,6 +44,17 @@ export default function SignUpRoute() {
     setIsSubmitting(true)
 
     try {
+      if (isCognitoAuthEnabled()) {
+        const result = await createCognitoAccount(form)
+        if (result.nextStep?.signUpStep === "CONFIRM_SIGN_UP") {
+          window.sessionStorage.setItem(PENDING_EMAIL_KEY, form.email.trim().toLowerCase())
+          router.push("/confirm-sign-up")
+          return
+        }
+        router.push("/sign-in")
+        return
+      }
+
       const response = await apiFetch("/auth/sign-up", {
         method: "POST",
         credentials: "include",
@@ -48,18 +62,15 @@ export default function SignUpRoute() {
         body: JSON.stringify(form),
       })
       const data = await response.json().catch(() => ({}))
-
       if (!response.ok) {
         throw new Error(getErrorMessage(data, "Could not create account"))
       }
-
-      window.localStorage.setItem(AUTH_STORAGE_KEY, "true")
       router.push("/watchlist")
     } catch (err) {
       setError(
         err instanceof TypeError
-          ? "Could not reach the backend. Make sure the API is running on port 8000."
-          : err.message
+          ? "Could not reach the account service. Try again."
+          : getCognitoErrorMessage(err, err.message || "Could not create account")
       )
     } finally {
       setIsSubmitting(false)
@@ -95,7 +106,7 @@ export default function SignUpRoute() {
             label="Password"
             name="password"
             onChange={updateForm}
-            placeholder="At least 8 characters"
+            placeholder={isCognitoAuthEnabled() ? "At least 12 characters" : "At least 8 characters"}
             password
             required
             value={form.password}

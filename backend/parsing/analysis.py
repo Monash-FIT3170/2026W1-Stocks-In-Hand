@@ -346,28 +346,28 @@ def analyse_document(
         title=title,
     )
 
-    # Sentiment is based on deterministic source text. A Groq response must not
-    # change the FinBERT input on message retries.
+    # Sentiment is based on deterministic source text. A summary response must
+    # not change the FinBERT input on message retries.
     from app.services import sentiment as sentiment_service
 
     max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
     sentiment_text = f"{title}\n\n{parsed.raw_text}"[:max_chars]
     sentiment = sentiment_service.analyse_text(sentiment_text)
 
-    from app.services import groq as groq_service
+    from app.services import summary as summary_service
 
     summary: dict[str, str] | None = None
     summary_model: str | None = None
     summary_prompt_version: str | None = None
     try:
-        summary = groq_service.summarise_announcement(
+        summary = summary_service.summarise_announcement(
             title=title,
             category=parsed.category,
             extracted_data=parsed.extracted_data,
             raw_text=parsed.raw_text,
         )
-        summary_model = groq_service.active_model_name()
-        summary_prompt_version = groq_service.SUMMARY_PROMPT_VERSION
+        summary_model = summary_service.active_model_name()
+        summary_prompt_version = summary_service.active_prompt_version()
     except RuntimeError as exc:
         if "not configured" not in str(exc).lower():
             raise

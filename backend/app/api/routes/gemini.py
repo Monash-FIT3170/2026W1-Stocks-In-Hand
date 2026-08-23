@@ -3,10 +3,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from uuid import UUID
 
+from app.api.deps import require_admin_investor
 from app.crud import artifact as artifact_crud
 from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
+from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.services import gemini as gemini_service
 
@@ -32,6 +34,7 @@ def categorise_recent_artifacts(
     offset: int = 0,
     batch_size: int = 0,
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     chunk = artifact_crud.build_recent_artifact_chunk(
         db=db,
@@ -73,6 +76,7 @@ def summarise_ticker_artifacts(
     symbol: str,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     ticker = (
         db.query(Ticker)
@@ -143,6 +147,7 @@ def summarise_ticker_artifacts(
 def summarise_artifact(
     artifact_id: UUID,
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     artifact = artifact_crud.get_artifact(db, artifact_id=artifact_id)
     if not artifact:

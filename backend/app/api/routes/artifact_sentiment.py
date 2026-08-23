@@ -1,14 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
+from app.api.deps import require_admin_investor
 from app.database.connection import get_db
+from app.models.investor import Investor
 from app.schemas.artifact_sentiment import ArtifactSentimentCreate, ArtifactSentimentResponse
 from app.crud import artifact_sentiment as crud
 
 router = APIRouter(prefix="/artifact-sentiments", tags=["artifact-sentiments"])
 
 @router.post("/", response_model=ArtifactSentimentResponse)
-def create_artifact_sentiment(sentiment: ArtifactSentimentCreate, db: Session = Depends(get_db)):
+def create_artifact_sentiment(
+    sentiment: ArtifactSentimentCreate,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     return crud.create_artifact_sentiment(db=db, sentiment=sentiment)
 
 @router.get("/artifact/{artifact_id}", response_model=list[ArtifactSentimentResponse])

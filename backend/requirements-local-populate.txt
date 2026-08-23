@@ -1,0 +1,4 @@
+-r requirements-scraper.txt
+
+defusedxml==0.7.1
+pypdf==6.14.2

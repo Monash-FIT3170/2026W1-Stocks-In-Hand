@@ -15,6 +15,14 @@ Parameters:
   OperationsEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  AuthProvider:
+    Type: String
+    Default: legacy
+    AllowedValues:
+      - legacy
+      - dual
+      - cognito
+    Description: Selects legacy, short-lived dual cutover, or Cognito authentication.
   ScheduleEnabled:
     Type: String
     Default: "false"
@@ -217,10 +225,88 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub stocks-in-hand-${Environment}-users
+      UserPoolTags:
+        Project: StocksInHand
+        Environment: !Ref Environment
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      DeletionProtection: ACTIVE
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub stocks-in-hand-${Environment}-web
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      ReadAttributes:
+        - email
+        - email_verified
+        - name
+      WriteAttributes:
+        - email
+        - name
+
   ServerlessHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+      Auth:
+        Authorizers:
+          # FastAPI enforces auth during dual-mode rollout. Bind this authorizer
+          # to explicit protected routes after the legacy rollback gate closes.
+          CognitoJwtAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              audience:
+                - !Ref CognitoUserPoolClient
+              issuer: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
       DefaultRouteSettings:
         ThrottlingBurstLimit: 20
         ThrottlingRateLimit: 10
@@ -247,6 +333,11 @@ Resources:
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
+          AUTH_PROVIDER: !Ref AuthProvider
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_APP_CLIENT_ID: !Ref CognitoUserPoolClient
+          COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
+          COGNITO_LINK_EXISTING_BY_EMAIL: "false"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters
@@ -733,6 +824,14 @@ Outputs:
     Value: !Sub https://${FrontendDistribution.DomainName}
   ApiEndpoint:
     Value: !Sub https://${FrontendDistribution.DomainName}/api
+  AuthProvider:
+    Value: !Ref AuthProvider
+  CognitoUserPoolId:
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Value: !Ref CognitoUserPoolClient
+  CognitoIssuer:
+    Value: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
   RawDocumentBucketName:
     Value: !Ref RawDocumentBucket
   DiscoveryQueueUrl:

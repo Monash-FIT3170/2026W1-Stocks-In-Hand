@@ -18,14 +18,22 @@ def create_scrape_run(
     return crud.create_scrape_run(db=db, scrape_run=scrape_run)
 
 @router.get("/ticker/{ticker_id}", response_model=list[ScrapeRunResponse])
-def get_scrape_runs_by_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
+def get_scrape_runs_by_ticker(
+    ticker_id: UUID,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     runs = crud.get_scrape_runs_by_ticker(db, ticker_id=ticker_id)
     if not runs:
         raise HTTPException(status_code=404, detail="No scrape runs found for this ticker")
     return runs
 
 @router.get("/{scrape_run_id}", response_model=ScrapeRunResponse)
-def get_scrape_run(scrape_run_id: UUID, db: Session = Depends(get_db)):
+def get_scrape_run(
+    scrape_run_id: UUID,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     run = crud.get_scrape_run(db, scrape_run_id=scrape_run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Scrape run not found")

@@ -268,19 +268,64 @@ def test_api_has_no_startup_scrape_or_reddit_jobs() -> None:
     assert main.app.router.on_startup == []
 
 
-def test_investor_mutations_require_admin_dependency() -> None:
-    mutation_routes = [
+def test_all_investor_routes_require_admin_dependency() -> None:
+    investor_routes = [
         route
         for route in main.investor.router.routes
         if getattr(route, "path", "").startswith("/investors")
-        and set(getattr(route, "methods", set())) & {"POST", "PATCH", "DELETE"}
     ]
 
-    assert mutation_routes
-    for route in mutation_routes:
+    assert investor_routes
+    for route in investor_routes:
         assert require_admin_investor in {
             dependency.call for dependency in route.dependant.dependencies
         }
+
+
+def test_database_writes_and_cost_bearing_routes_require_admin() -> None:
+    route_groups = (
+        main.artifact.router.routes,
+        main.artifact_summary.router.routes,
+        main.artifact_sentiment.router.routes,
+        main.information_platform.router.routes,
+        main.ticker.router.routes,
+        main.gemini.router.routes,
+        main.reddit.router.routes,
+        main.category_sentiment.router.routes,
+    )
+    protected_routes = []
+    for routes in route_groups:
+        protected_routes.extend(
+            route
+            for route in routes
+            if set(getattr(route, "methods", set())) & {"POST", "PATCH", "DELETE"}
+        )
+
+    assert protected_routes
+    for route in protected_routes:
+        assert require_admin_investor in {
+            dependency.call for dependency in route.dependant.dependencies
+        }, f"Missing administrator dependency: {route.path}"
+
+
+def test_operational_read_routes_require_admin() -> None:
+    protected_paths = {
+        "/analyse",
+        "/headlines",
+        "/scrape/{ticker_symbol}",
+    }
+    direct_routes = [
+        route
+        for route in main.app.routes
+        if getattr(route, "path", None) in protected_paths
+    ]
+    scrape_run_routes = list(main.scrape_run.router.routes)
+
+    assert {route.path for route in direct_routes} == protected_paths
+    for route in (*direct_routes, *scrape_run_routes):
+        assert require_admin_investor in {
+            dependency.call for dependency in route.dependant.dependencies
+        }, f"Missing administrator dependency: {route.path}"
 
 
 def test_investor_update_rejects_role_escalation_fields() -> None:

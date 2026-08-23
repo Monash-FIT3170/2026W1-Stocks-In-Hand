@@ -21,11 +21,20 @@ def create_investor(
     return crud.create_investor(db=db, investor=investor)
 
 @router.get("/", response_model=list[InvestorResponse])
-def get_investors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def get_investors(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     return crud.get_investors(db, skip=skip, limit=limit)
 
 @router.get("/{investor_id}", response_model=InvestorResponse)
-def get_investor(investor_id: UUID, db: Session = Depends(get_db)):
+def get_investor(
+    investor_id: UUID,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     investor = crud.get_investor(db, investor_id=investor_id)
     if not investor:
         raise HTTPException(status_code=404, detail="Investor not found")

@@ -5,11 +5,13 @@ from groq import Groq
 from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
+from app.api.deps import require_admin_investor
 from app.core.config import settings
 from app.database.connection import SessionLocal
 from app.database.connection import get_db
 from app.schemas.information_platform import InformationPlatformCreate
 from app.schemas.artifact import ArtifactCreate, SourceType, ArtifactType
+from app.models.investor import Investor
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
 
@@ -170,7 +172,12 @@ def _run_reddit_scrape(subreddit: str, limit: int) -> None:
 
 
 @router.post("/scrape")
-def scrape_and_store(background_tasks: BackgroundTasks, subreddit: str = "ASX", limit: int = 10):
+def scrape_and_store(
+    background_tasks: BackgroundTasks,
+    subreddit: str = "ASX",
+    limit: int = 10,
+    _admin: Investor = Depends(require_admin_investor),
+):
     if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
         raise HTTPException(
             status_code=500,

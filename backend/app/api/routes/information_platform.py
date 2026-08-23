@@ -1,14 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
+from app.api.deps import require_admin_investor
 from app.database.connection import get_db
+from app.models.investor import Investor
 from app.schemas.information_platform import InformationPlatformCreate, InformationPlatformResponse
 from app.crud import information_platform as crud
 
 router = APIRouter(prefix="/information-platforms", tags=["information-platforms"])
 
 @router.post("/", response_model=InformationPlatformResponse)
-def create_platform(platform: InformationPlatformCreate, db: Session = Depends(get_db)):
+def create_platform(
+    platform: InformationPlatformCreate,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     existing = crud.get_platform_by_name(db, name=platform.name)
     if existing:
         raise HTTPException(status_code=400, detail="Platform already exists")
@@ -26,7 +32,12 @@ def get_platform(platform_id: UUID, db: Session = Depends(get_db)):
     return platform
 
 @router.patch("/{platform_id}", response_model=InformationPlatformResponse)
-def update_platform(platform_id: UUID, data: dict, db: Session = Depends(get_db)):
+def update_platform(
+    platform_id: UUID,
+    data: dict,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     platform = crud.get_platform(db, platform_id=platform_id)
     if not platform:
         raise HTTPException(status_code=404, detail="Platform not found")

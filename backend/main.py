@@ -131,7 +131,10 @@ class AnalyseRequest(BaseModel):
 
 
 @app.post("/analyse")
-def analyse(body: AnalyseRequest) -> dict:
+def analyse(
+    body: AnalyseRequest,
+    _admin: Investor = Depends(require_admin_investor),
+) -> dict:
     """Keep local FinBERT available without loading it at API startup."""
     try:
         from app.services import sentiment as sentiment_service
@@ -149,7 +152,9 @@ def analyse(body: AnalyseRequest) -> dict:
 
 
 @app.get("/headlines")
-async def headlines() -> list[str]:
+async def headlines(
+    _admin: Investor = Depends(require_admin_investor),
+) -> list[str]:
     return await scrape_yahoo_headlines()
 
 

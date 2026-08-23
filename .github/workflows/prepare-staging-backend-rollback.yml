@@ -3,6 +3,15 @@ name: Prepare staging backend rollback
 on:
   workflow_dispatch:
     inputs:
+      auth_provider:
+        description: Authentication provider the rollback image supports
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - dual
+          - cognito
       release_sha:
         description: Previous full Git SHA retained in all three ECR repositories
         required: true
@@ -98,6 +107,7 @@ jobs:
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "AuthProvider=${{ inputs.auth_provider }}" \
               "ScheduleEnabled=false" \
               "AnalysisEnabled=true" \
               "BedrockEnabled=false" \
