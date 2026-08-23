@@ -26,6 +26,7 @@ from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.services import sentiment as sentiment_service
 from app.services import summary as summary_service
+from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
 
 if TYPE_CHECKING:
     from categories.base import ReportCategory
@@ -173,6 +174,23 @@ def compute_content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def should_replace_artifact_title(
+    existing_title: str | None,
+    incoming_title: str | None,
+) -> bool:
+    """Return true when a duplicate can safely repair an oversized title."""
+    existing = " ".join((existing_title or "").split())
+    incoming = " ".join((incoming_title or "").split())
+    return bool(
+        incoming
+        and len(incoming) <= MAX_TITLE_LENGTH
+        and (
+            not existing
+            or (len(existing) > MAX_TITLE_LENGTH and len(incoming) < len(existing))
+        )
+    )
+
+
 def get_or_create_ticker(db, ticker_symbol: str) -> Ticker:
     ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
     if not ticker:
@@ -208,7 +226,11 @@ def store(
     raw_text: str,
 ) -> None:
     """Store announcement with raw text and metadata to database."""
-    print(f"[STORAGE] Storing: {announcement.title[:50]}... ({len(raw_text)} chars)")
+    clean_title = normalise_title(
+        announcement.title,
+        announcement.source_url or announcement.pdf_url,
+    )
+    print(f"[STORAGE] Storing: {clean_title[:50]}... ({len(raw_text)} chars)")
 
     db = SessionLocal()
     try:
@@ -218,7 +240,12 @@ def store(
 
         existing = db.query(Artifact).filter_by(content_hash=content_hash).first()
         if existing:
-            print(f"[STORAGE] Duplicate found for: {announcement.title[:50]}... Skipping storage.")
+            print(f"[STORAGE] Duplicate found for: {clean_title[:50]}... Skipping storage.")
+            if should_replace_artifact_title(existing.title, clean_title):
+                existing.title = clean_title
+                db.add(existing)
+                db.commit()
+                print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
             if not _artifact_has_summary_fields(existing):
                 existing_metadata = (
                     existing.artifact_metadata
@@ -265,7 +292,7 @@ def store(
         artifact_data = ArtifactCreate(
             source_type=SourceType.ASX_ANNOUNCEMENT,
             artifact_type=artifact_type,
-            title=announcement.title,
+            title=clean_title,
             url=announcement.source_url or "",
             published_at=announcement.date,
             content_hash=content_hash,
@@ -276,7 +303,7 @@ def store(
         )
 
         artifact = artifact_crud.create_artifact(db, artifact_data)
-        print(f"[STORAGE] Stored artifact (ID: {artifact.id}): {announcement.title[:50]}...")
+        print(f"[STORAGE] Stored artifact (ID: {artifact.id}): {clean_title[:50]}...")
         _summarise_and_store_artifact(
             db,
             artifact,
