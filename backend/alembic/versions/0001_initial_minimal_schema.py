@@ -158,6 +158,7 @@ def upgrade() -> None:
         sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("scraped_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("content_hash", sa.String(), unique=True, nullable=True),
+        sa.Column("is_duplicate", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), onupdate=sa.func.now()),
     )
@@ -189,6 +190,7 @@ def upgrade() -> None:
         ),
         sa.Column("summary_text", sa.Text(), nullable=False),
         sa.Column("model_used", sa.String(), nullable=True),
+        sa.Column("prompt_version", sa.String(), nullable=True),
         sa.Column("confidence_score", sa.Numeric(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )

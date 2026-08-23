@@ -111,8 +111,8 @@ async function loadTickerDetails(watchlistTicker) {
   const sortedArtifacts = Array.isArray(artifacts)
     ? [...artifacts].sort((a, b) => new Date(getArtifactDate(b) || 0) - new Date(getArtifactDate(a) || 0))
     : []
-  
-  const latestArtifact = sortedArtifacts[0] || null
+
+    const latestArtifact = sortedArtifacts[0] || null
 
   return {
     ...ticker,

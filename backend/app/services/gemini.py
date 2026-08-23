@@ -9,6 +9,7 @@ from app.core.config import settings
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "groq-category-v1"
 SUMMARY_PROMPT_VERSION = "groq-announcement-summary-v1"
+NEWS_SUMMARY_PROMPT_VERSION = "groq-news-summary-v1"
 SUMMARY_KEYS = ("summary", "about", "changed", "matters")
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
@@ -110,6 +111,36 @@ Announcement text:
 """.strip()
 
 
+def _build_news_summary_prompt(
+    *,
+    title: str,
+    source_name: str | None,
+    raw_text: str,
+) -> str:
+    text = raw_text[:18000]
+    return f"""
+You are summarising a financial news story for retail investors.
+
+Use only the supplied story text. Do not invent facts or treat reported claims as confirmed facts.
+Write in clear, plain English. Avoid hype and financial advice.
+
+Return strict JSON only with exactly these keys:
+summary: a concise 2-3 sentence summary.
+about: one sentence explaining the main subject of the story.
+changed: one sentence explaining the reported development, or "No material change identified." if unclear.
+matters: one sentence explaining why the story may matter to investors.
+
+Title:
+{title}
+
+Source:
+{source_name or "Unknown"}
+
+Story text:
+{text}
+""".strip()
+
+
 def _call_groq(prompt: str) -> str:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
@@ -171,6 +202,23 @@ def summarise_announcement(
                 title=title,
                 category=category,
                 extracted_data=extracted_data,
+                raw_text=raw_text,
+            )
+        )
+    )
+
+
+def summarise_news_article(
+    *,
+    title: str,
+    source_name: str | None,
+    raw_text: str,
+) -> dict[str, str]:
+    return parse_summary_response(
+        _call_llm(
+            _build_news_summary_prompt(
+                title=title,
+                source_name=source_name,
                 raw_text=raw_text,
             )
         )

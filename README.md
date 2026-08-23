@@ -66,8 +66,8 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | `REDDIT_CLIENT_SECRET` | Yes | The secret field from your Reddit app, key for developers available on Discord. |
 | `REDDIT_SEED_SUBREDDIT` | No | Subreddit scraped on backend startup. Defaults to `ASX` |
 | `REDDIT_SEED_LIMIT` | No | Number of Reddit posts fetched on backend startup. Defaults to `50` |
-| `GROQ_API_KEY` | Yes | From console.groq.com — used for ticker categorisation and Reddit summarisation via meta/LLaMA |
-| `GROQ_MODEL` | No | Defaults to `llama-3.3-70b-versatile` |
+| `GROQ_API_KEY` | Yes | From console.groq.com — used for ticker categorisation and Reddit summarisation |
+| `GROQ_MODEL` | No | Defaults to `openai/gpt-oss-120b` |
 | `GEMINI_API_KEY` | No | Legacy setting; ticker sentiment does not use Gemini |
 | `GEMINI_MODEL` | No | Legacy Gemini model setting |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
