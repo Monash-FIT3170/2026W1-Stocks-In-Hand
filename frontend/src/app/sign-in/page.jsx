@@ -4,8 +4,8 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { AuthField } from "../components/auth/AuthField"
-import { AppFrame } from "../components/layout/AppFrame"
 import { apiFetch } from "../lib/api"
+import { friendlyAuthError } from "../lib/authErrors"
 import styles from "../page.module.css"
 
 const AUTH_STORAGE_KEY = "stonks_signed_in"
@@ -50,16 +50,17 @@ export default function SignInRoute() {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        throw new Error(getErrorMessage(data, "Could not sign in"))
+        throw new Error(friendlyAuthError(getErrorMessage(data, "Could not sign in"), "Could not sign in"))
       }
 
       window.localStorage.setItem(AUTH_STORAGE_KEY, "true")
+      window.dispatchEvent(new Event("stonks-auth-changed"))
       router.push("/watchlist")
     } catch (err) {
       setError(
         err instanceof TypeError
-          ? "Could not reach the backend. Make sure the API is running on port 8000."
-          : err.message
+          ? "Could not reach the sign-in service. Check your connection and try again."
+          : friendlyAuthError(err.message, "Could not sign in")
       )
     } finally {
       setIsSubmitting(false)
@@ -67,14 +68,14 @@ export default function SignInRoute() {
   }
 
   return (
-    <AppFrame>
-      <section className={styles.authPage}>
+    <section className={styles.authPage}>
         <form className={styles.authCard} onSubmit={handleSubmit}>
           <h1>Welcome back</h1>
-          <p>Access your ASX portfolio and AI wealth insights.</p>
+          <p>Access your saved ASX watchlist and company research.</p>
           <AuthField
             autoComplete="email"
             label="Email address"
+            maxLength={320}
             name="email"
             onChange={updateForm}
             placeholder="name@example.com"
@@ -84,6 +85,7 @@ export default function SignInRoute() {
           <AuthField
             autoComplete="current-password"
             label="Password"
+            minLength={1}
             name="password"
             onChange={updateForm}
             placeholder="Enter your password"
@@ -91,13 +93,12 @@ export default function SignInRoute() {
             required
             value={form.password}
           />
-          {error ? <p className={styles.authError}>{error}</p> : null}
+          {error ? <p aria-live="assertive" className={styles.authError} role="alert">{error}</p> : null}
           <button className={styles.authSubmit} disabled={isSubmitting} type="submit">
-            {isSubmitting ? "Signing in..." : "Sign In"}
+            {isSubmitting ? "Signing in…" : "Sign In"}
           </button>
           <span className={styles.authSwap}>Don&apos;t have an account?<Link href="/sign-up">Sign up</Link></span>
         </form>
-      </section>
-    </AppFrame>
+    </section>
   )
 }

@@ -1,3 +1,4 @@
+import Link from "next/link"
 import styles from "../../page.module.css"
 
 export function TrendingStocks({ stocks = [] }) {
@@ -8,9 +9,9 @@ export function TrendingStocks({ stocks = [] }) {
         {stocks.length > 0
           ? stocks.map((item, index) => {
               const symbol = typeof item === "string" ? item : item.symbol
-              return <b className={index === 0 ? styles.hotTicker : ""} key={symbol}>{symbol}</b>
+              return <Link className={index === 0 ? styles.hotTicker : ""} href={`/ticker/${symbol}`} key={symbol}>{symbol}</Link>
             })
-          : <b>No filings yet</b>}
+          : <span>No filings yet</span>}
       </div>
     </div>
   )

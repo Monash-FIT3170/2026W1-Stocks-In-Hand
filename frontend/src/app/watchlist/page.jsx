@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { AppFrame } from "../components/layout/AppFrame"
+import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PlusIcon } from "../components/icons"
 import { apiFetch } from "../lib/api"
 import styles from "../page.module.css"
@@ -42,6 +42,18 @@ async function fetchJson(path, fallback, options = {}) {
   }
 }
 
+async function fetchCurrentInvestor() {
+  const response = await apiFetch("/auth/me", { credentials: "include" })
+  const data = await response.json().catch(() => null)
+  if (response.status === 401) {
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(getErrorMessage(data || {}, "Could not verify your session"))
+  }
+  return data?.investor || null
+}
+
 function getStatusTone(status) {
   const value = status.toLowerCase()
   if (value.includes("negative") || value.includes("bearish") || value.includes("critical")) {
@@ -65,7 +77,7 @@ function formatStatusLabel(value) {
 function getStockBrief(stock) {
   const about = stock.latestArtifact?.artifact_metadata?.about
   if (about && typeof about === "string") {
-    return about.length > 150 ? `${about.slice(0, 147)}...` : about
+    return about.length > 150 ? `${about.slice(0, 147)}…` : about
   }
   return null
 }
@@ -112,7 +124,7 @@ async function loadTickerDetails(watchlistTicker) {
     ? [...artifacts].sort((a, b) => new Date(getArtifactDate(b) || 0) - new Date(getArtifactDate(a) || 0))
     : []
 
-    const latestArtifact = sortedArtifacts[0] || null
+  const latestArtifact = sortedArtifacts[0] || null
 
   return {
     ...ticker,
@@ -124,6 +136,7 @@ async function loadTickerDetails(watchlistTicker) {
 }
 
 export default function WatchlistRoute() {
+  const router = useRouter()
   const [state, setState] = useState({
     error: "",
     investor: null,
@@ -138,6 +151,8 @@ export default function WatchlistRoute() {
   const [addError, setAddError] = useState("")
   const [isTickerListLoading, setIsTickerListLoading] = useState(false)
   const [addingTickerId, setAddingTickerId] = useState(null)
+  const modalRef = useRef(null)
+  const modalTriggerRef = useRef(null)
 
   const loadWatchlist = useCallback(async ({ showLoading = false } = {}) => {
     if (showLoading) {
@@ -145,12 +160,13 @@ export default function WatchlistRoute() {
     }
 
     try {
-      const me = await fetchJson("/auth/me", null)
-      const investor = me?.investor || null
+      const investor = await fetchCurrentInvestor()
       const investorId = investor?.id
 
       if (!investorId) {
-        throw new Error("Could not identify the signed-in investor.")
+        setState((current) => ({ ...current, error: "", isLoading: true }))
+        router.replace("/sign-in?next=/watchlist")
+        return
       }
 
       // Use the newly authenticated /watchlists/me endpoint
@@ -172,22 +188,22 @@ export default function WatchlistRoute() {
         tickers: tickersData.filter(Boolean),
         watchlist,
       })
-    } catch (err) {
+    } catch {
       setState((current) => ({
         ...current,
-        error: err instanceof TypeError ? "Could not reach the backend." : err.message,
+        error: "Your watchlist is unavailable right now. Check your connection and try again.",
         isLoading: false,
       }))
     }
-  }, [])
+  }, [router])
 
   useEffect(() => {
     let isMounted = true
-    loadWatchlist({ showLoading: true }).catch((err) => {
+    loadWatchlist({ showLoading: true }).catch(() => {
       if (isMounted) {
         setState((current) => ({
           ...current,
-          error: err.message,
+          error: "Your watchlist is unavailable right now. Check your connection and try again.",
           isLoading: false,
         }))
       }
@@ -216,16 +232,18 @@ export default function WatchlistRoute() {
   }, [availableTickers, tickerQuery])
 
   async function openAddCompany() {
+    if (!state.investorId) return
+    modalTriggerRef.current = document.activeElement
     setIsAddOpen(true)
     setAddError("")
     if (availableTickers.length) return
 
     setIsTickerListLoading(true)
     try {
-      const result = await fetchJson("/tickers/?limit=500", [])
+      const result = await fetchJson("/tickers/?limit=500")
       setAvailableTickers(Array.isArray(result) ? result : [])
-    } catch (err) {
-      setAddError(err.message)
+    } catch {
+      setAddError("Companies could not be loaded. Check your connection and try again.")
     } finally {
       setIsTickerListLoading(false)
     }
@@ -237,6 +255,40 @@ export default function WatchlistRoute() {
     setAddError("")
     setAddingTickerId(null)
   }
+
+  useEffect(() => {
+    if (!isAddOpen || !modalRef.current) return undefined
+
+    const modal = modalRef.current
+    const selector = "button:not([disabled]), input:not([disabled]), a[href], select:not([disabled]), textarea:not([disabled])"
+    const focusable = Array.from(modal.querySelectorAll(selector))
+    focusable[0]?.focus()
+
+    function handleDialogKeyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        closeAddCompany()
+        return
+      }
+      if (event.key !== "Tab" || focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener("keydown", handleDialogKeyDown)
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeyDown)
+      modalTriggerRef.current?.focus()
+    }
+  }, [isAddOpen])
 
   async function ensureWatchlist() {
     if (state.watchlist) {
@@ -290,22 +342,23 @@ export default function WatchlistRoute() {
   const investorName = state.investor?.username || state.investor?.email
 
   return (
-    <AppFrame active="watchlist" signedIn={Boolean(state.investorId)}>
-      <section className={styles.contentPage}>
+    <section className={styles.contentPage}>
         <div className={styles.watchlistHero}>
           <div>
-            <h1>Portfolio Intel</h1>
+            <h1>My watchlist</h1>
             <p>{investorName ? `Monitoring ${investorName}'s saved ASX companies.` : "Sign in to view your watchlist."}</p>
-            <h2>Active Watchlist</h2>
+            <h2>Saved companies</h2>
           </div>
-          <button className={styles.primaryAction} onClick={openAddCompany} type="button">
+          <button className={styles.primaryAction} disabled={!state.investorId || state.isLoading} onClick={openAddCompany} type="button">
             <PlusIcon /> Add company
           </button>
         </div>
         <div className={styles.watchlistLayout}>
           <section>
             <div className={styles.watchlistCount}>
-              {state.isLoading ? "Loading Watchlist" : `${state.tickers.length} Entities Tracking`}
+              {state.isLoading
+                ? "Loading watchlist"
+                : `${state.tickers.length} saved ${state.tickers.length === 1 ? "company" : "companies"}`}
             </div>
             <div className={styles.watchGrid}>
               {state.isLoading && (
@@ -315,9 +368,10 @@ export default function WatchlistRoute() {
                 </article>
               )}
               {state.error && (
-                <article className={styles.emptyCard}>
+                <article className={styles.emptyCard} role="alert">
                   <h3>Could not load watchlist</h3>
                   <p>{state.error}</p>
+                  <button className={styles.secondaryButton} onClick={() => loadWatchlist({ showLoading: true })} type="button">Try again</button>
                 </article>
               )}
               {!state.isLoading && !state.error && state.tickers.map((stock) => {
@@ -357,27 +411,34 @@ export default function WatchlistRoute() {
               {!state.isLoading && !state.error && !state.tickers.length && (
                 <article className={styles.emptyCard}>
                   <h3>No companies yet</h3>
-                  <p>Add a company to start monitoring</p>
+                  <p>Add a company to start your watchlist.</p>
                 </article>
               )}
-              <button className={styles.emptyCard} onClick={openAddCompany} type="button">
+              {state.investorId ? <button className={styles.emptyCard} onClick={openAddCompany} type="button">
                 <PlusIcon />
-                <h3>Add to Watchlist</h3>
-                <p>Monitor your next move</p>
-              </button>
+                <h3>Add company</h3>
+                <p>Choose another supported ASX company.</p>
+              </button> : null}
             </div>
           </section>
         </div>
 
         {isAddOpen && (
-          <div className={styles.watchlistModalBackdrop} role="presentation">
-            <section aria-modal="true" className={styles.watchlistModal} role="dialog">
+          <div className={styles.watchlistModalBackdrop} onMouseDown={(event) => event.target === event.currentTarget && closeAddCompany()} role="presentation">
+            <section
+              aria-describedby="add-company-description"
+              aria-labelledby="add-company-title"
+              aria-modal="true"
+              className={styles.watchlistModal}
+              ref={modalRef}
+              role="dialog"
+            >
               <div className={styles.watchlistModalHeader}>
                 <div>
-                  <h2>Add Company</h2>
-                  <p>Select an ASX company to monitor in your watchlist.</p>
+                  <h2 id="add-company-title">Add Company</h2>
+                  <p id="add-company-description">Select an ASX company to monitor in your watchlist.</p>
                 </div>
-                <button aria-label="Close add company" onClick={closeAddCompany} type="button">x</button>
+                <button aria-label="Close add company" onClick={closeAddCompany} type="button">×</button>
               </div>
               <label className={styles.watchlistSearch}>
                 <span>Search companies</span>
@@ -389,9 +450,9 @@ export default function WatchlistRoute() {
                   value={tickerQuery}
                 />
               </label>
-              {addError && <p className={styles.watchlistModalError}>{addError}</p>}
+              {addError && <p aria-live="assertive" className={styles.watchlistModalError} role="alert">{addError}</p>}
               <div className={styles.watchlistTickerList}>
-                {isTickerListLoading && <p>Loading companies...</p>}
+                {isTickerListLoading && <p>Loading companies…</p>}
                 {!isTickerListLoading && filteredAvailableTickers.map((ticker) => {
                   const alreadyAdded = watchedTickerIds.has(ticker.id)
                   return (
@@ -403,7 +464,7 @@ export default function WatchlistRoute() {
                       type="button"
                     >
                       <span><strong>{ticker.symbol}</strong>{ticker.company_name}</span>
-                      <small>{alreadyAdded ? "Added" : addingTickerId === ticker.id ? "Adding..." : ticker.exchange}</small>
+                      <small>{alreadyAdded ? "Added" : addingTickerId === ticker.id ? "Adding…" : ticker.exchange}</small>
                     </button>
                   )
                 })}
@@ -411,7 +472,6 @@ export default function WatchlistRoute() {
             </section>
           </div>
         )}
-      </section>
-    </AppFrame>
+    </section>
   )
 }
