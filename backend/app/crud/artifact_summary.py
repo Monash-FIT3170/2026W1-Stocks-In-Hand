@@ -20,6 +20,7 @@ def stage_artifact_summary(
     artifact_id: UUID,
     summary_text: str,
     model_used: str | None = None,
+    prompt_version: str | None = None,
     confidence_score: Decimal | float | None = None,
 ) -> ArtifactSummary:
     """Find-or-create the single summary row for an artifact and stage field
@@ -41,6 +42,7 @@ def stage_artifact_summary(
         db.add(row)
     row.summary_text = summary_text
     row.model_used = model_used
+    row.prompt_version = prompt_version
     row.confidence_score = confidence_score
     return row
 
@@ -51,6 +53,7 @@ def upsert_artifact_summary(
     artifact_id: UUID,
     summary_text: str,
     model_used: str | None = None,
+    prompt_version: str | None = None,
     confidence_score: Decimal | float | None = None,
 ) -> ArtifactSummary:
     """Create or update the single summary row for an artifact, retrying once
@@ -60,6 +63,7 @@ def upsert_artifact_summary(
         artifact_id=artifact_id,
         summary_text=summary_text,
         model_used=model_used,
+        prompt_version=prompt_version,
         confidence_score=confidence_score,
     )
     try:
@@ -75,6 +79,7 @@ def upsert_artifact_summary(
         )
         row.summary_text = summary_text
         row.model_used = model_used
+        row.prompt_version = prompt_version
         row.confidence_score = confidence_score
         db.commit()
         db.refresh(row)

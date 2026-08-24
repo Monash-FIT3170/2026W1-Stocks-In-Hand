@@ -86,6 +86,11 @@ jobs:
             --region "$AWS_REGION" \
             --capabilities CAPABILITY_IAM \
             --role-arn "$CFN_ROLE_ARN" \
+            --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+            --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+            --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
             --no-confirm-changeset \
             --no-execute-changeset \
             --no-fail-on-empty-changeset \

@@ -8,7 +8,7 @@ from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.services import groq as gemini_service
+from app.services import gemini as gemini_service
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
 
@@ -22,6 +22,37 @@ def _summary_text(title: str, summary: dict[str, str]) -> str:
     ]
     cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
     return "\n\n".join(cleaned) or title
+
+
+def _generate_artifact_summary(
+    artifact: Artifact,
+    metadata: dict,
+) -> tuple[dict[str, str], str]:
+    if artifact.source_type == "news" or artifact.artifact_type == "news_article":
+        return (
+            gemini_service.summarise_news_article(
+                title=artifact.title or "Untitled news story",
+                source_name=metadata.get("source_name"),
+                raw_text=artifact.raw_text,
+            ),
+            gemini_service.NEWS_SUMMARY_PROMPT_VERSION,
+        )
+
+    category = str(metadata.get("category") or artifact.artifact_type or "UNKNOWN")
+    extracted_data = (
+        metadata.get("extracted_data")
+        if isinstance(metadata.get("extracted_data"), dict)
+        else {}
+    )
+    return (
+        gemini_service.summarise_announcement(
+            title=artifact.title or "Untitled ASX announcement",
+            category=category,
+            extracted_data=extracted_data,
+            raw_text=artifact.raw_text,
+        ),
+        gemini_service.SUMMARY_PROMPT_VERSION,
+    )
 
 
 @router.post("/categorise/recent")
@@ -85,7 +116,7 @@ def summarise_ticker_artifacts(
     artifacts = (
         db.query(Artifact)
         .filter(Artifact.ticker_id == ticker.id)
-        .filter(Artifact.source_type == "asx_announcement")
+        .filter(Artifact.source_type.in_(["asx_announcement", "news"]))
         .filter(Artifact.raw_text.isnot(None))
         .order_by(Artifact.published_at.desc())
         .limit(limit)
@@ -102,16 +133,8 @@ def summarise_ticker_artifacts(
             skipped += 1
             continue
 
-        category = str(metadata.get("category") or artifact.artifact_type or "UNKNOWN")
-        extracted_data = metadata.get("extracted_data") if isinstance(metadata.get("extracted_data"), dict) else {}
-
         try:
-            summary = gemini_service.summarise_announcement(
-                title=artifact.title or "Untitled ASX announcement",
-                category=category,
-                extracted_data=extracted_data,
-                raw_text=artifact.raw_text,
-            )
+            summary, prompt_version = _generate_artifact_summary(artifact, metadata)
         except Exception as exc:
             errors.append({"artifact_id": str(artifact.id), "error": str(exc)})
             continue
@@ -126,8 +149,9 @@ def summarise_ticker_artifacts(
         artifact_summary_crud.upsert_artifact_summary(
             db,
             artifact_id=artifact.id,
-            summary_text=_summary_text(artifact.title or "Untitled ASX announcement", summary),
+            summary_text=_summary_text(artifact.title or "Untitled artifact", summary),
             model_used=gemini_service.active_model_name(),
+            prompt_version=prompt_version,
         )
         processed += 1
 
@@ -151,22 +175,14 @@ def summarise_artifact(
         raise HTTPException(status_code=404, detail="Artifact has no text to summarise")
 
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    category = str(metadata.get("category") or artifact.artifact_type or "UNKNOWN")
-    extracted_data = metadata.get("extracted_data") if isinstance(metadata.get("extracted_data"), dict) else {}
-
     try:
-        summary = gemini_service.summarise_announcement(
-            title=artifact.title or "Untitled ASX announcement",
-            category=category,
-            extracted_data=extracted_data,
-            raw_text=artifact.raw_text,
-        )
+        summary, prompt_version = _generate_artifact_summary(artifact, metadata)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail="Gemini summary request failed") from exc
+        raise HTTPException(status_code=502, detail="Groq summary request failed") from exc
 
     next_metadata = dict(metadata)
     for key in ("summary", "about", "changed", "matters"):
@@ -179,15 +195,17 @@ def summarise_artifact(
         db,
         artifact_id=artifact.id,
         summary_text=_summary_text(
-            artifact.title or "Untitled ASX announcement",
+            artifact.title or "Untitled artifact",
             summary,
         ),
         model_used=gemini_service.active_model_name(),
+        prompt_version=prompt_version,
     )
 
     return {
         "artifact_id": artifact.id,
         "summary_id": db_summary.id,
         "model_used": db_summary.model_used,
+        "prompt_version": db_summary.prompt_version,
         **summary,
     }

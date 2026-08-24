@@ -239,7 +239,6 @@ Resources:
         - x86_64
       MemorySize: 1024
       Timeout: 30
-      ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
@@ -296,7 +295,6 @@ Resources:
         - x86_64
       MemorySize: 2048
       Timeout: 300
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
@@ -343,7 +341,6 @@ Resources:
         - x86_64
       MemorySize: 2048
       Timeout: 300
-      ReservedConcurrentExecutions: 2
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
@@ -392,9 +389,8 @@ Resources:
           - lambdas.analysis.handler
       Architectures:
         - x86_64
-      MemorySize: 6144
+      MemorySize: 3008
       Timeout: 720
-      ReservedConcurrentExecutions: 1
       EphemeralStorage:
         Size: 1024
       Environment:
@@ -462,7 +458,6 @@ Resources:
         - x86_64
       MemorySize: 512
       Timeout: 60
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url

@@ -66,6 +66,7 @@ def _stage_artifact_analysis(
             artifact_id=artifact_id,
             summary_text=str(summary["summary_text"]),
             model_used=summary.get("model_used"),
+            prompt_version=summary.get("prompt_version"),
             confidence_score=summary.get("confidence_score"),
         )
 

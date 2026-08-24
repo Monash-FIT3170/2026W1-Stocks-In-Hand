@@ -125,9 +125,13 @@ Resources:
                   - s3:CreateBucket
                   - s3:DeleteBucket
                   - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
                   - s3:GetBucket*
+                  - s3:GetLifecycleConfiguration
                   - s3:ListBucket
+                  - s3:PutEncryptionConfiguration
                   - s3:PutBucket*
+                  - s3:PutLifecycleConfiguration
                 Resource:
                   - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-*-${AWS::AccountId}-raw"
                   - !Sub "arn:${AWS::Partition}:s3:::stocks-in-hand-*-${AWS::AccountId}-frontend"
@@ -184,6 +188,11 @@ Resources:
                   - apigateway:POST
                   - apigateway:PUT
                 Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*"
+              - Sid: TagApplicationApiGateway
+                Effect: Allow
+                Action:
+                  - apigateway:POST
+                Resource: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*"
               - Sid: ManageApplicationCloudFront
                 Effect: Allow
                 Action:
@@ -242,7 +251,9 @@ Resources:
                 Effect: Allow
                 Action:
                   - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
                   - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
                   - ecr:GetDownloadUrlForLayer
                   - ecr:InitiateLayerUpload
                   - ecr:PutImage

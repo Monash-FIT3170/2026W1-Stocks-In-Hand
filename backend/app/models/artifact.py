@@ -1,5 +1,6 @@
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -52,6 +53,7 @@ class Artifact(Base):
     published_at = Column(DateTime(timezone=True), nullable=True)
     scraped_at = Column(DateTime(timezone=True), server_default=func.now())
     content_hash = Column(String, unique=True, nullable=True)
+    is_duplicate = Column(Boolean, nullable=False, default=False)
     checksum_sha256 = Column(String(length=64), nullable=True)
     content_type = Column(String, nullable=True)
     file_size_bytes = Column(BigInteger, nullable=True)

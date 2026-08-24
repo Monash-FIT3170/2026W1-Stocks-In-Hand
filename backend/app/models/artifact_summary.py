@@ -18,6 +18,7 @@ class ArtifactSummary(Base):
     artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id"), nullable=False)
     summary_text = Column(Text, nullable=False)
     model_used = Column(String, nullable=True)
+    prompt_version = Column(String, nullable=True)
     confidence_score = Column(Numeric, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
