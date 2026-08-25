@@ -286,6 +286,173 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
     assert result[0]["is_self"] is False
 
 
+# --- Bluesky route tests ---
+
+def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
+    """Public Bluesky search results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "posts": [{
+            "uri": "at://did:plc:test/app.bsky.feed.post/abc123",
+            "record": {
+                "text": "ANZ results look strong.",
+                "createdAt": "2026-08-09T01:00:00Z",
+                "langs": ["en"],
+                "tags": [{"tag": "ASX"}],
+            },
+            "author": {"handle": "investor.bsky.social", "displayName": "Investor"},
+            "replyCount": 2,
+            "repostCount": 3,
+            "likeCount": 4,
+            "quoteCount": 1,
+        }],
+    }
+
+    with patch("app.api.routes.bluesky.httpx.get", return_value=mock_response):
+        from app.api.routes.bluesky import _fetch_posts
+        result = _fetch_posts(query="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor.bsky.social"
+    assert result[0]["like_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
+def test_bluesky_ticker_filter_requires_financial_context() -> None:
+    """Posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_bluesky_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
+def test_mastodon_ticker_filter_requires_financial_context() -> None:
+    """Mastodon posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_mastodon_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
+def test_stored_sentiment_groups_forum_sources_as_public_discussion() -> None:
+    """All supported forum sources should share the public discussion category."""
+    from app.api.routes.category_sentiment import _categories_for_stored_artifact
+
+    for source_type in ("reddit", "bluesky", "mastodon"):
+        artifact = MagicMock(source_type=source_type)
+        assert _categories_for_stored_artifact(artifact) == ["user_discussion"]
+
+
+# --- Mastodon route tests ---
+
+def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
+    """Public Mastodon hashtag results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [{
+        "id": "114123456789",
+        "created_at": "2026-08-10T01:00:00Z",
+        "content": "<p>ANZ results look <strong>strong</strong>.</p>",
+        "url": "https://aus.social/@investor/114123456789",
+        "account": {"acct": "investor", "display_name": "Investor"},
+        "replies_count": 2,
+        "reblogs_count": 3,
+        "favourites_count": 4,
+        "language": "en",
+        "tags": [{"name": "ASX", "url": "https://aus.social/tags/ASX"}],
+        "sensitive": False,
+        "spoiler_text": "",
+    }]
+
+    with patch("app.api.routes.mastodon.httpx.get", return_value=mock_response):
+        from app.api.routes.mastodon import _fetch_posts
+        result = _fetch_posts(tag="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "114123456789"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor"
+    assert result[0]["favourites_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
+def test_public_discussion_summary_combines_all_sources() -> None:
+    """All public discussion sources are included in one summary request."""
+    from app.api.routes import category_sentiment
+
+    reddit_post = MagicMock(
+        title="ANZ earnings discussion",
+        raw_text="Investors are watching the result.",
+        url="https://reddit.com/example",
+        artifact_metadata={"score": 7},
+    )
+    bluesky_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="ASX investors are positive.",
+        url="https://bsky.app/example",
+        artifact_metadata={
+            "like_count": 3,
+            "repost_count": 2,
+            "reply_count": 1,
+            "quote_count": 0,
+        },
+    )
+    mastodon_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="Investors are positive about the result.",
+        url="https://aus.social/example",
+        artifact_metadata={
+            "favourites_count": 4,
+            "reblogs_count": 2,
+            "replies_count": 1,
+        },
+    )
+    captured_posts = []
+
+    def fake_summary(**kwargs):
+        captured_posts.extend(kwargs["posts"])
+        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
+
+    with patch.object(
+        category_sentiment.artifact_crud,
+        "get_reddit_posts_for_ticker",
+        return_value=[reddit_post],
+    ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_bluesky_posts_for_ticker",
+        return_value=[bluesky_post],
+    ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_mastodon_posts_for_ticker",
+        return_value=[mastodon_post],
+    ), patch.object(
+        category_sentiment.reddit_route,
+        "_summarise_reddit_posts",
+        side_effect=fake_summary,
+    ):
+        result = category_sentiment._summarise_recent_public_discussion(
+            ticker="ANZ",
+            db=MagicMock(),
+            days=30,
+            reddit_limit=50,
+            bluesky_limit=50,
+            mastodon_limit=50,
+        )
+
+    assert result["summary"] == "Discussion is positive."
+    assert len(captured_posts) == 3
+    assert captured_posts[0]["score"] == 7
+    assert captured_posts[1]["score"] == 6
+    assert captured_posts[2]["score"] == 7
+
+
 def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
     """Reddit summaries should use the configured Groq model, not a hardcoded ID."""
     from app.api.routes import reddit
