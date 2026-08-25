@@ -22,6 +22,7 @@ from app.api.routes import (
     information_platform,
     investor,
     mastodon,
+    news,
     reddit,
     scrape_run,
     ticker,
@@ -60,6 +61,7 @@ for route_module in (
     scrape_run,
     information_platform,
     auth,
+    news,
     reddit,
     bluesky,
     mastodon,
@@ -179,7 +181,6 @@ def scrape_ticker(
                 f"Enabled: {settings.SUPPORTED_TICKERS}"
             ),
         )
-
     source_url = settings.SOURCE_URLS.get(symbol, source.source_url)
     if idempotency_key is not None:
         idempotency_key = idempotency_key.strip()
@@ -239,7 +240,6 @@ def scrape_ticker(
         "ticker": symbol,
         "scrape_run_id": run.id,
     }
-
 
 @app.get("/tickers")
 def tickers(skip: int = 0, limit: int = 100, db=Depends(get_db)):

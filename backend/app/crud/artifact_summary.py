@@ -20,6 +20,7 @@ def upsert_artifact_summary(
     artifact_id: UUID,
     summary_text: str,
     model_used: str | None = None,
+    prompt_version: str | None = None,
     confidence_score: Decimal | float | None = None,
 ) -> ArtifactSummary:
     """Create or update the single summary row for an artifact."""
@@ -33,6 +34,7 @@ def upsert_artifact_summary(
         db.add(row)
     row.summary_text = summary_text
     row.model_used = model_used
+    row.prompt_version = prompt_version
     row.confidence_score = confidence_score
     try:
         db.commit()
@@ -47,6 +49,7 @@ def upsert_artifact_summary(
         )
         row.summary_text = summary_text
         row.model_used = model_used
+        row.prompt_version = prompt_version
         row.confidence_score = confidence_score
         db.commit()
         db.refresh(row)

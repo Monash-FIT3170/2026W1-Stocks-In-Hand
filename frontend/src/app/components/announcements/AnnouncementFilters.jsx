@@ -9,6 +9,7 @@ const SECTORS = [
   "Financials",
   "Health Care",
   "Consumer Staples",
+  "Consumer Discretionary",
   "Industrials",
   "Technology",
   "Energy",
@@ -46,7 +47,7 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
   const hasFilters = today || sector || startDate || endDate
   const todayHref = buildFilterHref({ today: !today, sector })
   const dateSummary = startDate || endDate
-    ? `${startDate ? formatDisplayDate(startDate) : "Any date"} - ${endDate ? formatDisplayDate(endDate) : "Now"}`
+    ? `${startDate ? formatDisplayDate(startDate) : "Any date"} – ${endDate ? formatDisplayDate(endDate) : "Now"}`
     : ""
 
   function handleSectorChange(event) {
@@ -74,7 +75,7 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
   }
 
   return (
-    <div className={styles.filterPanel}>
+    <div aria-label="Announcement filters" className={styles.filterPanel} role="group">
       <div className={styles.filterPills}>
         <select aria-label="Filter by sector" onChange={handleSectorChange} value={sector}>
           <option value="">All sectors</option>

@@ -36,6 +36,12 @@
   font-weight: 850;
 }
 
+.primaryAction:disabled,
+.authSubmit:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .heroSearch,
 .pageSearchBar {
   align-items: center;
@@ -60,6 +66,11 @@
   min-width: 0;
   outline: 0;
   width: 100%;
+}
+
+.heroSearch input,
+.pageSearchBar input {
+  min-height: 44px;
 }
 
 .heroSearch svg,
@@ -163,9 +174,12 @@
 .filterPills select,
 .dateRangeFilters input,
 .filterTabs button {
+  align-items: center;
   background: #e7e9eb;
   border-radius: 999px;
   color: var(--muted);
+  display: inline-flex;
+  min-height: 44px;
   padding: 9px 20px;
   text-decoration: none;
 }
@@ -194,7 +208,7 @@
 .sentimentCard,
 .timelineCard,
 .trendingBox {
-  border-radius: 28px;
+  border-radius: 16px;
   box-shadow: var(--shadow);
 }
 
@@ -205,8 +219,7 @@
 }
 
 .featureCardHighlighted {
-  border-left: 4px solid var(--green);
-  padding-left: 36px;
+  border-top: 1px solid var(--green);
 }
 
 .featureCard h2,
@@ -297,17 +310,13 @@
 
 .resultCard {
   background: white;
-  border-left: 5px solid var(--green2);
+  border: 1px solid var(--line);
   color: inherit;
   display: block;
   min-height: 238px;
   text-align: left;
   text-decoration: none;
   width: 100%;
-}
-
-.resultCard.orange {
-  border-left-color: var(--orange);
 }
 
 .resultContent {
@@ -436,6 +445,7 @@
 .filterPills select {
   appearance: none;
   cursor: pointer;
+  min-height: 44px;
   min-width: 164px;
 }
 
@@ -466,6 +476,7 @@
 }
 
 .dateRangeFilters input {
+  min-height: 44px;
   min-width: 152px;
 }
 
@@ -484,13 +495,20 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.briefShell {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+}
+
 .announcementCard {
   background: white;
+  contain-intrinsic-size: auto 420px;
+  content-visibility: auto;
   padding: 32px;
 }
 
 .cardTopLine {
   color: var(--faint);
+  flex-wrap: wrap;
 }
 
 .cardTopLine svg {
@@ -529,9 +547,13 @@
 .cardActions button,
 .cardActions a,
 .timelineCard a {
+  align-items: center;
   color: var(--green);
+  display: inline-flex;
   font-weight: 850;
-  text-decoration: none;
+  min-height: 44px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
 }
 
 .citationList {
@@ -591,8 +613,10 @@
   padding: 28px 24px;
 }
 
-.trendingBox span {
-  color: #c4cbc7;
+.trendingBox > span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
   letter-spacing: 2px;
   text-transform: uppercase;
 }
@@ -604,11 +628,16 @@
   margin-top: 16px;
 }
 
-.trendingBox b {
+.trendingBox a,
+.trendingBox div > span {
+  align-items: center;
   background: #e7e9eb;
   border-radius: 999px;
   color: var(--muted);
+  display: inline-flex;
+  min-height: 44px;
   padding: 8px 14px;
+  text-decoration: none;
 }
 
 .trendingBox .hotTicker {
@@ -683,8 +712,12 @@
 
 .tabButton,
 .activeTab {
+  align-items: center;
   background: transparent;
   color: var(--muted);
+  display: flex;
+  justify-content: center;
+  min-height: 52px;
   padding: 18px 24px;
   text-align: center;
   text-decoration: none;
@@ -703,7 +736,7 @@
 
 .storyCard {
   background: var(--panel);
-  border-left: 4px solid var(--green2);
+  border-top: 1px solid var(--green2);
   box-shadow: none;
   padding: 28px;
 }
@@ -796,7 +829,7 @@
 
 .categorySentimentHeader h2 {
   font-size: 24px;
-  margin: 4px 0 0;
+  margin: 0;
 }
 
 .categorySentimentHeader strong {
@@ -877,6 +910,11 @@
   color: #53615b;
 }
 
+.sentimentPill_unavailable {
+  background: #edf0ef;
+  color: #43504a;
+}
+
 .categorySentimentMeter {
   background: #e6eaec;
   border-radius: 999px;
@@ -889,7 +927,6 @@
   display: block;
   height: 100%;
   max-width: 100%;
-  min-width: 4px;
 }
 
 .categorySentimentItem p {
@@ -901,6 +938,89 @@
 .categorySentimentItem strong {
   color: var(--green);
   font-size: 13px;
+}
+
+.contentSkeleton,
+.tickerHeaderSkeleton,
+.asideSkeleton {
+  background: #eef1f0;
+  border-radius: 16px;
+  color: var(--muted);
+  min-height: 160px;
+  padding: 28px;
+}
+
+.tickerHeaderSkeleton {
+  margin-bottom: 48px;
+  min-height: 128px;
+}
+
+.tickerHeaderFallback {
+  background: white;
+  margin-bottom: 48px;
+  padding: 24px;
+}
+
+.tickerHeaderFallback h1 {
+  font-size: clamp(42px, 5vw, 56px);
+  margin: 4px 0 8px;
+}
+
+.tickerHeaderFallback p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.asideSkeleton {
+  min-height: 380px;
+}
+
+.asideUnavailable {
+  align-self: start;
+  background: white;
+  padding: 24px;
+}
+
+.asideUnavailable h2 {
+  font-size: 20px;
+  margin-top: 0;
+}
+
+.asideUnavailable p {
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+.inlineError {
+  background: #fff1f1;
+  border-radius: 14px;
+  color: #7f1d1d;
+  padding: 20px;
+}
+
+.inlineError p {
+  margin-top: 0;
+}
+
+.secondaryButton,
+.loadMoreButton {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--green);
+  border-radius: 999px;
+  color: var(--green);
+  display: inline-flex;
+  font: inherit;
+  font-weight: 850;
+  min-height: 44px;
+  padding: 10px 20px;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.loadMoreButton {
+  justify-self: center;
+  margin-top: 8px;
 }
 
 .briefAside {
@@ -1131,11 +1251,13 @@
   color: #9ca3af;
   cursor: pointer;
   font-size: 18px;
+  height: 44px;
   line-height: 1;
-  padding: 4px 6px;
+  padding: 0;
   position: absolute;
   right: 10px;
   top: 10px;
+  width: 44px;
 }
 
 .stockRemove:hover {
@@ -1285,7 +1407,7 @@ button.emptyCard:hover {
 
 .watchlistModal {
   background: white;
-  border-radius: 8px;
+  border-radius: 16px;
   box-shadow: var(--shadow);
   max-height: min(720px, calc(100vh - 48px));
   max-width: 620px;
@@ -1320,13 +1442,13 @@ button.emptyCard:hover {
   color: var(--muted);
   cursor: pointer;
   display: flex;
-  flex: 0 0 34px;
+  flex: 0 0 44px;
   font-size: 18px;
   font-weight: 850;
-  height: 34px;
+  height: 44px;
   justify-content: center;
   line-height: 1;
-  width: 34px;
+  width: 44px;
 }
 
 .watchlistSearch {
@@ -1346,6 +1468,7 @@ button.emptyCard:hover {
   border-radius: 999px;
   color: #101828;
   font: inherit;
+  min-height: 44px;
   padding: 13px 18px;
 }
 
@@ -1381,6 +1504,7 @@ button.emptyCard:hover {
   font: inherit;
   gap: 16px;
   justify-content: space-between;
+  min-height: 52px;
   padding: 14px 16px;
   text-align: left;
 }
@@ -1462,13 +1586,32 @@ button.emptyCard:hover {
   border-radius: 999px;
   display: flex;
   gap: 12px;
-  padding: 16px 24px;
+  padding: 6px 12px 6px 24px;
+}
+
+.field input {
+  font-size: 16px;
+  min-height: 44px;
 }
 
 .field svg {
   color: #738079;
   height: 18px;
   width: 18px;
+}
+
+.passwordToggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: #59665f;
+  display: flex;
+  flex: 0 0 44px;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+  width: 44px;
 }
 
 .authSubmit {
@@ -1503,19 +1646,89 @@ button.emptyCard:hover {
 
 .authSwap button,
 .authSwap a {
+  align-items: center;
   color: var(--green);
+  display: inline-flex;
   font-weight: 850;
+  min-height: 44px;
   padding: 0;
   text-decoration: none;
 }
 
 .securityNote {
   background: rgba(255, 255, 255, 0.56);
-  border-radius: 999px;
+  border-radius: 16px;
   color: var(--muted);
   margin: 36px auto 0;
   max-width: 335px;
   padding: 12px 18px;
+}
+
+.informationPage,
+.notFoundPage {
+  max-width: 820px;
+}
+
+.informationPage > h1,
+.notFoundPage h1 {
+  font-size: clamp(40px, 6vw, 60px);
+  line-height: 1.05;
+  margin: 0 0 24px;
+}
+
+.informationPage > p,
+.informationPage section p,
+.notFoundPage > p {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.informationPage > section,
+.sourceDirectory section {
+  border-top: 1px solid var(--line);
+  margin-top: 36px;
+  padding-top: 24px;
+}
+
+.informationPage h2 {
+  margin: 0 0 8px;
+}
+
+.sourceDirectory {
+  display: grid;
+  gap: 0;
+}
+
+.informationNotice {
+  background: #e9f5ef;
+  border-radius: 14px;
+  color: #144f3d !important;
+  margin-top: 40px;
+  padding: 20px;
+}
+
+.notFoundPage {
+  margin: 0 auto;
+  min-height: 620px;
+  padding: 120px 24px;
+  text-align: center;
+}
+
+.notFoundPage div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 32px;
+}
+
+.notFoundPage a {
+  align-items: center;
+  display: inline-flex;
+  min-height: 44px;
+  padding: 10px 22px;
+  text-decoration: none;
 }
 
 /*
@@ -1548,6 +1761,16 @@ button.emptyCard:hover {
   .authPage {
     padding-left: 16px;
     padding-right: 16px;
+  }
+
+  .contentPage {
+    padding-bottom: 64px;
+    padding-top: 56px;
+  }
+
+  .pageSearchBar {
+    margin-bottom: 32px;
+    width: 100%;
   }
 
   .hero {
@@ -1600,7 +1823,21 @@ button.emptyCard:hover {
   }
 
   .tabBar {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+    overflow-x: auto;
+  }
+
+  .tabButton,
+  .activeTab {
+    padding-inline: 14px;
+  }
+
+  .cardTopLine,
+  .timelineTop,
+  .storyHeading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
   .timeline {

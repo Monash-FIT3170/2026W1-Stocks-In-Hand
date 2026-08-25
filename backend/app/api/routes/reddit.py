@@ -83,7 +83,7 @@ Return JSON only, no explanation:
 }}"""
 
     response = _get_groq_client().chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model=settings.GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )

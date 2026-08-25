@@ -1,10 +1,10 @@
 import re
 import time
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from uuid import UUID
 
 from app.crud import ticker as crud
 from app.database.connection import get_db
@@ -83,7 +83,8 @@ _QUOTE_CACHE: dict[str, tuple[float, tuple[float, float] | None]] = {}
 def _fetch_quote(symbol: str) -> tuple[float, float] | None:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.AX"
     try:
-        with httpx.Client(timeout=6) as client:
+        timeout = httpx.Timeout(2.5, connect=1.5)
+        with httpx.Client(timeout=timeout) as client:
             response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         result = response.json().get("chart", {}).get("result") or []
@@ -143,7 +144,7 @@ def _sentiment_label(value: str | None) -> str:
         "negative": "Generally Negative",
         "neutral": "Neutral",
     }
-    return labels.get((value or "").lower(), "Neutral")
+    return labels.get((value or "").lower(), "Unavailable")
 
 
 def _clean_text(value):
@@ -165,6 +166,22 @@ def _preview(value, max_length=220):
 def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
     metadata = artifact.artifact_metadata or {}
     return _clean_text(metadata.get(key)) or fallback
+
+
+def _metadata_source_name(artifact: Artifact) -> str | None:
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    return _clean_text(metadata.get("source_name"))
+
+
+def _source_action_label(artifact: Artifact) -> str:
+    source_type = (artifact.source_type or "").lower()
+    if source_type == "asx_announcement":
+        return "View original ASX filing"
+    if source_type == "news":
+        source_name = _metadata_source_name(artifact)
+        if source_name:
+            return f"View original at {source_name}"
+    return "View original source"
 
 
 def _format_announcement_time(artifact: Artifact) -> str:
@@ -263,6 +280,91 @@ def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[st
     return themes
 
 
+def _ticker_brief_payload(symbol: str, db: Session) -> dict:
+    _ensure_default_tickers(db)
+    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
+    if not ticker:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    quote = _live_quote(ticker.symbol)
+    artifacts = _ticker_artifacts(db, ticker.id, limit=20)
+    latest_artifact = artifacts[0] if artifacts else None
+    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
+    sources = _sources_for_artifact(latest_artifact) if latest_artifact else []
+    confidence_pct = (
+        f"{round(float(latest_sentiment.confidence_score) * 100)}%"
+        if latest_sentiment and latest_sentiment.confidence_score is not None
+        else "N/A"
+    )
+    story = (
+        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
+        if latest_artifact and latest_artifact.raw_text
+        else (
+            f"{ticker.symbol} is tracked from the StonksInHand database. "
+            "Add announcements and analysis data to enrich this brief."
+        )
+    )
+
+    overview = {
+        "symbol": ticker.symbol,
+        "company_name": ticker.company_name,
+        "sector": ticker.sector or ticker.industry or ticker.exchange,
+        "sentiment_status": "available" if latest_sentiment else "unavailable",
+        "sentiment_label": _sentiment_label(
+            latest_sentiment.sentiment_label if latest_sentiment else None
+        ),
+        "last_updated": (
+            _format_announcement_time(latest_artifact)
+            if latest_artifact
+            else "No updates yet"
+        ),
+        "current_price": _money(quote[0] if quote else None),
+        "day_change": _day_change(quote),
+        "story": story,
+        "sources_count": len(sources),
+        "latest_signal_confidence_pct": confidence_pct,
+        "latest_signal_model": latest_sentiment.model_used if latest_sentiment else None,
+        "latest_signal_analyzed_at": (
+            latest_sentiment.created_at.isoformat()
+            if latest_sentiment and latest_sentiment.created_at
+            else None
+        ),
+        # Deprecated compatibility field. New consumers must use the accurately
+        # named latest-signal field above.
+        "public_sentiment_pct": confidence_pct,
+        "sources": sources,
+    }
+    aside = {
+        "key_numbers": [
+            {"label": "Current price", "value": _money(quote[0] if quote else None)},
+            {"label": "Day change", "value": _day_change(quote)},
+            {
+                "label": "Latest filing",
+                "value": _format_key_date(
+                    latest_artifact.published_at if latest_artifact else None
+                ),
+            },
+            {
+                "label": "Latest type",
+                "value": (
+                    _format_label(
+                        _metadata_value(
+                            latest_artifact,
+                            "category",
+                            latest_artifact.artifact_type,
+                        ),
+                        latest_artifact.artifact_type,
+                    )
+                    if latest_artifact
+                    else "No filings yet"
+                ),
+            },
+        ],
+        "themes": _themes_from_artifacts(artifacts),
+    }
+    return {"overview": overview, "aside": aside}
+
+
 @router.post("/", response_model=TickerResponse)
 def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
@@ -304,90 +406,18 @@ def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
 
 @router.get("/symbol/{symbol}/overview")
 def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    quote = _live_quote(ticker.symbol)
-    artifacts = _ticker_artifacts(db, ticker.id, limit=20)
-    latest_artifact = artifacts[0] if artifacts else None
-    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
-
-    story = (
-        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
-        if latest_artifact and latest_artifact.raw_text
-        else (
-            f"{ticker.symbol} is tracked from the StonksInHand database. "
-            "Add announcements and analysis data to enrich this brief."
-        )
-    )
-    sources = _sources_for_artifact(latest_artifact) if latest_artifact else []
-
-    return {
-        "symbol": ticker.symbol,
-        "company_name": ticker.company_name,
-        "sector": ticker.sector or ticker.industry or ticker.exchange,
-        "sentiment_label": _sentiment_label(
-            latest_sentiment.sentiment_label if latest_sentiment else None
-        ),
-        "last_updated": (
-            _format_announcement_time(latest_artifact)
-            if latest_artifact
-            else "No updates yet"
-        ),
-        "current_price": _money(quote[0] if quote else None),
-        "day_change": _day_change(quote),
-        "story": story,
-        "sources_count": len(sources) if sources else len(artifacts),
-        "public_sentiment_pct": (
-            f"{round(float(latest_sentiment.confidence_score or 0) * 100)}%"
-            if latest_sentiment
-            else "N/A"
-        ),
-        "sources": sources,
-    }
+    return _ticker_brief_payload(symbol, db)["overview"]
 
 
 @router.get("/symbol/{symbol}/brief-aside")
 def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
+    return _ticker_brief_payload(symbol, db)["aside"]
 
-    quote = _live_quote(ticker.symbol)
-    artifacts = _ticker_artifacts(db, ticker.id, limit=20)
-    latest_artifact = artifacts[0] if artifacts else None
 
-    return {
-        "key_numbers": [
-            {"label": "Current price", "value": _money(quote[0] if quote else None)},
-            {"label": "Day change", "value": _day_change(quote)},
-            {
-                "label": "Latest filing",
-                "value": _format_key_date(
-                    latest_artifact.published_at if latest_artifact else None
-                ),
-            },
-            {
-                "label": "Latest type",
-                "value": (
-                    _format_label(
-                        _metadata_value(
-                            latest_artifact,
-                            "category",
-                            latest_artifact.artifact_type,
-                        ),
-                        latest_artifact.artifact_type,
-                    )
-                    if latest_artifact
-                    else "No filings yet"
-                ),
-            },
-        ],
-        "themes": _themes_from_artifacts(artifacts),
-    }
+@router.get("/symbol/{symbol}/brief")
+def get_ticker_brief(symbol: str, db: Session = Depends(get_db)):
+    """Return the overview and aside from one quote and artifact lookup."""
+    return _ticker_brief_payload(symbol, db)
 
 
 @router.get("/symbol/{symbol}/news-feed")
@@ -417,12 +447,23 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
                 _metadata_value(
                     artifact,
                     "summary",
-                    _preview(artifact.raw_text, 160) or "No summary available yet.",
+                    "Summary pending.",
                 ),
             ),
-            "changed": _metadata_value(artifact, "changed", "No change summary available yet."),
-            "matters": _metadata_value(artifact, "matters", "No investment impact summary available yet."),
+            "changed": _metadata_value(
+                artifact,
+                "changed",
+                "No change summary available yet.",
+            ),
+            "matters": _metadata_value(
+                artifact,
+                "matters",
+                "No investment impact summary available yet.",
+            ),
             "url": artifact.url,
+            "source_type": artifact.source_type,
+            "source_name": _metadata_source_name(artifact),
+            "source_label": _source_action_label(artifact),
             "sources": _sources_for_artifact(artifact),
         }
         for artifact in artifacts
@@ -431,6 +472,7 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
 
 @router.get("/symbol/{symbol}/deep-dive-timeline")
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
+    """Return only persisted filing events; an empty history stays empty."""
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -468,21 +510,4 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
             }
         )
 
-    if timeline:
-        return timeline
-
-    return [
-        {
-            "month": "Recent",
-            "tag": "Database",
-            "title": f"{ticker.symbol} profile created",
-            "date": "No announcements yet",
-            "detail": (
-                f"{ticker.company_name} exists in the database, "
-                "but no announcement timeline has been loaded yet."
-            ),
-            "metrics": [ticker.exchange],
-            "tone": "green",
-            "sources": [],
-        }
-    ]
+    return timeline
