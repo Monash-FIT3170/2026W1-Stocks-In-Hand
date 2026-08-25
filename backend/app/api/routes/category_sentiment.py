@@ -1,4 +1,8 @@
+import datetime as dt
+from typing import Any
+
 from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.crud import artifact as artifact_crud
@@ -6,6 +10,7 @@ from app.crud import artifact_sentiment as artifact_sentiment_crud
 from app.api.routes import reddit as reddit_route
 from app.database.connection import get_db
 from app.models.artifact import Artifact
+from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.ticker import Ticker
 from app.schemas.category_sentiment import CategorySentimentRequest
 from app.schemas.category_sentiment import CategorySentimentResponse
@@ -305,6 +310,219 @@ def _summarise_recent_reddit(ticker: str, db: Session, days: int, reddit_limit: 
         ) from exc
 
 
+def _stored_sentiment_rows(
+    ticker_id: Any,
+    db: Session,
+    *,
+    days: int,
+    limit: int,
+) -> list[tuple[Artifact, Any]]:
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=max(days, 1))
+    return (
+        db.query(Artifact, ArtifactSentiment)
+        .join(
+            ArtifactSentiment,
+            ArtifactSentiment.artifact_id == Artifact.id,
+        )
+        .filter(Artifact.ticker_id == ticker_id)
+        .filter(
+            or_(
+                Artifact.published_at >= cutoff,
+                and_(
+                    Artifact.published_at.is_(None),
+                    Artifact.created_at >= cutoff,
+                ),
+            )
+        )
+        .order_by(
+            Artifact.published_at.desc().nullslast(),
+            ArtifactSentiment.created_at.desc(),
+        )
+        .limit(max(limit, 1))
+        .all()
+    )
+
+
+def _categories_for_stored_artifact(artifact: Artifact) -> list[str]:
+    source_type = str(artifact.source_type or "").lower()
+    if source_type == "reddit":
+        return ["user_discussion"]
+
+    metadata = (
+        artifact.artifact_metadata
+        if isinstance(artifact.artifact_metadata, dict)
+        else {}
+    )
+    haystack = " ".join(
+        str(value or "")
+        for value in (
+            metadata.get("category"),
+            artifact.artifact_type,
+            artifact.title,
+            metadata.get("summary"),
+            metadata.get("about"),
+            metadata.get("changed"),
+            metadata.get("matters"),
+        )
+    ).lower()
+    matches = [
+        category
+        for category, keywords in FALLBACK_CATEGORY_KEYWORDS.items()
+        if any(keyword in haystack for keyword in keywords)
+    ]
+    return matches or ["strategy"]
+
+
+def _unavailable_stored_result(category: str) -> dict[str, Any]:
+    label = category.replace("_", " ")
+    return {
+        "summary": f"No analysed {label} signal is available yet.",
+        "available": False,
+        "sentiment_label": None,
+        "label": None,
+        "score": None,
+        "confidence_score": None,
+        "agreement_score": None,
+        "distribution": {},
+        "model_used": None,
+        "chunks_used": 0,
+        "chunks_analyzed": 0,
+        "sources_count": 0,
+        "latest_analyzed_at": None,
+    }
+
+
+def _aggregate_stored_category(
+    category: str,
+    rows: list[tuple[Artifact, Any]],
+) -> dict[str, Any]:
+    usable: list[tuple[Artifact, Any, str, float]] = []
+    for artifact, sentiment in rows:
+        label = str(sentiment.sentiment_label or "").lower()
+        if label not in {"positive", "neutral", "negative"}:
+            continue
+        confidence = float(sentiment.confidence_score or 0)
+        usable.append((artifact, sentiment, label, min(max(confidence, 0.0), 1.0)))
+
+    if not usable:
+        return _unavailable_stored_result(category)
+
+    weights = {"positive": 0.0, "neutral": 0.0, "negative": 0.0}
+    for _artifact, _sentiment, label, confidence in usable:
+        weights[label] += confidence or 1.0
+    total_weight = sum(weights.values())
+    distribution = {
+        label: round(weight / total_weight, 4)
+        for label, weight in weights.items()
+    }
+    dominant = max(distribution, key=lambda label: distribution[label])
+    confidence_score = round(
+        sum(confidence for _artifact, _sentiment, _label, confidence in usable)
+        / len(usable),
+        4,
+    )
+    summaries = []
+    for artifact, _sentiment, _label, _confidence in usable:
+        summary = _artifact_summary_text(artifact)
+        if summary and summary not in summaries:
+            summaries.append(summary)
+        if len(summaries) == 2:
+            break
+
+    models = {
+        str(sentiment.model_used)
+        for _artifact, sentiment, _label, _confidence in usable
+        if sentiment.model_used
+    }
+    analyzed_dates = [
+        sentiment.created_at
+        for _artifact, sentiment, _label, _confidence in usable
+        if sentiment.created_at
+    ]
+    latest_analyzed_at = max(analyzed_dates) if analyzed_dates else None
+    model_used = next(iter(models)) if len(models) == 1 else "Multiple stored models"
+
+    return {
+        "summary": " ".join(summaries) or f"Based on {len(usable)} analysed signals.",
+        "available": True,
+        "sentiment_label": dominant,
+        "label": dominant,
+        "score": distribution[dominant],
+        "confidence_score": confidence_score,
+        "agreement_score": distribution[dominant],
+        "distribution": distribution,
+        "model_used": model_used,
+        "chunks_used": len(usable),
+        "chunks_analyzed": len(usable),
+        "sources_count": len(usable),
+        "latest_analyzed_at": latest_analyzed_at,
+    }
+
+
+def read_ticker_category_sentiment(
+    ticker: str,
+    db: Session,
+    *,
+    days: int = DEFAULT_SENTIMENT_DAYS,
+    limit: int = 250,
+) -> dict[str, Any]:
+    """Read persisted analysis-worker sentiment without invoking FinBERT."""
+    ticker_row = (
+        db.query(Ticker)
+        .filter(Ticker.symbol == ticker.upper())
+        .first()
+    )
+    if not ticker_row:
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    stored_rows = _stored_sentiment_rows(
+        ticker_row.id,
+        db,
+        days=days,
+        limit=limit,
+    )
+    grouped: dict[str, list[tuple[Artifact, Any]]] = {
+        key: [] for key in CATEGORY_SENTIMENT_KEYS
+    }
+    for artifact, sentiment in stored_rows:
+        for category in _categories_for_stored_artifact(artifact):
+            grouped[category].append((artifact, sentiment))
+
+    categories = {
+        category: _aggregate_stored_category(category, grouped[category])
+        for category in CATEGORY_SENTIMENT_KEYS
+    }
+    available_count = sum(result["available"] for result in categories.values())
+    status = (
+        "available"
+        if available_count == len(CATEGORY_SENTIMENT_KEYS)
+        else "partial"
+        if available_count
+        else "unavailable"
+    )
+    models = {
+        result["model_used"]
+        for result in categories.values()
+        if result["model_used"]
+    }
+    analyzed_dates = [
+        result["latest_analyzed_at"]
+        for result in categories.values()
+        if result["latest_analyzed_at"]
+    ]
+    return {
+        "ticker": ticker.upper(),
+        "status": status,
+        "model_used": (
+            next(iter(models))
+            if len(models) == 1
+            else "Multiple stored models" if models else None
+        ),
+        "latest_analyzed_at": max(analyzed_dates) if analyzed_dates else None,
+        "categories": categories,
+    }
+
+
 def build_ticker_category_sentiment(
     ticker: str,
     body: CategorySentimentRequest | None,
@@ -316,46 +534,40 @@ def build_ticker_category_sentiment(
     batch_size: int = 0,
     persist: bool = True,
 ):
+    """Preserve the legacy POST contract without API-runtime inference."""
     request_body = body or CategorySentimentRequest()
-    category_map = _build_category_map(request_body)
-
-    if not request_body.categories:
-        category_map.update(
-            _categorise_recent_asx(
-                ticker=ticker,
-                db=db,
-                days=days,
-                asx_limit=asx_limit,
-                offset=offset,
-                batch_size=batch_size,
-            )
-        )
-
-    if not request_body.reddit_summary:
-        reddit_summary = _summarise_recent_reddit(
-            ticker=ticker,
-            db=db,
-            days=days,
-            reddit_limit=reddit_limit,
-        )
-        category_map["user_discussion"] = str(reddit_summary.get("summary", ""))
-
-    if not category_map:
+    if request_body.categories or request_body.reddit_summary:
         raise HTTPException(
-            status_code=404,
-            detail="No ASX categories or Reddit summary text found",
+            status_code=503,
+            detail=(
+                "On-demand FinBERT inference is not available in the API runtime. "
+                "Submit documents through the analysis pipeline, then read stored sentiment."
+            ),
         )
-    if not any(text for text in category_map.values()):
-        raise HTTPException(status_code=404, detail="All sentiment input text is empty")
 
-    result = _run_finbert(ticker=ticker, category_map=category_map)
-    if persist:
-        _persist_latest_ticker_sentiment(
-            db=db,
-            ticker=ticker,
-            categories=result["categories"],
-        )
-    return result
+    _ = (offset, batch_size, persist)
+    return read_ticker_category_sentiment(
+        ticker=ticker,
+        db=db,
+        days=days,
+        limit=asx_limit + reddit_limit,
+    )
+
+
+@router.get("/{ticker}", response_model=CategorySentimentResponse)
+def get_ticker_category_sentiments(
+    ticker: str,
+    days: int = DEFAULT_SENTIMENT_DAYS,
+    limit: int = 250,
+    db: Session = Depends(get_db),
+):
+    """Return stored category sentiment for a ticker."""
+    return read_ticker_category_sentiment(
+        ticker=ticker,
+        db=db,
+        days=days,
+        limit=limit,
+    )
 
 
 @router.post("/{ticker}", response_model=CategorySentimentResponse)
@@ -370,6 +582,7 @@ def analyse_ticker_category_sentiments(
     persist: bool = True,
     db: Session = Depends(get_db),
 ):
+    """Compatibility endpoint for clients that previously posted this request."""
     return build_ticker_category_sentiment(
         ticker=ticker,
         body=body,

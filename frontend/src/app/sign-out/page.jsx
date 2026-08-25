@@ -18,6 +18,7 @@ export default function SignOutRoute() {
         })
       } finally {
         window.localStorage.removeItem(AUTH_STORAGE_KEY)
+        window.dispatchEvent(new Event("stonks-auth-changed"))
         router.replace("/")
       }
     }

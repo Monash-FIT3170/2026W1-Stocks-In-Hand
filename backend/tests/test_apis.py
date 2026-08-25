@@ -138,6 +138,65 @@ def test_news_feed_uses_generic_source_label_when_news_source_missing() -> None:
     assert result[0]["source_label"] == "View original source"
 
 
+def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
+    """The shared frontend shell should need one quote request per ticker load."""
+    from datetime import datetime, timezone
+    import uuid
+
+    from app.api.routes import ticker
+
+    ticker_record = MagicMock(
+        id=uuid.uuid4(),
+        symbol="CBA",
+        company_name="Commonwealth Bank of Australia",
+        sector="Financials",
+        industry="Banks",
+        exchange="ASX",
+    )
+    published_at = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    artifact = MagicMock(
+        id=uuid.uuid4(),
+        title="CBA results",
+        raw_text="CBA published its latest financial results.",
+        artifact_metadata={"about": "CBA reported its latest financial results."},
+        artifact_type="financial_results",
+        source_type="asx_announcement",
+        url="https://example.com/cba-results",
+        published_at=published_at,
+        created_at=published_at,
+    )
+    sentiment = MagicMock(
+        sentiment_label="positive",
+        confidence_score=0.91,
+        model_used="ProsusAI/finbert",
+        created_at=published_at,
+    )
+
+    with patch.object(ticker, "_ensure_default_tickers"), patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_live_quote",
+        return_value=(150.0, 149.0),
+    ) as live_quote, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker,
+        "_latest_sentiment_for_ticker",
+        return_value=sentiment,
+    ):
+        result = ticker.get_ticker_brief("CBA", db=MagicMock())
+
+    live_quote.assert_called_once_with("CBA")
+    assert result["overview"]["latest_signal_confidence_pct"] == "91%"
+    assert result["overview"]["sentiment_status"] == "available"
+    assert result["aside"]["key_numbers"][0]["value"] == "$150.00"
+
+
 # --- Reddit route tests ---
 
 def _make_mock_submission(
@@ -274,60 +333,57 @@ def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
     )
 
 
-def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
-    """POST /sentiment/{ticker} wires ASX categories and Reddit summary together."""
+def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
+    """Ticker views read worker-produced sentiment without API inference."""
+    from datetime import datetime, timezone
+    import uuid
+
     from app.api.routes import category_sentiment
+    from app.schemas.category_sentiment import CategorySentimentResponse
 
-    captured_categories = {}
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="ANZ")
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = ticker_record
 
-    def fake_analyse_categories(categories):
-        captured_categories.update(categories)
-        return {
-            name: {
-                "summary": text,
-                "sentiment_label": "neutral",
-                "label": "neutral",
-                "score": 0.5,
-                "confidence_score": 0.5,
-                "distribution": {"positive": 0.2, "neutral": 0.6, "negative": 0.2},
-                "model_used": "test-finbert",
-                "chunks_used": 1,
-                "chunks_analyzed": 1,
-            }
-            for name, text in categories.items()
-        }
+    revenue_artifact = MagicMock(
+        source_type="asx_announcement",
+        artifact_type="financial_results",
+        title="ANZ revenue increased",
+        artifact_metadata={"about": "Revenue increased during the half year."},
+    )
+    reddit_artifact = MagicMock(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="Investors discuss ANZ",
+        artifact_metadata={"summary": "Investors remain mixed on ANZ."},
+    )
+    analyzed_at = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    positive = MagicMock(
+        sentiment_label="positive",
+        confidence_score=0.86,
+        model_used="ProsusAI/finbert",
+        created_at=analyzed_at,
+    )
+    neutral = MagicMock(
+        sentiment_label="neutral",
+        confidence_score=0.71,
+        model_used="ProsusAI/finbert",
+        created_at=analyzed_at,
+    )
 
     with patch.object(
         category_sentiment,
-        "_categorise_recent_asx",
-        return_value={"revenue": "ANZ revenue increased."},
-    ), patch.object(
-        category_sentiment,
-        "_summarise_recent_reddit",
-        return_value={
-            "summary": "Retail investors are mixed on ANZ.",
-            "dominant_sentiment": "mixed",
-            "key_themes": ["banks"],
-        },
+        "_stored_sentiment_rows",
+        return_value=[(revenue_artifact, positive), (reddit_artifact, neutral)],
     ), patch.object(
         category_sentiment.sentiment_service,
         "analyse_categories",
-        side_effect=fake_analyse_categories,
-    ), patch.object(
-        category_sentiment.sentiment_service,
-        "model_name",
-        return_value="test-finbert",
-    ):
-        result = category_sentiment.analyse_ticker_category_sentiments(
-            ticker="anz",
-            body=None,
-            db=MagicMock(),
-        )
+    ) as analyse_categories:
+        result = category_sentiment.get_ticker_category_sentiments("anz", db=db)
 
     assert result["ticker"] == "ANZ"
-    assert result["model_used"] == "test-finbert"
-    assert captured_categories["revenue"] == "ANZ revenue increased."
-    assert captured_categories["user_discussion"] == "Retail investors are mixed on ANZ."
+    assert result["status"] == "partial"
+    assert result["model_used"] == "ProsusAI/finbert"
     assert set(result["categories"]) == {
         "revenue",
         "strategy",
@@ -336,7 +392,49 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
         "organisational",
         "user_discussion",
     }
-    assert result["categories"]["revenue"]["sentiment_label"] == "neutral"
+    assert result["categories"]["revenue"]["sentiment_label"] == "positive"
+    assert result["categories"]["revenue"]["available"] is True
+    assert result["categories"]["risk"]["sentiment_label"] is None
+    assert result["categories"]["risk"]["available"] is False
+    assert result["categories"]["user_discussion"]["sentiment_label"] == "neutral"
+    validated = CategorySentimentResponse.model_validate(result)
+    assert validated.status == "partial"
+    assert validated.categories["risk"].sentiment_label is None
+    analyse_categories.assert_not_called()
+
+
+def test_sentiment_route_reports_unavailable_without_stored_analysis() -> None:
+    from app.api.routes import category_sentiment
+
+    ticker_record = MagicMock(id="ticker-id", symbol="BHP")
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = ticker_record
+
+    with patch.object(category_sentiment, "_stored_sentiment_rows", return_value=[]):
+        result = category_sentiment.get_ticker_category_sentiments("bhp", db=db)
+
+    assert result["status"] == "unavailable"
+    assert result["model_used"] is None
+    assert all(not category["available"] for category in result["categories"].values())
+    assert all(category["sentiment_label"] is None for category in result["categories"].values())
+
+
+def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api.routes import category_sentiment
+    from app.schemas.category_sentiment import CategorySentimentRequest
+
+    with pytest.raises(HTTPException) as error:
+        category_sentiment.build_ticker_category_sentiment(
+            ticker="ANZ",
+            body=CategorySentimentRequest(categories={"revenue": "Revenue increased."}),
+            db=MagicMock(),
+        )
+
+    assert error.value.status_code == 503
+    assert "analysis pipeline" in error.value.detail
 
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:

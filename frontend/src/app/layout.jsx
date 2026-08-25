@@ -1,12 +1,15 @@
-// Minimal root layout for the prototype.
-// Keep this file boring: document metadata/providers can be added here later, but
-// page layout, navigation, footer, and visual tokens should remain in AppFrame and
-// the CSS modules so individual feature work does not collide in the root layout.
+import { AppFrame } from "./components/layout/AppFrame"
+
+export const metadata = {
+  title: "StonksInHand — sourced ASX briefs",
+  description: "Plain-English ASX company briefs backed by linked source material.",
+}
+
 export default function Layout({ children }) {
   return (
-    <html>
+    <html lang="en-AU">
       <body style={{ fontFamily: "system-ui", background: "#f8f9fb", color: "#191c1e", margin: 0 }}>
-        {children}
+        <AppFrame>{children}</AppFrame>
       </body>
     </html>
   )
