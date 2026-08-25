@@ -217,6 +217,79 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # The Cognito foundation was provisioned ahead of the reviewed application
+  # cutover. Keep these stable logical IDs in legacy releases so CloudFormation
+  # cannot orphan the retained pool or delete its public app client.
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub stocks-in-hand-${Environment}-users
+      UserPoolTags:
+        Project: StocksInHand
+        Environment: !Ref Environment
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      DeletionProtection: ACTIVE
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ClientName: !Sub stocks-in-hand-${Environment}-web
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      ReadAttributes:
+        - email
+        - email_verified
+        - name
+      WriteAttributes:
+        - email
+        - name
+
   ServerlessHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -774,6 +847,10 @@ Outputs:
     Value: !Sub https://${FrontendDistribution.DomainName}
   ApiEndpoint:
     Value: !Sub https://${FrontendDistribution.DomainName}/api
+  CognitoUserPoolId:
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Value: !Ref CognitoUserPoolClient
   RawDocumentBucketName:
     Value: !Ref RawDocumentBucket
   DiscoveryQueueUrl:

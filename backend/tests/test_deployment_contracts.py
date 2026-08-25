@@ -31,6 +31,29 @@ def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
     assert "EventType: viewer-response" in template
 
 
+def test_legacy_release_retains_cognito_foundation() -> None:
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
+
+    user_pool = template.split("  CognitoUserPool:", 1)[1].split(
+        "  CognitoUserPoolClient:", 1
+    )[0]
+    app_client = template.split("  CognitoUserPoolClient:", 1)[1].split(
+        "  ServerlessHttpApi:", 1
+    )[0]
+
+    assert "Type: AWS::Cognito::UserPool" in user_pool
+    assert "DeletionPolicy: Retain" in user_pool
+    assert "UpdateReplacePolicy: Retain" in user_pool
+    assert "DeletionProtection: ACTIVE" in user_pool
+
+    assert "Type: AWS::Cognito::UserPoolClient" in app_client
+    assert "DeletionPolicy: Retain" in app_client
+    assert "UpdateReplacePolicy: Retain" in app_client
+    assert "GenerateSecret: false" in app_client
+    assert "CognitoUserPoolId:" in template
+    assert "CognitoUserPoolClientId:" in template
+
+
 def test_frontend_uses_read_only_sentiment_contract() -> None:
     api = (
         REPOSITORY_ROOT / "frontend" / "src" / "app" / "lib" / "api.js"
