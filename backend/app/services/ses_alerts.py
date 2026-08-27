@@ -92,7 +92,7 @@ def identity_status(email: str) -> str:
     recipient = _mailbox(email, field="email")
     if settings.NOTIFICATIONS_DRY_RUN:
         LOGGER.info("SES identity check dry run")
-        return "pending"
+        return "verified"
 
     try:
         response = _client().get_email_identity(EmailIdentity=recipient)
@@ -107,7 +107,9 @@ def identity_status(email: str) -> str:
         verification_status = str(
             response.get("VerificationStatus") or ""
         ).upper()
-        if verification_status == "FAILED":
+        if verification_status == "TEMPORARY_FAILURE":
+            status = "temporary_failure"
+        elif verification_status == "FAILED":
             status = "failed"
         elif verification_status == "NOT_STARTED":
             status = "unverified"

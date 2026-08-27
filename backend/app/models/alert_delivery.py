@@ -1,3 +1,8 @@
+"""SQLAlchemy model for the SES alert delivery ledger."""
+
+# SQLAlchemy exposes ``func.now`` dynamically.
+# pylint: disable=not-callable
+
 import uuid
 
 from sqlalchemy import (
@@ -68,7 +73,7 @@ class AlertDelivery(Base):
     )
     scrape_run_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("scrape_runs.id", ondelete="SET NULL"),
+        ForeignKey("scrape_runs.id", ondelete="RESTRICT"),
         nullable=True,
     )
     rule_id = Column(

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.services import ses_alerts
-from app.services.alert_templates import render_alert_email
+from app.services.alert_templates import render_alert_email, render_rollup_email
 
 
 RECIPIENT = "investor@monash.edu"
@@ -119,7 +119,7 @@ def test_dry_run_identity_actions_never_create_an_ses_client(
     caplog.set_level(logging.DEBUG)
 
     ses_alerts.request_verification(email)
-    assert ses_alerts.identity_status(email) == "pending"
+    assert ses_alerts.identity_status(email) == "verified"
 
     client_factory.assert_not_called()
     assert email not in caplog.text
@@ -189,7 +189,7 @@ def test_request_verification_propagates_unexpected_ses_errors(
                 "VerifiedForSendingStatus": False,
                 "VerificationStatus": "TEMPORARY_FAILURE",
             },
-            "pending",
+            "temporary_failure",
         ),
         (
             {
@@ -566,4 +566,36 @@ def test_render_alert_email_rejects_invalid_confidence(
             confidence_score=confidence,  # type: ignore[arg-type]
             news_url="https://stocksinhand.com.au/ticker/BHP/news/",
             unsubscribe_url="https://stocksinhand.com.au/unsubscribe?t=token",
+        )
+
+
+def test_render_rollup_email_uses_an_honest_lower_bound() -> None:
+    """The first rollup must not claim later suppressions are a final count."""
+    subject, html, text = render_rollup_email(
+        ticker_symbol="BHP",
+        company_name="BHP & Co <holdings>",
+        suppressed_count=2,
+        news_url="https://app.example.test/ticker/BHP/news/",
+        unsubscribe_url="https://app.example.test/unsubscribe/?token=signed",
+    )
+
+    assert subject == "BHP watchlist alert: more matching signals"
+    assert "At least 2 more matching signals" in html
+    assert "At least 2 more matching signals" in text
+    assert "BHP &amp; Co &lt;holdings&gt;" in html
+    assert "BHP & Co <holdings>" in text
+
+
+@pytest.mark.parametrize("suppressed_count", [0, -1, True])
+def test_render_rollup_email_rejects_invalid_counts(
+    suppressed_count: int,
+) -> None:
+    """A rollup must represent at least one suppressed direct alert."""
+    with pytest.raises(ValueError, match="suppressed_count"):
+        render_rollup_email(
+            ticker_symbol="BHP",
+            company_name="BHP Group",
+            suppressed_count=suppressed_count,
+            news_url="https://app.example.test/ticker/BHP/news/",
+            unsubscribe_url="https://app.example.test/unsubscribe/?token=signed",
         )

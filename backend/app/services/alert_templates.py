@@ -99,3 +99,50 @@ def render_alert_email(  # pylint: disable=too-many-arguments,too-many-locals
         f"Unsubscribe: {safe_unsubscribe_url}\n"
     )
     return subject, html, text
+
+
+def render_rollup_email(
+    *,
+    ticker_symbol: str,
+    company_name: str,
+    suppressed_count: int,
+    news_url: str,
+    unsubscribe_url: str,
+) -> tuple[str, str, str]:
+    """Render an honest lower-bound summary for capped watchlist alerts."""
+    if isinstance(suppressed_count, bool) or suppressed_count < 1:
+        raise ValueError("suppressed_count must be at least 1")
+    symbol = _single_line(ticker_symbol, fallback="Ticker")
+    company = _single_line(company_name, fallback=symbol)
+    safe_news_url = _absolute_url(news_url, field="news_url")
+    safe_unsubscribe_url = _absolute_url(
+        unsubscribe_url,
+        field="unsubscribe_url",
+    )
+    count_text = f"At least {suppressed_count} more matching signal"
+    if suppressed_count != 1:
+        count_text += "s"
+    subject = f"{symbol} watchlist alert: more matching signals"
+    html = f"""<!doctype html>
+<html lang="en">
+  <body>
+    <h1>More watchlist alerts for {escape(symbol)}</h1>
+    <p><strong>{escape(company)}</strong></p>
+    <p>{escape(count_text)} arrived after your per-run email limit.</p>
+    <p><a href="{escape(safe_news_url, quote=True)}">View {escape(symbol)} news</a></p>
+    <hr>
+    <p>
+      You received this email because alerts are enabled for your watchlist.
+      <a href="{escape(safe_unsubscribe_url, quote=True)}">Unsubscribe</a>.
+    </p>
+  </body>
+</html>"""
+    text = (
+        f"More watchlist alerts for {symbol}\n"
+        f"{company}\n\n"
+        f"{count_text} arrived after your per-run email limit.\n\n"
+        f"View {symbol} news: {safe_news_url}\n\n"
+        "You received this email because alerts are enabled for your watchlist.\n"
+        f"Unsubscribe: {safe_unsubscribe_url}\n"
+    )
+    return subject, html, text
