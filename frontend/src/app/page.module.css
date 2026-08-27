@@ -1806,6 +1806,10 @@ button.emptyCard:hover {
     padding: 22px;
   }
 
+  .heroSearch input {
+    font-size: 14px;
+  }
+
   .categorySentimentHeader {
     flex-direction: column;
   }
