@@ -605,7 +605,7 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
 
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:
-    """Gemini summary parsing should return the four fields the UI uses."""
+    """Gemini summary parsing should preserve text and clarity fields."""
     from app.services.gemini import parse_summary_response
 
     result = parse_summary_response(
@@ -614,7 +614,9 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
           "summary": "The company announced an updated dividend timetable.",
           "about": "The filing explains the dividend key dates.",
           "changed": "The payment date was confirmed.",
-          "matters": "Investors can use the dates to plan income expectations."
+          "matters": "Investors can use the dates to plan income expectations.",
+          "confirmed_facts": ["The payment date is 2 January 2040."],
+          "speculation": ["Investors may use the date to plan future income."]
         }
         """
     )
@@ -624,6 +626,8 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
         "about": "The filing explains the dividend key dates.",
         "changed": "The payment date was confirmed.",
         "matters": "Investors can use the dates to plan income expectations.",
+        "confirmed_facts": ["The payment date is 2 January 2040."],
+        "speculation": ["Investors may use the date to plan future income."],
     }
 
 
@@ -635,6 +639,27 @@ def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
 
     with pytest.raises(ValueError, match="missing keys"):
         parse_summary_response('{"summary": "Only one field"}')
+
+
+def test_gemini_summary_response_parser_rejects_non_list_clarity_fields() -> None:
+    """Clarity fields must remain structured so the UI can label each claim."""
+    import pytest
+
+    from app.services.gemini import parse_summary_response
+
+    with pytest.raises(ValueError, match="confirmed_facts.*list of strings"):
+        parse_summary_response(
+            """
+            {
+              "summary": "A summary.",
+              "about": "An announcement.",
+              "changed": "A change.",
+              "matters": "An impact.",
+              "confirmed_facts": "This should be a list.",
+              "speculation": []
+            }
+            """
+        )
 
 
 def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
@@ -666,6 +691,8 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
             "about": "The filing explains dividend timing.",
             "changed": "The payment date was confirmed.",
             "matters": "Investors can plan income timing.",
+            "confirmed_facts": ["The payment date is 2 January 2040."],
+            "speculation": ["The dividend may affect future income expectations."],
         },
     ), patch.object(
         gemini.artifact_summary_crud,
@@ -684,6 +711,12 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
     assert artifact.artifact_metadata["about"] == "The filing explains dividend timing."
     assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
     assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
+    assert artifact.artifact_metadata["confirmed_facts"] == [
+        "The payment date is 2 January 2040."
+    ]
+    assert artifact.artifact_metadata["speculation"] == [
+        "The dividend may affect future income expectations."
+    ]
     assert result["summary"] == "The company confirmed its dividend timetable."
     mock_upsert.assert_called_once()
 
@@ -730,3 +763,111 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         raw_text=artifact.raw_text,
     )
     summarise_announcement.assert_not_called()
+
+
+def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
+    """A later summary can replace old clarity classifications with empty lists."""
+    from app.api.routes.gemini import _summary_metadata
+
+    metadata = {
+        "category": "DividendAnnouncement",
+        "speculation": ["An outdated forecast."],
+    }
+    result = _summary_metadata(
+        metadata,
+        {
+            "summary": "A concise summary.",
+            "about": "",
+            "changed": "No material change identified.",
+            "matters": "The dates help investors plan.",
+            "confirmed_facts": ["The payment date was announced."],
+            "speculation": [],
+        },
+    )
+
+    assert result["confirmed_facts"] == ["The payment date was announced."]
+    assert result["speculation"] == []
+    assert metadata["speculation"] == ["An outdated forecast."]
+
+
+def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
+    """Ticker-wide backfills should revisit summaries created before clarity v2."""
+    from app.api.routes.gemini import _has_current_summary
+
+    assert not _has_current_summary({"about": "An existing legacy summary."})
+    assert _has_current_summary(
+        {
+            "about": "A current summary.",
+            "confirmed_facts": [],
+            "speculation": [],
+        }
+    )
+
+
+def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
+    """The overview contract should expose classified claims for the summary UI."""
+    from datetime import datetime, timezone
+
+    from app.api.routes import ticker as ticker_route
+
+    ticker = MagicMock()
+    ticker.id = "ticker-id"
+    ticker.symbol = "ANZ"
+    ticker.company_name = "ANZ Group Holdings Limited"
+    ticker.sector = "Financials"
+    ticker.industry = "Banks"
+    ticker.exchange = "ASX"
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "about": "ANZ published an update.",
+        "confirmed_facts": [
+            " Net profit was $1 billion. ",
+            "Net profit was $1 billion.",
+            None,
+        ],
+        "speculation": ["Management expects costs to fall."],
+    }
+    artifact.raw_text = "ANZ published an update."
+    artifact.source_type = "asx_announcement"
+    artifact.title = "ANZ update"
+    artifact.url = "https://example.test/anz-update"
+    artifact.published_at = datetime(2040, 1, 2, tzinfo=timezone.utc)
+    artifact.created_at = artifact.published_at
+
+    with patch.object(ticker_route, "_ensure_default_tickers"), patch.object(
+        ticker_route.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker,
+    ), patch.object(
+        ticker_route,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker_route,
+        "_latest_sentiment_for_ticker",
+        return_value=None,
+    ), patch.object(ticker_route, "_live_quote", return_value=None):
+        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+
+    assert result["clarity"] == {
+        "is_classified": True,
+        "confirmed_facts": ["Net profit was $1 billion."],
+        "speculation": ["Management expects costs to fall."],
+    }
+
+
+def test_clarity_contract_marks_legacy_metadata_as_unclassified() -> None:
+    """Older artifacts must not be presented as verified without classification."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": "A malformed legacy value.",
+    }
+
+    assert _clarity_for_artifact(artifact) == {
+        "is_classified": False,
+        "confirmed_facts": [],
+        "speculation": [],
+    }

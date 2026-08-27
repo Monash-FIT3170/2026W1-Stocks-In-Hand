@@ -778,6 +778,167 @@
   margin-top: 28px;
 }
 
+.clarityCard {
+  background: white;
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.clarityHeader,
+.clarityGroupTitle {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+}
+
+.clarityHeader {
+  justify-content: space-between;
+}
+
+.clarityHeader span {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.clarityHeader h2 {
+  font-size: 24px;
+  margin: 4px 0 0;
+}
+
+.clarityReady,
+.clarityPending {
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.clarityReady {
+  background: #c7f2da;
+  color: var(--green);
+}
+
+.clarityPending {
+  background: #fff0d7;
+  color: #8a4b00;
+}
+
+.clarityIntro,
+.clarityNotice {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.clarityIntro {
+  margin: 14px 0 24px;
+}
+
+.clarityNotice {
+  background: #fff8ec;
+  border-left: 3px solid var(--orange);
+  margin: 24px 0 0;
+  padding: 14px 16px;
+}
+
+.clarityGrid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.clarityGroup {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  min-width: 0;
+  padding: 22px;
+}
+
+.clarityConfirmed {
+  background: #f2fbf6;
+  border-color: #b9e3ca;
+}
+
+.claritySpeculation {
+  background: #fff8ec;
+  border-color: #f0d1a2;
+}
+
+.clarityGroupTitle svg {
+  flex: 0 0 auto;
+  height: 24px;
+  width: 24px;
+}
+
+.clarityConfirmed .clarityGroupTitle svg {
+  color: var(--green);
+}
+
+.claritySpeculation .clarityGroupTitle svg {
+  color: #a85e00;
+}
+
+.clarityGroupTitle h3 {
+  font-size: 18px;
+  margin: 0 0 5px;
+}
+
+.clarityGroupTitle p,
+.clarityEmpty {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.clarityClaims {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+}
+
+.clarityClaims li {
+  line-height: 1.45;
+  padding-left: 20px;
+  position: relative;
+}
+
+.clarityClaims li::before {
+  border-radius: 50%;
+  content: "";
+  height: 7px;
+  left: 0;
+  position: absolute;
+  top: 8px;
+  width: 7px;
+}
+
+.clarityConfirmed .clarityClaims li::before {
+  background: var(--green);
+}
+
+.claritySpeculation .clarityClaims li::before {
+  background: var(--orange);
+}
+
+.clarityEmpty {
+  font-style: italic;
+  margin-top: 20px;
+}
+
+.clarityGroup .citationList {
+  align-items: flex-start;
+  border-top: 1px solid rgba(10, 82, 60, 0.14);
+  flex-direction: column;
+  margin-top: 20px;
+  padding-top: 16px;
+}
+
 .sentimentCard {
   background: var(--green);
   color: white;
@@ -1814,6 +1975,10 @@ button.emptyCard:hover {
   }
 
   .categorySentimentGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .clarityGrid {
     grid-template-columns: 1fr;
   }
 

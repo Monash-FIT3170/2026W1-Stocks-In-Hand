@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { SparkIcon } from "../../components/icons"
 import { CategorySentiment } from "../../components/ticker/CategorySentiment"
 import { CitationLinks } from "../../components/ticker/CitationLinks"
+import { ClarityLayer } from "../../components/ticker/ClarityLayer"
 import { useTickerBrief } from "../../components/ticker/TickerBriefShell"
 import { fetchTickerCategorySentiment } from "../../lib/api"
 import styles from "../../page.module.css"
@@ -68,6 +69,7 @@ export default function TickerSummaryRoute() {
         <strong>{sourceCopy}</strong>
         <CitationLinks sources={data.sources} />
       </article>
+      <ClarityLayer clarity={data.clarity} sources={data.sources} />
       <article className={styles.sentimentCard}>
         <h2>{data.sentiment_label}</h2>
         {data.sentiment_status === "available" ? (
