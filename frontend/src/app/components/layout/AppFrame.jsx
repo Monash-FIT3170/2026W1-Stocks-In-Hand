@@ -38,6 +38,8 @@ function titleForPath(pathname) {
   }
   if (pathname.startsWith("/announcements")) return "Announcements"
   if (pathname.startsWith("/watchlist")) return "My watchlist"
+  if (pathname.startsWith("/settings/notifications")) return "Alert settings"
+  if (pathname.startsWith("/unsubscribe")) return "Unsubscribe"
   if (pathname.startsWith("/search")) return "Company search"
   if (pathname.startsWith("/sign-in")) return "Sign in"
   if (pathname.startsWith("/sign-up")) return "Create account"
@@ -55,6 +57,8 @@ export function AppFrame({ children }) {
     ? "announcements"
     : pathname.startsWith("/watchlist")
       ? "watchlist"
+      : pathname.startsWith("/settings/notifications")
+        ? "alert-settings"
       : pathname === "/"
         ? "home"
         : null
@@ -119,6 +123,7 @@ export function AppFrame({ children }) {
             <Link aria-current={active === "home" ? "page" : undefined} className={active === "home" ? styles.activeNavLink : styles.navLink} href="/">Home</Link>
             <Link aria-current={active === "announcements" ? "page" : undefined} className={active === "announcements" ? styles.activeNavLink : styles.navLink} href="/announcements">Announcements</Link>
             {hasSession && <Link aria-current={active === "watchlist" ? "page" : undefined} className={active === "watchlist" ? styles.activeNavLink : styles.navLink} href="/watchlist">My Watchlist</Link>}
+            {hasSession && <Link aria-current={active === "alert-settings" ? "page" : undefined} className={active === "alert-settings" ? styles.activeNavLink : styles.navLink} href="/settings/notifications">Alert settings</Link>}
           </nav>
           <Link className={styles.signInButton} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Logout" : "Sign In"}</Link>
         </div>
