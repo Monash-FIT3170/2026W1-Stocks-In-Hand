@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
@@ -24,7 +24,7 @@ from botocore.exceptions import (  # type: ignore[import-untyped]
     BotoCoreError,
     ClientError,
 )
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from lambdas.common import (
@@ -45,6 +45,7 @@ from app.crud import alert_delivery as alert_delivery_crud  # noqa: E402
 from app.crud import alert_rule as alert_rule_crud  # noqa: E402
 from app.crud import alert_subscription as alert_subscription_crud  # noqa: E402
 from app.crud import watchlist_ticker as watchlist_ticker_crud  # noqa: E402
+from app.messages import NotificationMessage  # noqa: E402
 from app.models.artifact import Artifact  # noqa: E402
 from app.models.artifact_sentiment import ArtifactSentiment  # noqa: E402
 from app.models.artifact_summary import ArtifactSummary  # noqa: E402
@@ -80,25 +81,6 @@ class RetryableNotificationError(RuntimeError):
     def __init__(self, message: str, *, code: str):
         super().__init__(message)
         self.code = code
-
-
-class NotificationMessage(BaseModel):
-    """Versioned producer contract for one analyzed artifact."""
-
-    schema_version: Literal[1] = 1
-    artifact_id: UUID
-    ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
-    scrape_run_id: UUID
-    sentiment_label: Literal["positive", "negative"]
-    confidence_score: Decimal = Field(ge=0, le=1)
-
-    model_config = {"extra": "forbid"}
-
-    @field_validator("ticker", mode="before")
-    @classmethod
-    def uppercase_ticker(cls, value: object) -> object:
-        """Normalise the producer ticker before applying its pattern."""
-        return value.strip().upper() if isinstance(value, str) else value
 
 
 @dataclass(frozen=True)
@@ -610,7 +592,7 @@ def _notification_urls(
     base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
     encoded_ticker = quote(context.ticker_symbol, safe="")
     news_url = f"{base_url}/ticker/{encoded_ticker}/news/"
-    query = urlencode({"token": token})
+    query = urlencode({"t": token})
     unsubscribe_url = f"{base_url}/unsubscribe/?{query}"
     return news_url, unsubscribe_url
 

@@ -345,7 +345,7 @@ def test_signed_unsubscribe_url_never_contains_the_stored_hash(
 
     assert news_url == "https://app.example.test/ticker/BHP/news/"
     assert unsubscribe_url.startswith(
-        "https://app.example.test/unsubscribe/?token=v1."
+        "https://app.example.test/unsubscribe/?t=v1."
     )
     assert token_hash not in unsubscribe_url
 
