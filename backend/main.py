@@ -23,6 +23,7 @@ from app.api.routes import (
     investor,
     mastodon,
     news,
+    notification_preferences,
     reddit,
     scrape_run,
     ticker,
@@ -68,6 +69,7 @@ for route_module in (
     gemini,
     category_sentiment,
     announcement,
+    notification_preferences,
 ):
     app.include_router(route_module.router)
 

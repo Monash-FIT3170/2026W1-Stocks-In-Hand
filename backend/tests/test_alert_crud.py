@@ -272,6 +272,24 @@ def test_alert_crud_validation_needs_no_database() -> None:
     db.execute.assert_not_called()
 
 
+def test_disable_subscription_is_guarded_by_id_and_token_hash() -> None:
+    """Public unsubscribe must update only the matching subscription secret."""
+    db = _CapturedSession()
+
+    result = subscription_crud.disable_subscription(
+        db,
+        uuid.uuid4(),
+        expected_unsubscribe_token_hash="a" * 64,
+    )
+
+    assert result is None
+    assert db.commit_count == 1
+    sql = str(db.statement.compile(dialect=postgresql.dialect()))
+    assert "alert_subscriptions.id" in sql
+    assert "alert_subscriptions.unsubscribe_token_hash" in sql
+    assert "enabled" in sql
+
+
 def test_optional_outcome_write_leaves_transaction_ownership_with_the_caller() -> None:
     """An outcome can join its caller's transaction, unlike a pre-send claim."""
     db = _CapturedSession()
@@ -471,6 +489,14 @@ def test_subscription_and_rule_upserts_reset_and_replace_values(
     stored_rule = rule_crud.get_default_alert_rule(db_session, investor.id)
     assert stored_rule is not None
     assert stored_rule.id == first_rule.id
+
+    disabled = subscription_crud.disable_subscription(
+        db_session,
+        first.id,
+        expected_unsubscribe_token_hash=token_hash,
+    )
+    assert disabled is not None
+    assert disabled.enabled is False
 
 
 def test_old_email_verification_cannot_verify_a_replaced_address(

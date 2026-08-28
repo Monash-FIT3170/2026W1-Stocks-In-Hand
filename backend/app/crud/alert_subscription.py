@@ -108,6 +108,14 @@ def get_subscription_by_investor(
     )
 
 
+def get_subscription(
+    db: Session,
+    subscription_id: UUID,
+) -> AlertSubscription | None:
+    """Return one subscription by its opaque identifier."""
+    return db.get(AlertSubscription, subscription_id)
+
+
 def upsert_subscription(  # pylint: disable=too-many-arguments
     db: Session,
     *,
@@ -333,3 +341,33 @@ def get_subscription_by_unsubscribe_token_hash(
         .filter(AlertSubscription.unsubscribe_token_hash == token_hash)
         .first()
     )
+
+
+def disable_subscription(
+    db: Session,
+    subscription_id: UUID,
+    *,
+    expected_unsubscribe_token_hash: str,
+    commit: bool = True,
+) -> AlertSubscription | None:
+    """Disable a subscription only while its unsubscribe secret still matches."""
+    commit = _validate_commit(commit)
+    token_hash = _normalise_token_hash(expected_unsubscribe_token_hash)
+    stored_id = db.execute(
+        update(AlertSubscription)
+        .where(
+            AlertSubscription.id == subscription_id,
+            AlertSubscription.unsubscribe_token_hash == token_hash,
+        )
+        .values(enabled=False, updated_at=func.now())
+        .returning(AlertSubscription.id)
+    ).scalar_one_or_none()
+    _finish_write(db, commit=commit)
+    if stored_id is None:
+        return None
+
+    subscription = db.get(AlertSubscription, stored_id)
+    if subscription is None:
+        raise RuntimeError("alert subscription disappeared after disabling")
+    db.refresh(subscription)
+    return subscription
