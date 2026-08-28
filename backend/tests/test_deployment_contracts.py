@@ -31,6 +31,108 @@ def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
     assert "EventType: viewer-response" in template
 
 
+def test_ses_notification_infrastructure_contract() -> None:
+    """Notification infrastructure must stay disabled, scoped, and retry-safe."""
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    api_function = template.split("  ApiFunction:", 1)[1].split(
+        "  DiscoveryFunction:", 1
+    )[0]
+    analysis_function = template.split("  AnalysisFunction:", 1)[1].split(
+        "  NotificationFunction:", 1
+    )[0]
+    notification_function = template.split("  NotificationFunction:", 1)[1].split(
+        "  SchedulerFunction:", 1
+    )[0]
+    notification_queue = template.split("  NotificationQueue:", 1)[1].split(
+        "  AnalysisQueuePolicy:", 1
+    )[0]
+    notification_alarm = template.split("  NotificationDlqAlarm:", 1)[1].split(
+        "  FrontendOriginAccessControl:", 1
+    )[0]
+
+    assert 'NotificationsEnabled:' in template
+    assert 'Default: "false"' in template.split("  NotificationsEnabled:", 1)[1]
+    assert (
+        'IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]'
+        in template
+    )
+    assert "AlertSenderRequiredWhenNotificationsEnabled:" in template
+    assert "NotificationDeadLetterQueue:" in template
+    assert "Type: AWS::SQS::Queue" in notification_queue
+    assert "VisibilityTimeout: 1800" in notification_queue
+    assert (
+        "deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn"
+        in notification_queue
+    )
+    assert "maxReceiveCount: 5" in notification_queue
+
+    assert "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in api_function
+    assert "ALERT_SENDER_EMAIL: !Ref AlertSenderEmail" in api_function
+    assert "ses:CreateEmailIdentity" in api_function
+    assert "ses:GetEmailIdentity" in api_function
+    assert "- IsNotificationsEnabled" in api_function
+    assert "FRONTEND_BASE_URL" not in api_function
+
+    assert (
+        "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in analysis_function
+    )
+    assert "NOTIFICATION_QUEUE_URL: !Ref NotificationQueue" in analysis_function
+    assert "Sid: EnqueueNotifications" in analysis_function
+    assert "Resource: !GetAtt NotificationQueue.Arn" in analysis_function
+    assert "- IsNotificationsEnabled" in analysis_function
+
+    assert "ImageUri: !Ref ApiImageUri" in notification_function
+    assert "lambdas.notify.handler" in notification_function
+    assert "ReservedConcurrentExecutions: 1" in notification_function
+    assert "ALERT_DAILY_BUDGET: !Ref AlertDailyBudget" in notification_function
+    assert (
+        "ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun"
+        in notification_function
+    )
+    assert (
+        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
+        in notification_function
+    )
+    assert "ses:GetEmailIdentity" in notification_function
+    assert "ses:SendEmail" in notification_function
+    assert "ses:SendRawEmail" in notification_function
+    assert "- IsNotificationsEnabled" in notification_function
+    assert "BatchSize: 10" in notification_function
+    assert (
+        "Enabled: !If [IsNotificationsEnabled, true, false]"
+        in notification_function
+    )
+    assert "ReportBatchItemFailures" in notification_function
+
+    assert "NotificationLogGroup:" in template
+    assert "AlarmActions:" in notification_alarm
+    assert "!Ref AlarmTopic" in notification_alarm
+    assert "NotificationQueueUrl:" in template
+    assert "NotificationDeadLetterQueueUrl:" in template
+
+
+def test_staging_workflow_wires_ses_notification_parameters() -> None:
+    """The reviewed change set must carry the notification release controls."""
+    workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "enable_notifications:" in workflow
+    notification_input = workflow.split("      enable_notifications:", 1)[1].split(
+        "      enable_bedrock:", 1
+    )[0]
+    assert 'default: "false"' in notification_input
+    assert (
+        '--image-repositories "NotificationFunction=$ECR_REGISTRY/'
+        'stocks-in-hand-api"' in workflow
+    )
+    assert '"NotificationsEnabled=${{ inputs.enable_notifications }}"' in workflow
+    assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
+
+
 def test_legacy_release_retains_cognito_foundation() -> None:
     template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
 
