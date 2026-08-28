@@ -5,7 +5,9 @@ import httpx
 
 from ..base import BaseScraper, Announcement
 
-YOURIR_BASE = "https://yourir.info/resources/4d216b570d08af30/announcements"
+YOURIR_BASE = (
+    "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx"
+)
 YOURIR_FEED = "https://yourir.info/api/v5/symbols/anz.asx/announcements"
 YOURIR_APP_ID = "4d216b570d08af30"
 

@@ -137,8 +137,7 @@ async def _request_document(
     )
 
 
-async def _download_yourir(
-    context: BrowserContext,
+def _download_yourir(
     *,
     adapter: SourceAdapter,
     source_url: str,
@@ -146,18 +145,10 @@ async def _download_yourir(
     metadata: Mapping[str, object],
     max_bytes: int,
 ) -> DownloadedDocument:
-    page = await context.new_page()
     try:
-        await page.goto(source_url, wait_until="networkidle", timeout=60_000)
-        _validated_url(adapter, page.url)
-    finally:
-        await page.close()
-
-    try:
-        return await _request_document(
-            context,
-            adapter=adapter,
-            url=document_url,
+        return download_document(
+            _validated_url(adapter, document_url),
+            hosts=_ADAPTER_HOSTS[adapter],
             referer=source_url,
             max_bytes=max_bytes,
         )
@@ -168,10 +159,9 @@ async def _download_yourir(
         if not isinstance(source_id, str) or not source_id:
             raise
         fallback_url = f"{_YOURIR_BASES[adapter]}/{source_id}/announcement.pdf"
-        return await _request_document(
-            context,
-            adapter=adapter,
-            url=fallback_url,
+        return download_document(
+            _validated_url(adapter, fallback_url),
+            hosts=_ADAPTER_HOSTS[adapter],
             referer=source_url,
             max_bytes=max_bytes,
         )
@@ -322,6 +312,15 @@ async def resolve_session_download(
     validated_source_url = _validated_url(adapter, source_url)
     validated_document_url = _validated_url(adapter, document_url)
 
+    if adapter in {"anz", "cba"}:
+        return _download_yourir(
+            adapter=adapter,
+            source_url=validated_source_url,
+            document_url=validated_document_url,
+            metadata=metadata,
+            max_bytes=max_bytes,
+        )
+
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
             headless=True,
@@ -343,15 +342,6 @@ async def resolve_session_download(
             locale="en-AU",
         )
         try:
-            if adapter in {"anz", "cba"}:
-                return await _download_yourir(
-                    context,
-                    adapter=adapter,
-                    source_url=validated_source_url,
-                    document_url=validated_document_url,
-                    metadata=metadata,
-                    max_bytes=max_bytes,
-                )
             if adapter == "bhp":
                 resolved_url = await _resolve_bhp_document_url(
                     context,

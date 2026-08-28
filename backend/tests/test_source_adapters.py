@@ -91,7 +91,7 @@ def test_anz_feed_preserves_yourir_document_identity() -> None:
         "source_id": "3A698699",
     }
     assert str(announcement.pdf_url) == (
-        "https://yourir.info/resources/4d216b570d08af30/announcements/"
+        "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx/"
         "3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
     )
 
@@ -292,3 +292,45 @@ def test_session_resolver_rejects_untrusted_url_before_browser_launch() -> None:
         )
 
     assert error.value.code == "invalid_document_url"
+
+
+def test_anz_resolver_downloads_directly_without_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_url = (
+        "https://yourir.info/resources/4d216b570d08af30/announcements/"
+        "anz.asx/3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
+    )
+    expected = DownloadedDocument(
+        content=b"%PDF-1.7\ncontent",
+        checksum="checksum",
+        final_url=document_url,
+        content_type="application/pdf",
+        document_format="pdf",
+    )
+    direct_download = MagicMock(return_value=expected)
+    monkeypatch.setattr(source_download, "download_document", direct_download)
+
+    def forbidden_playwright():
+        raise AssertionError("ANZ download launched Playwright")
+
+    monkeypatch.setattr(source_download, "async_playwright", forbidden_playwright)
+
+    result = asyncio.run(
+        source_download.resolve_session_download(
+            source_adapter="anz",
+            source_url=SOURCES["ANZ"].source_url,
+            document_url=document_url,
+            title="2026 Third Quarter Trading Update",
+            metadata={"yourir_id": "3A698699"},
+            max_bytes=1024,
+        )
+    )
+
+    assert result is expected
+    direct_download.assert_called_once_with(
+        document_url,
+        hosts=source_download._ADAPTER_HOSTS["anz"],
+        referer=SOURCES["ANZ"].source_url,
+        max_bytes=1024,
+    )
