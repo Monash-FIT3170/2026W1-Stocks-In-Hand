@@ -54,7 +54,7 @@ function titleForPath(pathname) {
 
 export function AppFrame({ children }) {
   const pathname = usePathname() || "/"
-  const [hasSession, setHasSession] = useState(hasStoredSession)
+  const [hasSession, setHasSession] = useState(false)
   const routeTitle = titleForPath(pathname)
   const active = pathname.startsWith("/announcements")
     ? "announcements"
