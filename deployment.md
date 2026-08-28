@@ -44,10 +44,16 @@ Private frontend S3             API Gateway HTTP API
                               Queue C: analysis
                                       |
                                       v
-                               Analysis Lambda
-                                      |
-                                      v
-                                  Supabase
+                              Analysis Lambda
+                                |           |
+                                v           v
+                            Supabase    Queue D: notifications
+                                                |
+                                                v
+                                      Notification Lambda
+                                                |
+                                                v
+                                           Amazon SES
 ```
 
 Each primary queue has its own dead-letter queue. Discovery, downloading, and
@@ -80,6 +86,10 @@ The deployment starts with these fixed limits:
 | Discovery concurrency | 1 |
 | Download concurrency | 2 |
 | Analysis concurrency | 1 |
+| Notification delivery | Disabled by default |
+| Notification concurrency | 1 |
+| Alert commitments per 24 hours | 180 |
+| Direct alerts per investor and run | 5, then one rollup |
 
 Documents receive a stable, database-unique identity derived from their source
 adapter and source identifier or canonical URL. A later run skips a document
@@ -125,6 +135,24 @@ Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
 is configured separately from the set available for manual administrator
 requests.
 
+### SES watchlist alerts
+
+`NotificationsEnabled` is the deployment master switch and defaults to
+`false`. When false, analysis does not publish notification messages, the SQS
+event source stays disabled, and SES permissions are omitted. The notification
+queue, dead-letter queue, worker, log group, and alarm still exist for a safe
+dark launch.
+
+`AlertSenderEmail` is required when `NotificationsEnabled=true`. The address
+must be verified in SES in `ap-southeast-2`. The staging workflow passes it
+from the GitHub `ALERT_SENDER_EMAIL` variable. Set it in the protected
+`staging` environment before preparing an enabled change set.
+
+The other template controls are `AlertDailyBudget`, which defaults to `180`,
+and `AlertMaxPerInvestorPerRun`, which defaults to `5`. The worker sends at
+most one rollup after the per-run cap. Budget suppression is terminal and does
+not create DLQ traffic.
+
 ## Schedule policy
 
 The EventBridge Scheduler resource is created in the disabled state. After
@@ -148,6 +176,10 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
   at-least-once.
 - Database uniqueness, conditional S3 writes, and monotonic status transitions
   make retries idempotent.
+- Notification delivery uses a database claim before SES. Duplicate queue
+  messages do not send a second email, and stale claims can be recovered.
+- Unsubscribe tokens are stored as hashes. The public endpoint returns the same
+  response for valid and invalid tokens.
 - Primary queues retain messages for four days, DLQs retain them for fourteen
   days, and messages move to a DLQ after five receives.
 - Discovery and download queues use 30-minute visibility timeouts. Analysis
@@ -158,23 +190,28 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
 ## Deployment sequence
 
 1. Run backend tests, frontend static export, static checks, image smoke tests,
-   SAM validation, and CloudFormation linting.
+   SAM validation, and CloudFormation linting. The compose suite includes
+   LocalStack and the notification alert contracts.
 2. Back up Supabase, preview legacy duplicate analysis rows, and apply the
    Alembic migration using the migration connection.
 3. Deploy `infra/bootstrap.yaml` to create the budget and ECR repositories.
 4. Store the runtime SSM parameters interactively.
 5. Build and push immutable API, scraper, and analysis images tagged with the
    full Git commit SHA.
-6. Create the SAM change set with `ScheduleEnabled=false`. Person 1 reviews it
-   before Person 2 executes the approved ARN.
-7. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
+6. Verify the SES sender in `ap-southeast-2`, set the protected GitHub
+   `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
+7. Create the SAM change set with `ScheduleEnabled=false` and notifications
+   disabled. Person 1 reviews it before Person 2 executes the approved ARN.
+8. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
    frontend bucket, and invalidate CloudFront.
-8. Create exactly one administrator and manually trigger one bounded run for
+9. Create exactly one administrator and manually trigger one bounded run for
    every source.
-9. Verify the database, queues, private S3 object, analysis result, logs,
+10. Verify the database, queues, private S3 object, analysis result, logs,
    duplicate suppression, and one DLQ redrive.
-10. Enable the weekly schedule only for sources that pass.
-11. Configure the manual GitHub OIDC workflow only after the first manual
+11. Enable alerts through a second reviewed change set, then complete the SES
+    smoke test below.
+12. Enable the weekly schedule only for sources that pass.
+13. Configure the manual GitHub OIDC workflow only after the first manual
      deployment succeeds.
 
 Every Lambda publishes through its `live` alias. Backend rollback creates a new
@@ -183,6 +220,37 @@ migrations are never downgraded automatically.
 
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.
+
+## SES alert rollout and rollback
+
+Keep alerts disabled during the first deployment. Confirm the stack contains
+`NotificationQueue`, `NotificationFunction`, the notification DLQ alarm, and
+the new alert tables. The notification SQS event source must remain disabled.
+
+Before enabling alerts:
+
+1. Confirm the sender identity is verified in SES in `ap-southeast-2`.
+2. Confirm `ALERT_SENDER_EMAIL` is set in the GitHub `staging` environment.
+3. Use one staging investor whose account email you control.
+4. Prepare a new release with `enable_notifications=true` and review its change
+   set. `AlertSenderEmail` cannot be empty in this change set.
+5. Execute the approved change set, then enable alerts in the investor's
+   notification settings.
+6. Click the SES verification link and confirm the UI reports `verified`.
+7. Trigger one bounded scrape and confirm exactly one email and one `sent`
+   delivery ledger row.
+8. Replay the same notification message and confirm no second email is sent.
+9. Click unsubscribe and confirm the subscription is disabled.
+
+Use only a verified address for the real smoke test. LocalStack and unit tests
+do not prove SES sandbox delivery, identity email receipt, or inbox rendering.
+
+To stop alert delivery, prepare and execute a reviewed change set with
+`enable_notifications=false`. This removes producer and SES permissions and
+disables the notification event source. Messages already in Queue D remain for
+up to four days. Inspect that queue before re-enabling alerts, since retained
+messages may run later. Do not purge or redrive it without an approved incident
+decision.
 
 ## Acceptance criteria
 
@@ -198,6 +266,8 @@ in `infra/README.md`.
   DLQ.
 - Duplicate API, SQS, S3, and cross-run document deliveries do not create
   duplicate analysis results.
+- A verified, opted-in investor receives one matching SES alert. Replays do not
+  send another email, and the unsubscribe link disables future delivery.
 - Buckets are private, the weekly schedule is disabled by default, retention
   policies are active, and projected AWS usage remains below US$10 per month.
 
@@ -207,3 +277,7 @@ BHP previously timed out during local live validation. It must pass in AWS
 before being placed on the weekly schedule. A documented source-specific
 exception is acceptable for the demo as long as the other sources pass and
 BHP remains manual.
+
+SES remains a separate release gate. LocalStack cannot prove recipient
+verification or real inbox delivery. Do not enable notifications for general
+staging users until the verified-address smoke test passes.

@@ -32,6 +32,7 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 - Paste any financial headline → FinBERT classifies it as **positive**, **negative**, or **neutral**
 - Scrape live headlines from Yahoo Finance via Playwright
 - Scraped announcements, Reddit, Bluesky and Mastodon posts, and their summaries/sentiment persisted to PostgreSQL
+- Send optional SES email alerts when watched tickers match an investor's sentiment rule
 
 ---
 
@@ -71,7 +72,43 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | `GEMINI_API_KEY` | No | Legacy setting; ticker sentiment does not use Gemini |
 | `GEMINI_MODEL` | No | Legacy Gemini model setting |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
+| `NOTIFICATIONS_ENABLED` | No | Master switch for watchlist alerts. Defaults to `false` outside the development compose stack. |
+| `NOTIFICATIONS_DRY_RUN` | No | Renders and logs alerts without contacting SES. The example environment sets it to `true`. |
+| `ALERT_SENDER_EMAIL` | Live SES only | Sender address verified in the same AWS region. LocalStack uses `alerts@example.com`. |
+| `ALERT_DAILY_BUDGET` | No | Maximum alert delivery commitments across the last 24 hours. Defaults to `180`. |
+| `ALERT_MAX_PER_INVESTOR_PER_RUN` | No | Direct alerts per investor and scrape run before one rollup. Defaults to `5`. |
+| `ALERT_DEFAULT_MIN_CONFIDENCE` | No | Default rule threshold from `0` to `1`. Defaults to `0.75`. |
+| `ALERT_CLAIM_STALE_MINUTES` | No | Age at which an unfinished delivery claim may be retried. Defaults to `15`. |
+| `FRONTEND_BASE_URL` | No | Public frontend base used in unsubscribe links. Defaults to `http://localhost:3000`. |
+| `AWS_ENDPOINT_URL_SES` | No | SESv2 endpoint override. Development compose sets this to LocalStack. |
 
+## Watchlist email alerts
+
+Use the development compose file when working on alerts:
+
+```bash
+docker compose -f docker-compose-dev.yml up --build
+```
+
+This stack starts PostgreSQL, the app, and LocalStack on port `4566`. It uses
+dummy AWS credentials and routes SESv2 calls to LocalStack. Sign in, then open
+`http://localhost:3000/settings/notifications` to choose sentiment labels and
+a confidence threshold. LocalStack exposes its SES developer view at
+`http://localhost:4566/_aws/ses`.
+
+LocalStack does not provide a real inbox for SES identity confirmation. Tests
+stub the verified transition. To test the UI and delivery ledger without SES,
+set `NOTIFICATIONS_DRY_RUN=true` in your shell or the root `.env` before
+starting compose. Dry-run mode treats identity checks as verified, renders both
+email formats, records a stable dry-run message ID, and does not create an AWS
+client. The development compose stack still starts LocalStack because the
+backend waits for its health check.
+
+Production delivery requires HTTPS unsubscribe links. It also requires
+`ALERT_SENDER_EMAIL` to be verified in the deployment region. While an AWS
+account remains in the SES sandbox, each recipient address must also complete
+SES verification. See the [deployment guide](deployment.md) for staged enable
+and rollback steps.
 
 ## API endpoints
 
@@ -121,6 +158,15 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | POST | `/artifact-sentiments/` | Manually store a sentiment record against an artifact |
 | GET | `/artifact-sentiments/artifact/{artifact_id}` | Get all sentiment records for an artifact |
 | GET | `/artifact-sentiments/{sentiment_id}` | Get a single sentiment record |
+
+### Watchlist notifications
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/notifications/preferences` | Read the signed-in investor's rule, verification state, and latest delivery status |
+| PUT | `/notifications/preferences` | Enable or disable alerts and update sentiment labels and confidence threshold |
+| POST | `/notifications/preferences/resend-verification` | Resend SES identity verification, limited to once per minute |
+| POST | `/notifications/unsubscribe` | Disable a matching subscription with a public token; valid and invalid tokens return the same response |
 ---
 
 ## Stopping
