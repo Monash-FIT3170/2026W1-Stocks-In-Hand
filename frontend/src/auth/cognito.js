@@ -20,14 +20,14 @@ const AWS_REGION = process.env.NEXT_PUBLIC_AWS_REGION || ""
 const USER_POOL_ID = process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || ""
 const USER_POOL_CLIENT_ID = process.env.NEXT_PUBLIC_COGNITO_APP_CLIENT_ID || ""
 
-if (AUTH_PROVIDER === "cognito" && (!AWS_REGION || !USER_POOL_ID || !USER_POOL_CLIENT_ID)) {
+if (["dual", "cognito"].includes(AUTH_PROVIDER) && (!AWS_REGION || !USER_POOL_ID || !USER_POOL_CLIENT_ID)) {
   throw new Error("Cognito authentication build values are missing")
 }
 
 let isConfigured = false
 
 export function isCognitoAuthEnabled() {
-  return AUTH_PROVIDER === "cognito"
+  return AUTH_PROVIDER === "dual" || AUTH_PROVIDER === "cognito"
 }
 
 function configureCognito() {

@@ -84,11 +84,11 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: /api
           NEXT_PUBLIC_AUTH_PROVIDER: legacy
         run: npm run build
-      - name: Build Cognito configuration
+      - name: Build dual-mode Cognito configuration
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_BASE_URL: /api
-          NEXT_PUBLIC_AUTH_PROVIDER: cognito
+          NEXT_PUBLIC_AUTH_PROVIDER: dual
           NEXT_PUBLIC_AWS_REGION: ap-southeast-2
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: ap-southeast-2_example
           NEXT_PUBLIC_COGNITO_APP_CLIENT_ID: exampleclientid

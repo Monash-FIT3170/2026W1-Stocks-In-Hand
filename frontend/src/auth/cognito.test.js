@@ -163,6 +163,14 @@ describe("Cognito account flows", () => {
 })
 
 describe("Cognito session handling", () => {
+  test("enables Cognito in dual mode for a rollback-safe frontend cutover", async () => {
+    vi.stubEnv("NEXT_PUBLIC_AUTH_PROVIDER", "dual")
+    vi.resetModules()
+    const { isCognitoAuthEnabled } = await loadCognito()
+
+    expect(isCognitoAuthEnabled()).toBe(true)
+  })
+
   test("returns and force-refreshes the access token", async () => {
     vi.stubGlobal("window", {})
     amplifyMocks.fetchAuthSession.mockResolvedValue({
