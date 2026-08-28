@@ -6,9 +6,15 @@ import { useState } from "react"
 import { AuthField } from "../components/auth/AuthField"
 import { apiFetch } from "../lib/api"
 import { friendlyAuthError } from "../lib/authErrors"
+import {
+  createCognitoAccount,
+  getCognitoErrorMessage,
+  isCognitoAuthEnabled,
+} from "../../auth/cognito"
 import styles from "../page.module.css"
 
 const AUTH_STORAGE_KEY = "stonks_signed_in"
+const PENDING_EMAIL_KEY = "stonks_pending_email"
 
 function getErrorMessage(data, fallback) {
   if (Array.isArray(data.detail)) {
@@ -41,6 +47,20 @@ export default function SignUpRoute() {
     setIsSubmitting(true)
 
     try {
+      if (isCognitoAuthEnabled()) {
+        const result = await createCognitoAccount(form)
+        if (result.nextStep?.signUpStep === "CONFIRM_SIGN_UP") {
+          window.sessionStorage.setItem(
+            PENDING_EMAIL_KEY,
+            form.email.trim().toLowerCase(),
+          )
+          router.push("/confirm-sign-up")
+          return
+        }
+        router.push("/sign-in")
+        return
+      }
+
       const response = await apiFetch("/auth/sign-up", {
         method: "POST",
         credentials: "include",
@@ -60,7 +80,10 @@ export default function SignUpRoute() {
       setError(
         err instanceof TypeError
           ? "Could not reach the account service. Check your connection and try again."
-          : friendlyAuthError(err.message, "Could not create account")
+          : getCognitoErrorMessage(
+              err,
+              friendlyAuthError(err.message, "Could not create account"),
+            )
       )
     } finally {
       setIsSubmitting(false)
@@ -95,10 +118,10 @@ export default function SignUpRoute() {
           <AuthField
             autoComplete="new-password"
             label="Password"
-            minLength={8}
+            minLength={isCognitoAuthEnabled() ? 12 : 8}
             name="password"
             onChange={updateForm}
-            placeholder="At least 8 characters"
+            placeholder={isCognitoAuthEnabled() ? "At least 12 characters" : "At least 8 characters"}
             password
             required
             value={form.password}

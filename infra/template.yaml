@@ -15,6 +15,14 @@ Parameters:
   OperationsEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  AuthProvider:
+    Type: String
+    Default: legacy
+    AllowedValues:
+      - legacy
+      - dual
+      - cognito
+    Description: Selects legacy, short-lived dual cutover, or Cognito authentication.
   ScheduleEnabled:
     Type: String
     Default: "false"
@@ -294,6 +302,17 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+      Auth:
+        Authorizers:
+          # FastAPI enforces authentication while legacy and Cognito coexist.
+          # This authorizer is available for explicit route bindings after the
+          # legacy rollback window closes.
+          CognitoJwtAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              audience:
+                - !Ref CognitoUserPoolClient
+              issuer: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
       DefaultRouteSettings:
         ThrottlingBurstLimit: 20
         ThrottlingRateLimit: 10
@@ -320,6 +339,11 @@ Resources:
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
+          AUTH_PROVIDER: !Ref AuthProvider
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_APP_CLIENT_ID: !Ref CognitoUserPoolClient
+          COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
+          COGNITO_LINK_EXISTING_BY_EMAIL: "false"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters
@@ -847,10 +871,14 @@ Outputs:
     Value: !Sub https://${FrontendDistribution.DomainName}
   ApiEndpoint:
     Value: !Sub https://${FrontendDistribution.DomainName}/api
+  AuthProvider:
+    Value: !Ref AuthProvider
   CognitoUserPoolId:
     Value: !Ref CognitoUserPool
   CognitoUserPoolClientId:
     Value: !Ref CognitoUserPoolClient
+  CognitoIssuer:
+    Value: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
   RawDocumentBucketName:
     Value: !Ref RawDocumentBucket
   DiscoveryQueueUrl:

@@ -7,6 +7,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin_investor
@@ -91,6 +93,22 @@ def root():
 def health() -> dict:
     """Return the health status of the API process."""
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness(db: Session = Depends(get_db)) -> dict:
+    """Verify that the API can query the schema required by deployed routes."""
+    try:
+        db.execute(text("SELECT is_duplicate FROM artifacts LIMIT 0"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database schema is not ready",
+        ) from exc
+    return {
+        "status": "ready",
+        "checks": {"database": "ok", "artifact_schema": "ok"},
+    }
 
 
 @app.get("/viewer", response_class=HTMLResponse)

@@ -2,6 +2,9 @@ export function friendlyAuthError(message, fallback) {
   const value = String(message || "").trim()
   const lower = value.toLowerCase()
 
+  if (lower.includes("invalid email or password")) {
+    return "The email or password is not correct."
+  }
   if (lower.includes("valid email") || lower.includes("email address")) {
     return "Enter a valid email address."
   }

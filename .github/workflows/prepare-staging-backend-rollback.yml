@@ -98,6 +98,7 @@ jobs:
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "AuthProvider=legacy" \
               "ScheduleEnabled=false" \
               "AnalysisEnabled=true" \
               "BedrockEnabled=false" \
