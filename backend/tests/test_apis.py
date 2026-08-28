@@ -197,6 +197,61 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
     assert result["aside"]["key_numbers"][0]["value"] == "$150.00"
 
 
+def test_deep_dive_initializes_default_ticker_before_returning_empty_timeline() -> None:
+    """A direct deep-dive request must work before another ticker endpoint runs."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    db = MagicMock()
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="BHP")
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        side_effect=[None, ticker_record],
+    ) as get_ticker, patch.object(
+        ticker,
+        "_ensure_default_tickers",
+    ) as ensure_defaults, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_deep_dive_timeline("bhp", db=db)
+
+    ensure_defaults.assert_called_once_with(db)
+    assert get_ticker.call_count == 2
+    assert result == []
+
+
+def test_deep_dive_does_not_reinitialize_an_existing_ticker() -> None:
+    """Normal timeline reads should not perform unnecessary database writes."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    db = MagicMock()
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="ANZ")
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_ensure_default_tickers",
+    ) as ensure_defaults, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_deep_dive_timeline("ANZ", db=db)
+
+    ensure_defaults.assert_not_called()
+    assert result == []
+
+
 # --- Reddit route tests ---
 
 def _make_mock_submission(

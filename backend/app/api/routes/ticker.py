@@ -505,6 +505,12 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
     """Return only persisted filing events; an empty history stays empty."""
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
+        # Deep-dive can be the first ticker endpoint requested by the client.
+        # Keep it consistent with the brief endpoints instead of relying on a
+        # separate request to create the deployed ticker records first.
+        _ensure_default_tickers(db)
+        ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
+    if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
     artifacts = _ticker_artifacts(db, ticker.id)
