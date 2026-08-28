@@ -1,3 +1,7 @@
 .env
 _data
 _test_output
+__pycache__
+*.py[cod]
+.pytest_cache
+output

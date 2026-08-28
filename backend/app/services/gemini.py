@@ -8,8 +8,11 @@ from app.core.config import settings
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "groq-category-v1"
-SUMMARY_PROMPT_VERSION = "groq-announcement-summary-v1"
-SUMMARY_KEYS = ("summary", "about", "changed", "matters")
+NEWS_SUMMARY_PROMPT_VERSION = "groq-news-summary-v1"
+SUMMARY_PROMPT_VERSION = "groq-announcement-summary-v2"
+SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
+SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
+SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
 
@@ -44,19 +47,31 @@ def parse_category_response(text: str) -> dict[str, str]:
     return categories
 
 
-def parse_summary_response(text: str) -> dict[str, str]:
+def parse_summary_response(
+    text: str,
+    *,
+    include_clarity: bool = True,
+) -> dict[str, object]:
     data = json.loads(_extract_json_text(text))
     if not isinstance(data, dict):
         raise ValueError("Groq summary response must be a JSON object")
 
-    missing = [key for key in SUMMARY_KEYS if key not in data]
+    required_keys = SUMMARY_KEYS if include_clarity else SUMMARY_TEXT_KEYS
+    missing = [key for key in required_keys if key not in data]
     if missing:
         raise ValueError(f"Groq summary response missing keys: {', '.join(missing)}")
 
-    summary = {}
-    for key in SUMMARY_KEYS:
+    summary: dict[str, object] = {}
+    for key in SUMMARY_TEXT_KEYS:
         value = data.get(key, "")
         summary[key] = value.strip() if isinstance(value, str) else str(value)
+
+    if include_clarity:
+        for key in SUMMARY_LIST_KEYS:
+            value = data.get(key)
+            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+                raise ValueError(f"Groq summary response key '{key}' must be a list of strings")
+            summary[key] = [item.strip() for item in value if item.strip()]
     return summary
 
 
@@ -95,6 +110,12 @@ summary: a concise 2-3 sentence summary.
 about: one sentence explaining what the announcement is about.
 changed: one sentence explaining what changed, or "No material change identified." if unclear.
 matters: one sentence explaining why it may matter to investors.
+confirmed_facts: an array of concise claims explicitly supported by the announcement, limited to current or historical facts.
+speculation: an array of concise forward-looking claims, including forecasts, targets, expectations, opinions, intentions, or possible investor impacts.
+
+Classify claims by what they say, not who said them. A forecast made in an official
+announcement is still speculation. Do not repeat a claim in both arrays. Use an empty
+array when the supplied text does not support a category.
 
 Title:
 {title}
@@ -106,6 +127,36 @@ Extracted fields:
 {extracted_json}
 
 Announcement text:
+{text}
+""".strip()
+
+
+def _build_news_summary_prompt(
+    *,
+    title: str,
+    source_name: str | None,
+    raw_text: str,
+) -> str:
+    text = raw_text[:18000]
+    return f"""
+You are summarising a financial news story for retail investors.
+
+Use only the supplied story text. Do not invent facts or treat reported claims as confirmed facts.
+Write in clear, plain English. Avoid hype and financial advice.
+
+Return strict JSON only with exactly these keys:
+summary: a concise 2-3 sentence summary.
+about: one sentence explaining the main subject of the story.
+changed: one sentence explaining the reported development, or "No material change identified." if unclear.
+matters: one sentence explaining why the story may matter to investors.
+
+Title:
+{title}
+
+Source:
+{source_name or "Unknown"}
+
+Story text:
 {text}
 """.strip()
 
@@ -164,7 +215,7 @@ def summarise_announcement(
     category: str,
     extracted_data: dict,
     raw_text: str,
-) -> dict[str, str]:
+) -> dict[str, object]:
     return parse_summary_response(
         _call_llm(
             _build_summary_prompt(
@@ -174,6 +225,24 @@ def summarise_announcement(
                 raw_text=raw_text,
             )
         )
+    )
+
+
+def summarise_news_article(
+    *,
+    title: str,
+    source_name: str | None,
+    raw_text: str,
+) -> dict[str, object]:
+    return parse_summary_response(
+        _call_llm(
+            _build_news_summary_prompt(
+                title=title,
+                source_name=source_name,
+                raw_text=raw_text,
+            )
+        ),
+        include_clarity=False,
     )
 
 

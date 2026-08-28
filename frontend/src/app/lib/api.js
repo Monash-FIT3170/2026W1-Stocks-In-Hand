@@ -1,12 +1,9 @@
-const SERVER_API_URL = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
-
-function apiBaseUrl() {
-  return typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL
-}
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
+const requestCache = new Map()
+const DEFAULT_READ_TTL_MS = 30_000
 
 export async function apiFetch(path, options = {}) {
-  const baseUrl = apiBaseUrl().replace(/\/$/, "")
+  const baseUrl = API_BASE_URL.replace(/\/$/, "")
   const apiPath = path.startsWith("/") ? path : `/${path}`
   return fetch(`${baseUrl}${apiPath}`, options)
 }
@@ -26,8 +23,37 @@ export async function fetchJson(path, options = {}) {
   return data
 }
 
+async function fetchJsonCoalesced(path, ttlMs = DEFAULT_READ_TTL_MS) {
+  const now = Date.now()
+  const cached = requestCache.get(path)
+  if (cached && (cached.promise || now - cached.createdAt < ttlMs)) {
+    return cached.promise || cached.data
+  }
+
+  const promise = fetchJson(path)
+    .then((data) => {
+      requestCache.set(path, { createdAt: Date.now(), data, promise: null })
+      return data
+    })
+    .catch((error) => {
+      requestCache.delete(path)
+      throw error
+    })
+
+  requestCache.set(path, { createdAt: now, data: null, promise })
+  return promise
+}
+
 export async function fetchAnnouncements(filters = {}) {
   const params = new URLSearchParams()
+
+  if (filters.limit) {
+    params.set("limit", String(filters.limit))
+  }
+
+  if (filters.offset) {
+    params.set("offset", String(filters.offset))
+  }
 
   if (filters.today) {
     params.set("today", "true")
@@ -71,6 +97,10 @@ export async function fetchTickerBriefAside(symbol) {
   return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/brief-aside`)
 }
 
+export async function fetchTickerBrief(symbol) {
+  return fetchJsonCoalesced(`/tickers/symbol/${encodeURIComponent(symbol)}/brief`)
+}
+
 export async function fetchTickerNews(symbol) {
   return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/news-feed`)
 }
@@ -80,11 +110,5 @@ export async function fetchTickerDeepDive(symbol) {
 }
 
 export async function fetchTickerCategorySentiment(symbol) {
-  return fetchJson(`/sentiment/${encodeURIComponent(symbol)}?persist=false`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({}),
-  })
+  return fetchJsonCoalesced(`/sentiment/${encodeURIComponent(symbol)}`)
 }

@@ -1,8 +1,6 @@
 from functools import lru_cache
 from typing import Any, Mapping
 
-from transformers import pipeline
-
 from app.core.config import settings
 
 MAX_CHUNK_CHARS = 1600
@@ -49,6 +47,10 @@ def _split_text(text: str):
 @lru_cache(maxsize=1)
 def get_finbert_pipeline():
     try:
+        # The API process can import this service without carrying torch and
+        # transformers; the analysis worker imports them only for inference.
+        from transformers import pipeline
+
         return pipeline("text-classification", model=settings.FINBERT_MODEL)
     except Exception as exc:
         raise RuntimeError(f"FinBERT model could not be loaded from {settings.FINBERT_MODEL}") from exc

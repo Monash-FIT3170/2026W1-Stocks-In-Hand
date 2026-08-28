@@ -1,0 +1,8 @@
+version = 0.1
+[staging.deploy.parameters]
+stack_name = "stocks-in-hand-staging"
+region = "ap-southeast-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+resolve_s3 = true
+fail_on_empty_changeset = false

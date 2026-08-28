@@ -1,0 +1,142 @@
+name: Prepare staging backend rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Previous full Git SHA retained in all three ECR repositories
+        required: true
+        type: string
+      compatibility_reference:
+        description: Person 2 database compatibility confirmation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Create backend rollback change set
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+      PARAMETER_PATH_PREFIX: /stocks-in-hand/staging
+
+    steps:
+      - name: Validate the rollback SHA
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_sha must be a full 40-character Git SHA" >&2
+            exit 1
+          fi
+
+      - name: Check out the current infrastructure template
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-backend-rollback
+
+      - name: Resolve AWS values and verify rollback images
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          for image in api scraper analysis; do
+            aws ecr describe-images \
+              --repository-name "stocks-in-hand-$image" \
+              --image-ids "imageTag=$RELEASE_SHA"
+          done
+          {
+            echo "ECR_REGISTRY=$ECR_REGISTRY"
+            echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
+            echo "RELEASE_SHA=$RELEASE_SHA"
+          } >> "$GITHUB_ENV"
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate the SAM template
+        shell: bash
+        run: sam validate --lint --template-file infra/template.yaml
+
+      - name: Create the rollback change set without executing it
+        shell: bash
+        run: |
+          sam deploy \
+            --template-file infra/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --capabilities CAPABILITY_IAM \
+            --role-arn "$CFN_ROLE_ARN" \
+            --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+            --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
+            --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
+            --no-confirm-changeset \
+            --no-execute-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides \
+              "Environment=staging" \
+              "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
+              "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "ScheduleEnabled=false" \
+              "AnalysisEnabled=true" \
+              "BedrockEnabled=false" \
+              "ScheduledTickers=ANZ,BHP,CBA,CSL,WES" \
+              "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
+              "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+
+      - name: Export the rollback change set
+        id: change_set
+        shell: bash
+        run: |
+          CHANGE_SET_ARN="$(aws cloudformation list-change-sets \
+            --stack-name "$STACK_NAME" \
+            --query "reverse(sort_by(Summaries[?Status=='CREATE_COMPLETE'], &CreationTime))[0].ChangeSetId" \
+            --output text)"
+          if [ -z "$CHANGE_SET_ARN" ] || [ "$CHANGE_SET_ARN" = "None" ]; then
+            echo "No reviewable rollback change set was created" >&2
+            exit 1
+          fi
+          aws cloudformation describe-change-set \
+            --change-set-name "$CHANGE_SET_ARN" \
+            --stack-name "$STACK_NAME" \
+            --output json > rollback-change-set.json
+          echo "change_set_arn=$CHANGE_SET_ARN" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Backend rollback awaiting Person 1 review"
+            echo ""
+            echo "Previous release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "Change set: \`$CHANGE_SET_ARN\`"
+            echo ""
+            echo "Compatibility confirmation: ${{ inputs.compatibility_reference }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload rollback evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-rollback-change-set-${{ inputs.release_sha }}
+          path: rollback-change-set.json
+          if-no-files-found: error
+          retention-days: 14

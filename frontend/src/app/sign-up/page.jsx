@@ -4,8 +4,8 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { AuthField } from "../components/auth/AuthField"
-import { AppFrame } from "../components/layout/AppFrame"
 import { apiFetch } from "../lib/api"
+import { friendlyAuthError } from "../lib/authErrors"
 import styles from "../page.module.css"
 
 const AUTH_STORAGE_KEY = "stonks_signed_in"
@@ -50,16 +50,17 @@ export default function SignUpRoute() {
       const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
-        throw new Error(getErrorMessage(data, "Could not create account"))
+        throw new Error(friendlyAuthError(getErrorMessage(data, "Could not create account"), "Could not create account"))
       }
 
       window.localStorage.setItem(AUTH_STORAGE_KEY, "true")
+      window.dispatchEvent(new Event("stonks-auth-changed"))
       router.push("/watchlist")
     } catch (err) {
       setError(
         err instanceof TypeError
-          ? "Could not reach the backend. Make sure the API is running on port 8000."
-          : err.message
+          ? "Could not reach the account service. Check your connection and try again."
+          : friendlyAuthError(err.message, "Could not create account")
       )
     } finally {
       setIsSubmitting(false)
@@ -67,14 +68,14 @@ export default function SignUpRoute() {
   }
 
   return (
-    <AppFrame>
-      <section className={styles.authPage}>
+    <section className={styles.authPage}>
         <form className={styles.authCard} onSubmit={handleSubmit}>
-          <h1>Start your investing journey</h1>
-          <p>Join thousands of retail investors getting clear, plain-English ASX insights.</p>
+          <h1>Create your watchlist</h1>
+          <p>Create a watchlist for the ASX companies you want to monitor.</p>
           <AuthField
             autoComplete="name"
             label="Full name"
+            maxLength={100}
             name="name"
             onChange={updateForm}
             placeholder="E.g. Jane Doe"
@@ -84,6 +85,7 @@ export default function SignUpRoute() {
           <AuthField
             autoComplete="email"
             label="Email address"
+            maxLength={320}
             name="email"
             onChange={updateForm}
             placeholder="jane@example.com"
@@ -93,6 +95,7 @@ export default function SignUpRoute() {
           <AuthField
             autoComplete="new-password"
             label="Password"
+            minLength={8}
             name="password"
             onChange={updateForm}
             placeholder="At least 8 characters"
@@ -100,14 +103,13 @@ export default function SignUpRoute() {
             required
             value={form.password}
           />
-          {error ? <p className={styles.authError}>{error}</p> : null}
+          {error ? <p aria-live="assertive" className={styles.authError} role="alert">{error}</p> : null}
           <button className={styles.authSubmit} disabled={isSubmitting} type="submit">
-            {isSubmitting ? "Creating..." : "Create account"}
+            {isSubmitting ? "Creating…" : "Create account"}
           </button>
           <span className={styles.authSwap}>Already have an account?<Link href="/sign-in">Sign in</Link></span>
         </form>
-        <div className={styles.securityNote}>Institutional-grade security for your ASX data</div>
-      </section>
-    </AppFrame>
+        <div className={styles.securityNote}>Choose a unique password. It is never displayed in the app.</div>
+    </section>
   )
 }

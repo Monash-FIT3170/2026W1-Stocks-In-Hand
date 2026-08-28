@@ -1,0 +1,9 @@
+-r requirements-runtime.txt
+
+defusedxml==0.7.1
+httpx==0.28.1
+pypdf==6.14.2
+pypdfium2==4.30.0
+rapidocr-onnxruntime==1.4.4
+torch==2.13.0
+transformers==5.14.1

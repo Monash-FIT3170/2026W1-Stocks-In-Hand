@@ -51,10 +51,10 @@ def _get_groq_client() -> Groq:
     return Groq(api_key=settings.GROQ_API_KEY)
 
 
-def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict]) -> dict:
+def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict], source_name: str = "Reddit") -> dict:
     if not posts:
         return {
-            "summary": "No relevant Reddit posts found.",
+            "summary": f"No relevant {source_name} posts found.",
             "post_count": 0,
         }
 
@@ -65,9 +65,9 @@ def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict]) -> dict:
             post_block += f"   {p['body'][:300]}\n"
         post_block += "\n"
 
-    prompt = f"""You are a financial analyst reading Reddit posts about ASX-listed company {ticker_symbol}.
+    prompt = f"""You are a financial analyst reading public discussion posts about ASX-listed company {ticker_symbol}.
 
-Here are the most relevant recent Reddit posts (ordered by upvotes):
+Here are the most relevant recent posts from {source_name} (ordered by engagement):
 
 {post_block[:12000]}
 
@@ -83,7 +83,7 @@ Return JSON only, no explanation:
 }}"""
 
     response = _get_groq_client().chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        model=settings.GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
     )

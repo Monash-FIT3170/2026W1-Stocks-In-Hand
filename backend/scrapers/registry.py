@@ -18,19 +18,51 @@ from .companies.mqg import MQGScraper
 # Add one import and one line here each time a new company is onboarded.
 REGISTRY: dict[str, type[BaseScraper]] = {
     "ANZ": ANZScraper,
-    "CSL": CSLScraper,
     "BHP": BHPScraper,
     "CBA": CBAScraper,
     "COL": COLScraper,
     "COH": COHScraper,
     "TCL": TCLScraper,
     "TLS": TLSScraper,
+    "CSL": CSLScraper,
     "WES": WESScraper,
     "WDS": WDSScraper,
     "RIO": RIOScraper,
     "ORG": ORGScraper,
     "MQG": MQGScraper,
 }
+
+
+def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
+    symbol = ticker.strip().upper()
+    scraper_type = REGISTRY.get(symbol)
+    if scraper_type is None:
+        raise ValueError(
+            f"No scraper implemented for '{symbol}'. "
+            f"Available: {list(REGISTRY.keys())}"
+        )
+    return scraper_type(output_dir=output_dir)
+
+
+async def discover(ticker: str) -> list[Announcement]:
+    """Discover announcement metadata without downloading or writing files."""
+    return await get_scraper(ticker).fetch_announcements()
+
+
+def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
+    symbol = ticker.strip().upper()
+    scraper_type = REGISTRY.get(symbol)
+    if scraper_type is None:
+        raise ValueError(
+            f"No scraper implemented for '{symbol}'. "
+            f"Available: {list(REGISTRY.keys())}"
+        )
+    return scraper_type(output_dir=output_dir)
+
+
+async def discover(ticker: str) -> list[Announcement]:
+    """Discover announcement metadata without downloading or writing files."""
+    return await get_scraper(ticker).fetch_announcements()
 
 
 async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
@@ -41,14 +73,7 @@ async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
     Usage:
         results = await scrape("ANZ", Path("./output"))
     """
-    ticker = ticker.upper()
-    if ticker not in REGISTRY:
-        raise ValueError(
-            f"No scraper implemented for '{ticker}'. "
-            f"Available: {list(REGISTRY.keys())}"
-        )
-    scraper = REGISTRY[ticker](output_dir=output_dir)
-    return await scraper.scrape()
+    return await get_scraper(ticker, output_dir).scrape()
 
 
 def available_tickers() -> list[str]:
