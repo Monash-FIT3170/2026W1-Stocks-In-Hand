@@ -71,6 +71,36 @@ def test_queue_contract_rejects_mismatched_ticker_and_adapter() -> None:
         )
 
 
+def test_anz_feed_preserves_yourir_document_identity() -> None:
+    announcements = ANZScraper()._parse_feed(
+        {
+            "items": {
+                "heading": ["2026 Third Quarter Trading Update"],
+                "time": ["2026-08-13 07:30:09"],
+                "fileID": ["3A698699"],
+            }
+        }
+    )
+
+    assert len(announcements) == 1
+    announcement = announcements[0]
+    assert announcement.ticker == "ANZ"
+    assert announcement.date == datetime(2026, 8, 13)
+    assert announcement.metadata == {
+        "yourir_id": "3A698699",
+        "source_id": "3A698699",
+    }
+    assert str(announcement.pdf_url) == (
+        "https://yourir.info/resources/4d216b570d08af30/announcements/"
+        "3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
+    )
+
+
+def test_anz_feed_rejects_missing_parallel_item_arrays() -> None:
+    with pytest.raises(ValueError, match="invalid item schema"):
+        ANZScraper()._parse_feed({"items": {"heading": ["Results"]}})
+
+
 @pytest.mark.parametrize("scraper_type", SCRAPERS.values())
 def test_discovery_implementations_contain_no_file_or_download_calls(
     scraper_type,
