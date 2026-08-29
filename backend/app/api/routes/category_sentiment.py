@@ -5,15 +5,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.api.routes import reddit as reddit_route
 from app.crud import artifact as artifact_crud
 from app.crud import artifact_sentiment as artifact_sentiment_crud
-from app.api.routes import reddit as reddit_route
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
+from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
-from app.schemas.category_sentiment import CategorySentimentRequest
-from app.schemas.category_sentiment import CategorySentimentResponse
+from app.schemas.category_sentiment import (
+    CategorySentimentRequest,
+    CategorySentimentResponse,
+)
 from app.services import groq as groq_service
 from app.services import sentiment as sentiment_service
 
@@ -98,7 +101,7 @@ def _recent_asx_artifacts(ticker: str, db: Session, days: int, limit: int, offse
     if not ticker_row:
         return []
 
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return (
@@ -303,7 +306,7 @@ def _summarise_recent_public_discussion(
     if not reddit_posts and not bluesky_posts and not mastodon_posts:
         return {
             "summary": f"No public discussion posts mentioning {ticker.upper()} in the last {days} days.",
-            "dominant_sentiment": "neutral",
+            "dominant_sentiment": None,
             "key_themes": [],
         }
 
@@ -368,7 +371,16 @@ def _stored_sentiment_rows(
             ArtifactSentiment,
             ArtifactSentiment.artifact_id == Artifact.id,
         )
-        .filter(Artifact.ticker_id == ticker_id)
+        .outerjoin(
+            ArtifactTickerMention,
+            ArtifactTickerMention.artifact_id == Artifact.id,
+        )
+        .filter(
+            or_(
+                Artifact.ticker_id == ticker_id,
+                ArtifactTickerMention.ticker_id == ticker_id,
+            )
+        )
         .filter(
             or_(
                 Artifact.published_at >= cutoff,
@@ -382,6 +394,7 @@ def _stored_sentiment_rows(
             Artifact.published_at.desc().nullslast(),
             ArtifactSentiment.created_at.desc(),
         )
+        .distinct()
         .limit(max(limit, 1))
         .all()
     )
@@ -389,7 +402,7 @@ def _stored_sentiment_rows(
 
 def _categories_for_stored_artifact(artifact: Artifact) -> list[str]:
     source_type = str(artifact.source_type or "").lower()
-    if source_type in {"reddit", "bluesky", "mastodon"}:
+    if source_type in {"reddit", "bluesky", "mastodon", "blog"}:
         return ["user_discussion"]
 
     metadata = (
@@ -432,7 +445,30 @@ def _unavailable_stored_result(category: str) -> dict[str, Any]:
         "chunks_used": 0,
         "chunks_analyzed": 0,
         "sources_count": 0,
+        "sources": [],
         "latest_analyzed_at": None,
+    }
+
+
+def _source_for_stored_artifact(artifact: Artifact) -> dict[str, Any]:
+    def text_value(name: str) -> str | None:
+        value = getattr(artifact, name, None)
+        return value if isinstance(value, str) and value.strip() else None
+
+    published_at = getattr(artifact, "published_at", None)
+    if not isinstance(published_at, dt.datetime):
+        published_at = None
+
+    return {
+        "source_type": text_value("source_type") or "unknown",
+        "title": text_value("title"),
+        "url": (
+            text_value("canonical_url")
+            or text_value("document_url")
+            or text_value("url")
+        ),
+        "author": text_value("author"),
+        "published_at": published_at,
     }
 
 
@@ -485,6 +521,17 @@ def _aggregate_stored_category(
     ]
     latest_analyzed_at = max(analyzed_dates) if analyzed_dates else None
     model_used = next(iter(models)) if len(models) == 1 else "Multiple stored models"
+    sources = []
+    source_keys = set()
+    for artifact, _sentiment, _label, _confidence in usable:
+        source = _source_for_stored_artifact(artifact)
+        source_key = (source["source_type"], source["url"], source["title"])
+        if source_key in source_keys:
+            continue
+        source_keys.add(source_key)
+        sources.append(source)
+        if len(sources) == 10:
+            break
 
     return {
         "summary": " ".join(summaries) or f"Based on {len(usable)} analysed signals.",
@@ -499,6 +546,7 @@ def _aggregate_stored_category(
         "chunks_used": len(usable),
         "chunks_analyzed": len(usable),
         "sources_count": len(usable),
+        "sources": sources,
         "latest_analyzed_at": latest_analyzed_at,
     }
 

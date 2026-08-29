@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -63,3 +62,43 @@ def test_frontend_uses_read_only_sentiment_contract() -> None:
     assert "fetchJsonCoalesced" in sentiment_function
     assert 'method: "POST"' not in sentiment_function.split("}", 1)[0]
     assert "persist=false" not in sentiment_function
+
+
+def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None:
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile.api").read_text(
+        encoding="utf-8"
+    )
+
+    parameter = template.split("  PublicDiscussionScheduleEnabled:", 1)[1].split(
+        "  AnalysisEnabled:", 1
+    )[0]
+    function = template.split("  PublicDiscussionSchedulerFunction:", 1)[1].split(
+        "  SchedulerInvokeRole:", 1
+    )[0]
+
+    assert 'Default: "false"' in parameter
+    assert "ReservedConcurrentExecutions: 1" in function
+    assert "PublicDiscussionPerSourceLimit" in function
+    assert "MaximumRetryAttempts: 2" in template
+    assert "lambdas/public_discussion_schedule.py" in dockerfile
+
+
+def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
+    deploy = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
+    ).read_text(encoding="utf-8")
+    rollback = (
+        REPOSITORY_ROOT
+        / ".github"
+        / "workflows"
+        / "prepare-staging-backend-rollback.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "enable_public_discussion_schedule:" in deploy
+    assert "PublicDiscussionSchedulerFunction=" in deploy
+    assert "PublicDiscussionPerSourceLimit=" in deploy
+    assert '"PublicDiscussionScheduleEnabled=false"' in rollback
+    assert "PublicDiscussionSchedulerFunction=" in rollback

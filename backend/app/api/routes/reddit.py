@@ -1,17 +1,23 @@
-import praw
 import hashlib
 import json
-from groq import Groq
 from datetime import datetime, timezone
+from uuid import UUID, uuid4
+
+import praw
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from groq import Groq
 from sqlalchemy.orm import Session
+
+from app.api.deps import require_admin_investor
 from app.core.config import settings
-from app.database.connection import SessionLocal
-from app.database.connection import get_db
-from app.schemas.information_platform import InformationPlatformCreate
-from app.schemas.artifact import ArtifactCreate, SourceType, ArtifactType
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
+from app.crud import scrape_run as scrape_run_crud
+from app.database.connection import SessionLocal, get_db
+from app.models.investor import Investor
+from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
+from app.schemas.information_platform import InformationPlatformCreate
+from app.services import public_discussion as public_discussion_service
 
 router = APIRouter(prefix="/reddit", tags=["reddit"])
 
@@ -118,66 +124,152 @@ def _get_or_create_reddit_platform(db: Session):
     )
 
 
-def _scrape_and_store_posts(subreddit: str = "ASX", limit: int = 10) -> dict:
+def _scrape_and_store_posts(
+    subreddit: str = "ASX",
+    limit: int = 10,
+    scrape_run_id: UUID | None = None,
+) -> dict:
     if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
         raise RuntimeError("REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured")
 
     with SessionLocal() as db:
         platform = _get_or_create_reddit_platform(db)
 
-        saved, skipped = 0, 0
+        saved, skipped, mentions_linked, analysis_queued = 0, 0, 0, 0
         for post in _fetch_posts(subreddit, limit):
             chash = _content_hash(post["id"])
-            if artifact_crud.get_artifact_by_hash(db, chash):
+            existing = artifact_crud.get_artifact_by_hash(db, chash)
+            if existing:
+                matches = public_discussion_service.link_artifact_to_tickers(db, existing)
+                mentions_linked += len(matches)
+                analysis_queued += public_discussion_service.queue_artifact_analysis(
+                    db,
+                    existing,
+                    matches,
+                )
                 skipped += 1
                 continue
-            artifact_crud.create_artifact(db=db, artifact=ArtifactCreate(
-                source_type=SourceType.REDDIT,
-                platform_id=platform.id,
-                artifact_type=ArtifactType.REDDIT_POST,
-
-                title=post["title"],
-                url=post["url"],
-                author=post["author"],
-                raw_text=post["body"],
-                published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc),
-                content_hash=chash,
-                artifact_metadata={
-                    "reddit_id":    post["id"],
-                    "score":        post["score"],
-                    "upvote_ratio": post["upvote_ratio"],
-                    "num_comments": post["num_comments"],
-                    "flair":        post["flair"],
-                    "is_self":      post["is_self"],
-                    "external_url": post["external_url"],
-                    "subreddit":    post["subreddit"],
-                },
-            ))
+            artifact = artifact_crud.create_artifact(
+                db=db,
+                artifact=ArtifactCreate(
+                    source_type=SourceType.REDDIT,
+                    platform_id=platform.id,
+                    scrape_run_id=scrape_run_id,
+                    artifact_type=ArtifactType.REDDIT_POST,
+                    title=post["title"],
+                    url=post["url"],
+                    author=post["author"],
+                    raw_text=post["body"],
+                    published_at=datetime.fromtimestamp(
+                        post["created_utc"],
+                        tz=timezone.utc,
+                    ),
+                    content_hash=chash,
+                    artifact_metadata={
+                        "reddit_id": post["id"],
+                        "score": post["score"],
+                        "upvote_ratio": post["upvote_ratio"],
+                        "num_comments": post["num_comments"],
+                        "flair": post["flair"],
+                        "is_self": post["is_self"],
+                        "external_url": post["external_url"],
+                        "subreddit": post["subreddit"],
+                    },
+                ),
+            )
+            matches = public_discussion_service.link_artifact_to_tickers(db, artifact)
+            mentions_linked += len(matches)
+            analysis_queued += public_discussion_service.queue_artifact_analysis(
+                db,
+                artifact,
+                matches,
+            )
             saved += 1
 
-    return {"saved": saved, "skipped_duplicates": skipped}
+    return {
+        "saved": saved,
+        "skipped_duplicates": skipped,
+        "mentions_linked": mentions_linked,
+        "analysis_queued": analysis_queued,
+    }
 
 
-def _run_reddit_scrape(subreddit: str, limit: int) -> None:
+def _run_reddit_scrape(
+    subreddit: str,
+    limit: int,
+    scrape_run_id: UUID | None = None,
+) -> None:
     try:
-        result = _scrape_and_store_posts(subreddit=subreddit, limit=limit)
+        if scrape_run_id:
+            with SessionLocal() as db:
+                scrape_run_crud.mark_public_discussion_run_started(db, scrape_run_id)
+        result = _scrape_and_store_posts(
+            subreddit=subreddit,
+            limit=limit,
+            scrape_run_id=scrape_run_id,
+        )
+        if scrape_run_id:
+            with SessionLocal() as db:
+                scrape_run_crud.mark_public_discussion_run_completed(
+                    db,
+                    scrape_run_id,
+                    items_found=result["saved"] + result["skipped_duplicates"],
+                    items_saved=result["saved"],
+                )
         print(
             "[REDDIT] Scrape complete "
-            f"r/{subreddit}: saved={result['saved']} skipped={result['skipped_duplicates']}"
+            f"r/{subreddit}: saved={result['saved']} "
+            f"skipped={result['skipped_duplicates']} "
+            f"mentions={result['mentions_linked']} "
+            f"analysis_queued={result['analysis_queued']}"
         )
     except Exception as exc:  # noqa: BLE001
+        if scrape_run_id:
+            with SessionLocal() as db:
+                scrape_run_crud.mark_public_discussion_run_failed(
+                    db,
+                    scrape_run_id,
+                    error=str(exc),
+                )
         print(f"[REDDIT] Scrape failed for r/{subreddit}: {exc}")
 
 
 @router.post("/scrape")
-def scrape_and_store(background_tasks: BackgroundTasks, subreddit: str = "ASX", limit: int = 10):
+def scrape_and_store(
+    background_tasks: BackgroundTasks,
+    subreddit: str = "ASX",
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
         raise HTTPException(
             status_code=500,
             detail="REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be configured",
         )
-    background_tasks.add_task(_run_reddit_scrape, subreddit, limit)
-    return {"status": "queued", "subreddit": subreddit, "limit": limit}
+    clean_subreddit = subreddit.strip()
+    if not clean_subreddit or not clean_subreddit.replace("_", "").isalnum():
+        raise HTTPException(
+            status_code=400,
+            detail="subreddit must contain only letters, numbers or underscores",
+        )
+    if not 1 <= limit <= 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    platform = _get_or_create_reddit_platform(db)
+    source_url = f"https://www.reddit.com/r/{clean_subreddit}"
+    run = scrape_run_crud.create_public_discussion_run(
+        db,
+        platform_id=platform.id,
+        source_url=source_url,
+        idempotency_key=f"public-discussion:reddit:{uuid4()}",
+    )
+    background_tasks.add_task(_run_reddit_scrape, clean_subreddit, limit, run.id)
+    return {
+        "status": "queued",
+        "subreddit": clean_subreddit,
+        "limit": limit,
+        "scrape_run_id": run.id,
+    }
 
 @router.get("/ticker-sentiment/{ticker_symbol}")
 def reddit_ticker_sentiment(
@@ -198,7 +290,7 @@ def reddit_ticker_sentiment(
             "ticker":             ticker_symbol.upper(),
             "post_count":         0,
             "summary":            "No Reddit posts mentioning this ticker in the last 30 days.",
-            "dominant_sentiment": "neutral",
+            "dominant_sentiment": None,
             "key_themes":         [],
             "posts_used":         [],
         }

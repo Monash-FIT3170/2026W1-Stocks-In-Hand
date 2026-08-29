@@ -3,6 +3,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas.public_discussion import PublicDiscussionSource
+
 
 class RedditSummary(BaseModel):
     summary: str
@@ -30,6 +32,7 @@ class CategorySentimentResult(BaseModel):
     chunks_used: int = 0
     chunks_analyzed: int = 0
     sources_count: int = 0
+    sources: list[PublicDiscussionSource] = Field(default_factory=list)
     latest_analyzed_at: Optional[datetime] = None
 
 
