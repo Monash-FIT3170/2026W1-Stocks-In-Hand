@@ -185,7 +185,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
                 "confidence_score": "0.8200",
             }
 
-        send = Mock(return_value="ses-integration-message")
+        send = Mock(return_value="brevo-integration-message")
         monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
         monkeypatch.setattr(settings, "NOTIFICATIONS_DRY_RUN", True, raising=False)
         monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", 100_000, raising=False)
@@ -195,12 +195,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
             "https://app.example.test",
             raising=False,
         )
-        monkeypatch.setattr(
-            notify.ses_alerts,
-            "identity_status",
-            lambda _email: "verified",
-        )
-        monkeypatch.setattr(notify.ses_alerts, "send_alert", send)
+        monkeypatch.setattr(notify.brevo_alerts, "send_email", send)
         record = {
             "messageId": f"notify-{suffix}",
             "body": json.dumps(message),
@@ -230,7 +225,10 @@ def test_worker_sends_and_deduplicates_against_postgres(
             )
             assert len(deliveries) == 1
             assert deliveries[0].status == "sent"
-            assert deliveries[0].ses_message_id == "ses-integration-message"
+            assert (
+                deliveries[0].provider_message_id
+                == "brevo-integration-message"
+            )
             assert subscription is not None
             assert subscription.last_delivery_status == "sent"
             assert subscription.last_delivery_error_code is None

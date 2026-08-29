@@ -11,7 +11,7 @@ skip themselves, which keeps local test runs useful while still giving the Docke
 test environment a real database verification path.
 
 The schema these tests cover is the simplified core schema plus the additive
-SES watchlist-alert tables.
+watchlist-alert tables.
 """
 
 import sys

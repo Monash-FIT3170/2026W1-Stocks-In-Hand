@@ -1,10 +1,11 @@
-"""Contracts for the SES watchlist notification worker."""
+"""Contracts for the Brevo watchlist notification worker."""
 
 # pylint: disable=duplicate-code,protected-access,too-many-arguments,too-many-positional-arguments
 
 from __future__ import annotations
 
 import json
+import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -15,9 +16,9 @@ from unittest.mock import MagicMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
-from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 
 from app.core.config import settings
+from lambdas import common as lambda_common
 from lambdas import notify
 
 
@@ -106,10 +107,10 @@ def _lease(investor_id: UUID, *, rollup: bool = False) -> notify.DeliveryLease:
     )
 
 
-def _client_error(code: str) -> ClientError:
-    return ClientError(
-        {"Error": {"Code": code, "Message": "private SES detail"}},
-        "SendEmail",
+def _brevo_error(status_code: int, code: str) -> notify.brevo_alerts.BrevoApiError:
+    return notify.brevo_alerts.BrevoApiError(
+        status_code=status_code,
+        code=code,
     )
 
 
@@ -277,8 +278,8 @@ def test_record_finishes_siblings_before_returning_a_retry(
         processed.append(investor_id)
         if investor_id == investor_ids[0]:
             raise notify.RetryableNotificationError(
-                "temporary SES failure",
-                code="ThrottlingException",
+                "temporary Brevo failure",
+                code="rate_limit",
             )
 
     monkeypatch.setattr(
@@ -298,7 +299,7 @@ def test_record_finishes_siblings_before_returning_a_retry(
     with pytest.raises(notify.RetryableNotificationError) as raised:
         notify._process_record(_sqs_record())
 
-    assert raised.value.code == "ThrottlingException"
+    assert raised.value.code == "rate_limit"
     assert processed == investor_ids
 
 
@@ -353,7 +354,7 @@ def test_signed_unsubscribe_url_never_contains_the_stored_hash(
 def test_dry_run_verified_watcher_reaches_the_send_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Dry-run identity checks must support a complete local delivery flow."""
+    """A locally confirmed watcher must reach the dry-run send boundary."""
     context = _context()
     preferences = _preferences()
     lease = _lease(preferences.investor_id)
@@ -386,7 +387,6 @@ def test_dry_run_verified_watcher_reaches_the_send_boundary(
 
     notify._process_watcher(context, preferences.investor_id)
 
-    assert notify.ses_alerts.identity_status(preferences.email) == "verified"
     assert sequence == ["claim", "send"]
 
 
@@ -432,7 +432,7 @@ def test_suppressed_direct_delivery_recovers_an_unsent_rollup(
     ensure_rollup.assert_called_once_with(
         context,
         preferences,
-        identity_checked=False,
+        confirmation_checked=False,
     )
 
 
@@ -450,7 +450,7 @@ def test_rollup_claim_uniqueness_skips_an_existing_sent_rollup(
     )
     monkeypatch.setattr(notify, "_send_rendered", send_rendered)
 
-    notify._ensure_rollup(context, preferences, identity_checked=True)
+    notify._ensure_rollup(context, preferences, confirmation_checked=True)
 
     send_rendered.assert_not_called()
 
@@ -482,7 +482,7 @@ def test_failed_rollup_claim_is_retried_and_sent(
     )
     monkeypatch.setattr(notify, "_send_rendered", send_rendered)
 
-    notify._ensure_rollup(context, preferences, identity_checked=True)
+    notify._ensure_rollup(context, preferences, confirmation_checked=True)
 
     send_rendered.assert_called_once()
 
@@ -498,7 +498,11 @@ def test_per_run_cap_suppresses_direct_and_claims_one_rollup(
     ensure_rollup = Mock()
     monkeypatch.setattr(notify, "_load_preferences", lambda _id: preferences)
     monkeypatch.setattr(notify, "_claim_direct", lambda *_args: (lease, None))
-    monkeypatch.setattr(notify, "_check_identity", lambda *_args: True)
+    monkeypatch.setattr(
+        notify,
+        "_check_recipient_confirmation",
+        lambda *_args: True,
+    )
     monkeypatch.setattr(notify, "_over_run_cap", lambda *_args: True)
     monkeypatch.setattr(notify, "_transition_delivery", transition)
     monkeypatch.setattr(notify, "_ensure_rollup", ensure_rollup)
@@ -510,7 +514,7 @@ def test_per_run_cap_suppresses_direct_and_claims_one_rollup(
     ensure_rollup.assert_called_once_with(
         context,
         preferences,
-        identity_checked=True,
+        confirmation_checked=True,
     )
 
 
@@ -525,7 +529,11 @@ def test_daily_budget_suppresses_without_retrying_or_sending(
     send_rendered = Mock()
     monkeypatch.setattr(notify, "_load_preferences", lambda _id: preferences)
     monkeypatch.setattr(notify, "_claim_direct", lambda *_args: (lease, None))
-    monkeypatch.setattr(notify, "_check_identity", lambda *_args: True)
+    monkeypatch.setattr(
+        notify,
+        "_check_recipient_confirmation",
+        lambda *_args: True,
+    )
     monkeypatch.setattr(notify, "_over_run_cap", lambda *_args: False)
     monkeypatch.setattr(notify, "_at_daily_budget", lambda: True)
     monkeypatch.setattr(notify, "_transition_delivery", transition)
@@ -575,7 +583,7 @@ def test_handler_acknowledges_poison_messages() -> None:
 def test_handler_short_circuits_when_notifications_are_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The dark-launch switch must stop work before any database or SES call."""
+    """The dark-launch switch must stop work before database or Brevo calls."""
     process_record = Mock()
     monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", False, raising=False)
     monkeypatch.setenv("NOTIFICATIONS_ENABLED", "false")
@@ -675,7 +683,7 @@ def test_delivery_and_subscription_outcomes_share_one_commit(
 
     kwargs: dict[str, str] = {}
     if outcome == "sent":
-        kwargs["ses_message_id"] = "ses-message-id"
+        kwargs["provider_message_id"] = "brevo-message-id"
     else:
         kwargs["error_code"] = "MessageRejected"
     assert notify._transition_delivery(lease, outcome, **kwargs) == expected_status
@@ -687,61 +695,35 @@ def test_delivery_and_subscription_outcomes_share_one_commit(
     db.commit.assert_called_once_with()
 
 
-def test_live_verification_correction_and_rejection_share_one_commit(
+def test_unconfirmed_recipient_is_rejected_before_provider_send(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SES disagreement must correct preferences with the rejection ledger row."""
-    preferences = _preferences()
+    """Only a locally confirmed subscription may reach Brevo."""
+    preferences = _preferences(verification_status="pending")
     lease = _lease(preferences.investor_id)
-    db = MagicMock()
-    verification_write = Mock(return_value=object())
-    rejection_write = Mock(return_value=SimpleNamespace(status="rejected"))
-    subscription_write = Mock(return_value=object())
+    transition = Mock()
+    monkeypatch.setattr(notify, "_transition_delivery", transition)
 
-    @contextmanager
-    def fake_session() -> Iterator[MagicMock]:
-        yield db
+    assert notify._check_recipient_confirmation(lease, preferences) is False
 
-    monkeypatch.setattr(notify, "database_session", fake_session)
-    monkeypatch.setattr(
-        notify.alert_subscription_crud,
-        "update_verification_state",
-        verification_write,
-    )
-    monkeypatch.setattr(
-        notify.alert_delivery_crud,
-        "mark_rejected",
-        rejection_write,
-    )
-    monkeypatch.setattr(
-        notify.alert_subscription_crud,
-        "record_delivery_outcome",
-        subscription_write,
+    transition.assert_called_once_with(
+        lease,
+        "rejected",
+        error_code="recipient_not_verified",
+        error_detail="The subscription email has not been confirmed",
     )
 
-    notify._reject_with_identity_correction(lease, preferences, "pending")
 
-    assert verification_write.call_args.kwargs["commit"] is False
-    assert verification_write.call_args.kwargs["expected_email"] == preferences.email
-    assert (
-        verification_write.call_args.kwargs["expected_verification_status"]
-        == "verified"
-    )
-    assert rejection_write.call_args.kwargs["commit"] is False
-    assert subscription_write.call_args.kwargs["commit"] is False
-    db.commit.assert_called_once_with()
-
-
-def test_ses_success_marks_the_delivery_sent(
+def test_brevo_success_marks_the_delivery_sent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A returned SES message ID should become the final ledger outcome."""
+    """A returned Brevo message ID should become the final ledger outcome."""
     lease = _lease(uuid4())
     transition = Mock()
     monkeypatch.setattr(
         notify,
         "_send_alert",
-        Mock(return_value="ses-message-123"),
+        Mock(return_value="brevo-message-123"),
     )
     monkeypatch.setattr(notify, "_transition_delivery", transition)
 
@@ -755,20 +737,20 @@ def test_ses_success_marks_the_delivery_sent(
     transition.assert_called_once_with(
         lease,
         "sent",
-        ses_message_id="ses-message-123",
+        provider_message_id="brevo-message-123",
     )
 
 
-def test_terminal_ses_rejection_is_recorded_and_acknowledged(
+def test_terminal_brevo_rejection_is_recorded_and_acknowledged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MessageRejected is terminal and must not return to SQS."""
+    """A Brevo validation error is terminal and must not return to SQS."""
     lease = _lease(uuid4())
     transition = Mock()
     monkeypatch.setattr(
         notify,
         "_send_alert",
-        Mock(side_effect=_client_error("MessageRejected")),
+        Mock(side_effect=_brevo_error(400, "invalid_parameter")),
     )
     monkeypatch.setattr(notify, "_transition_delivery", transition)
 
@@ -780,10 +762,10 @@ def test_terminal_ses_rejection_is_recorded_and_acknowledged(
     )
 
     assert transition.call_args.args == (lease, "rejected")
-    assert transition.call_args.kwargs["error_code"] == "MessageRejected"
+    assert transition.call_args.kwargs["error_code"] == "invalid_parameter"
 
 
-def test_retryable_ses_throttle_is_recorded_before_batch_retry(
+def test_retryable_brevo_throttle_is_recorded_before_batch_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Throttling must release the claim as failed, then retry that record."""
@@ -792,7 +774,7 @@ def test_retryable_ses_throttle_is_recorded_before_batch_retry(
     monkeypatch.setattr(
         notify,
         "_send_alert",
-        Mock(side_effect=_client_error("ThrottlingException")),
+        Mock(side_effect=_brevo_error(429, "rate_limit")),
     )
     monkeypatch.setattr(notify, "_transition_delivery", transition)
 
@@ -804,37 +786,22 @@ def test_retryable_ses_throttle_is_recorded_before_batch_retry(
             "https://app.example.test/unsubscribe/?token=signed",
         )
 
-    assert raised.value.code == "ThrottlingException"
+    assert raised.value.code == "rate_limit"
     assert transition.call_args.args == (lease, "failed")
-    assert transition.call_args.kwargs["error_code"] == "ThrottlingException"
+    assert transition.call_args.kwargs["error_code"] == "rate_limit"
 
 
-def test_temporary_identity_failure_retries_without_downgrading(
+def test_confirmed_recipient_needs_no_provider_identity_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SES TEMPORARY_FAILURE must not become a durable pending state."""
+    """Brevo delivery relies on the app-owned confirmation state only."""
     preferences = _preferences()
     lease = _lease(preferences.investor_id)
-    transition = Mock(return_value="failed")
-    correction = Mock()
-    monkeypatch.setattr(
-        notify.ses_alerts,
-        "identity_status",
-        lambda _email: "temporary_failure",
-    )
+    transition = Mock()
     monkeypatch.setattr(notify, "_transition_delivery", transition)
-    monkeypatch.setattr(
-        notify,
-        "_reject_with_identity_correction",
-        correction,
-    )
 
-    with pytest.raises(notify.RetryableNotificationError) as raised:
-        notify._check_identity(lease, preferences)
-
-    assert raised.value.code == "ses_identity_temporary_failure"
-    assert transition.call_args.args == (lease, "failed")
-    correction.assert_not_called()
+    assert notify._check_recipient_confirmation(lease, preferences) is True
+    transition.assert_not_called()
 
 
 def test_live_send_limiter_spaces_fanout_calls(
@@ -842,13 +809,13 @@ def test_live_send_limiter_spaces_fanout_calls(
 ) -> None:
     """Reserved concurrency alone must not exceed the one-send rate."""
     sleep = Mock()
-    send = Mock(return_value="ses-message-id")
+    send = Mock(return_value="brevo-message-id")
     monotonic = Mock(side_effect=[10.25, 11.25])
     monkeypatch.setattr(settings, "NOTIFICATIONS_DRY_RUN", False, raising=False)
     monkeypatch.setattr(notify, "_LAST_LIVE_SEND_AT", 10.0)
     monkeypatch.setattr(notify.time, "monotonic", monotonic)
     monkeypatch.setattr(notify.time, "sleep", sleep)
-    monkeypatch.setattr(notify.ses_alerts, "send_alert", send)
+    monkeypatch.setattr(notify.brevo_alerts, "send_email", send)
 
     result = notify._send_alert(
         to="investor@example.com",
@@ -858,7 +825,7 @@ def test_live_send_limiter_spaces_fanout_calls(
         unsubscribe_url="https://app.example.test/unsubscribe/?token=signed",
     )
 
-    assert result == "ses-message-id"
+    assert result == "brevo-message-id"
     sleep.assert_called_once_with(0.75)
     send.assert_called_once()
 
@@ -884,6 +851,37 @@ def test_runtime_configuration_load_precedes_configured_imports() -> None:
 
     load_position = source.index("\nload_runtime_configuration()\n")
     settings_position = source.index("\nfrom app.core.config import settings")
-    ses_position = source.index("\nfrom app.services import ses_alerts")
+    brevo_position = source.index("\nfrom app.services import brevo_alerts")
 
-    assert load_position < settings_position < ses_position
+    assert load_position < settings_position < brevo_position
+
+
+def test_runtime_configuration_loads_brevo_key_from_ssm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API key must be decrypted from its configured SSM parameter."""
+    ssm = MagicMock()
+    ssm.get_parameter.return_value = {
+        "Parameter": {"Value": "brevo-test-key"},
+    }
+    monkeypatch.setattr(
+        lambda_common,
+        "_RUNTIME_CONFIGURATION_LOADED",
+        False,
+    )
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "BREVO_API_KEY_PARAMETER",
+        "/stocks-in-hand/staging/brevo-api-key",
+    )
+    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
+    monkeypatch.setattr(lambda_common.boto3, "client", lambda _service: ssm)
+
+    lambda_common.load_runtime_configuration()
+
+    assert os.environ["BREVO_API_KEY"] == "brevo-test-key"
+    ssm.get_parameter.assert_called_once_with(
+        Name="/stocks-in-hand/staging/brevo-api-key",
+        WithDecryption=True,
+    )

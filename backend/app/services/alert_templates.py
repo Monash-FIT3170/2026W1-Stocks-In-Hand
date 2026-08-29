@@ -35,6 +35,31 @@ def _confidence_percent(value: ConfidenceValue) -> str:
     return f"{percentage}%"
 
 
+def render_verification_email(verification_url: str) -> tuple[str, str, str]:
+    """Render the app-owned confirmation email for one alert subscription."""
+    safe_verification_url = _absolute_url(
+        verification_url,
+        field="verification_url",
+    )
+    subject = "Confirm your Stocks In Hand email alerts"
+    html = f"""<!doctype html>
+<html lang="en">
+  <body>
+    <h1>Confirm your email alerts</h1>
+    <p>Click the link below to confirm that watchlist alerts can be sent here.</p>
+    <p><a href="{escape(safe_verification_url, quote=True)}">Confirm email alerts</a></p>
+    <p>If you did not request alerts, you can ignore this email.</p>
+  </body>
+</html>"""
+    text = (
+        "Confirm your Stocks In Hand email alerts\n\n"
+        "Open this link to confirm your address:\n"
+        f"{safe_verification_url}\n\n"
+        "If you did not request alerts, you can ignore this email.\n"
+    )
+    return subject, html, text
+
+
 def render_alert_email(  # pylint: disable=too-many-arguments,too-many-locals
     *,
     ticker_symbol: str,

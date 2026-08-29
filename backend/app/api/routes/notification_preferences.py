@@ -9,12 +9,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import cast
+from urllib.parse import urlencode
 from uuid import UUID
 
-from botocore.exceptions import (  # type: ignore[import-untyped]
-    BotoCoreError,
-    ClientError,
-)
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -32,12 +30,20 @@ from app.schemas.notification import (
     SentimentLabel,
     UnsubscribeRequest,
     UnsubscribeResponse,
+    VerificationRequest,
+    VerificationResponse,
     VerificationStatus,
 )
-from app.services import ses_alerts
+from app.services import brevo_alerts
+from app.services.alert_templates import render_verification_email
 from app.services.unsubscribe_tokens import (
     subscription_id_from_signed_token,
     verify_signed_unsubscribe_token,
+)
+from app.services.verification_tokens import (
+    create_signed_verification_token,
+    verification_token_claims,
+    verify_signed_verification_token,
 )
 
 
@@ -45,6 +51,8 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 LOGGER = logging.getLogger(__name__)
 VERIFICATION_RESEND_INTERVAL = timedelta(minutes=1)
 UNSUBSCRIBE_MESSAGE = "If the token was valid, notifications are now disabled."
+VERIFICATION_MESSAGE = "Your email address is verified for watchlist alerts."
+INVALID_VERIFICATION_MESSAGE = "The verification link is invalid or expired."
 _DUMMY_TOKEN_HASH = "0" * 64
 
 
@@ -127,53 +135,6 @@ def _load_preferences(
     )
 
 
-def _refresh_pending_verification(
-    db: Session,
-    subscription: AlertSubscription | None,
-) -> AlertSubscription | None:
-    """Refresh a pending SES identity without failing the settings page."""
-    if (
-        not settings.NOTIFICATIONS_ENABLED
-        or subscription is None
-        or str(subscription.verification_status) != "pending"
-    ):
-        return subscription
-
-    investor_id = cast(UUID, subscription.investor_id)
-    email = str(subscription.email)
-    requested_at = cast(datetime | None, subscription.verification_requested_at)
-    db.rollback()
-    try:
-        refreshed_status = ses_alerts.identity_status(email)
-    except (BotoCoreError, ClientError, ValueError) as exc:
-        LOGGER.warning(
-            "SES verification refresh failed error_code=%s",
-            type(exc).__name__,
-        )
-        return alert_subscription_crud.get_subscription_by_investor(
-            db,
-            investor_id,
-        )
-
-    if refreshed_status not in {"unverified", "pending", "verified", "failed"}:
-        return alert_subscription_crud.get_subscription_by_investor(db, investor_id)
-    if refreshed_status == "pending":
-        return alert_subscription_crud.get_subscription_by_investor(db, investor_id)
-
-    updated = alert_subscription_crud.update_verification_state(
-        db,
-        investor_id=investor_id,
-        verification_status=refreshed_status,
-        expected_verification_status="pending",
-        expected_email=email,
-        expected_verification_requested_at=requested_at,
-    )
-    return updated or alert_subscription_crud.get_subscription_by_investor(
-        db,
-        investor_id,
-    )
-
-
 def _require_notifications_enabled() -> None:
     """Reject cost-bearing operations while the deployment switch is off."""
     if not settings.NOTIFICATIONS_ENABLED:
@@ -183,18 +144,43 @@ def _require_notifications_enabled() -> None:
         )
 
 
-def _request_verification(email: str) -> None:
-    """Request SES verification without exposing provider error details."""
+def _send_verification_email(
+    *,
+    subscription_id: UUID,
+    email: str,
+    unsubscribe_token_hash: str,
+    requested_at: datetime,
+) -> None:
+    """Send one app-owned confirmation link through Brevo."""
     try:
-        ses_alerts.request_verification(email)
+        token = create_signed_verification_token(
+            subscription_id,
+            unsubscribe_token_hash,
+            requested_at,
+        )
+        base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
+        verification_url = (
+            f"{base_url}/verify-notifications/?{urlencode({'t': token})}"
+        )
+        subject, html, text = render_verification_email(verification_url)
+        brevo_alerts.send_email(
+            to=email,
+            subject=subject,
+            html=html,
+            text=text,
+        )
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="The account email cannot be verified",
-        ) from exc
-    except (BotoCoreError, ClientError) as exc:
         LOGGER.error(
-            "SES verification request failed error_code=%s",
+            "Brevo verification configuration failed error_code=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Email verification is not configured",
+        ) from exc
+    except (brevo_alerts.BrevoApiError, httpx.HTTPError, RuntimeError) as exc:
+        LOGGER.error(
+            "Brevo verification request failed error_code=%s",
             type(exc).__name__,
         )
         raise HTTPException(
@@ -208,9 +194,8 @@ def get_notification_preferences(
     db: Session = Depends(get_db),
     current_investor: Investor = Depends(get_current_investor),
 ) -> NotificationPreferencesResponse:
-    """Return current preferences and refresh a pending SES identity."""
+    """Return the current locally-owned alert preferences."""
     subscription, rule = _load_preferences(db, current_investor.id)
-    subscription = _refresh_pending_verification(db, subscription)
     return _preference_response(
         investor=current_investor,
         subscription=subscription,
@@ -224,7 +209,7 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
     db: Session = Depends(get_db),
     current_investor: Investor = Depends(get_current_investor),
 ) -> NotificationPreferencesResponse:
-    """Atomically update preferences and start verification when required."""
+    """Atomically update preferences and send confirmation when required."""
     existing = alert_subscription_crud.get_subscription_by_investor(
         db,
         current_investor.id,
@@ -232,6 +217,10 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
     account_email = str(current_investor.email).strip().lower()
     existing_email = str(existing.email).strip().lower() if existing else None
     existing_status = str(existing.verification_status) if existing else "unverified"
+    existing_requested_at = cast(
+        datetime | None,
+        existing.verification_requested_at if existing else None,
+    )
     token_hash = str(existing.unsubscribe_token_hash) if (
         existing is not None and existing.unsubscribe_token_hash
     ) else None
@@ -239,11 +228,17 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
         body.enabled
         and (existing_email != account_email or existing_status != "verified")
     )
+    should_request_verification = bool(
+        requires_verification
+        and (
+            existing_email != account_email
+            or existing_requested_at is None
+            or datetime.now(timezone.utc) - _aware_utc(existing_requested_at)
+            >= VERIFICATION_RESEND_INTERVAL
+        )
+    )
     if body.enabled:
         _require_notifications_enabled()
-    if requires_verification:
-        db.rollback()
-        _request_verification(account_email)
 
     raw_token: str | None = None
     if body.enabled and token_hash is None:
@@ -267,7 +262,11 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
             enabled=body.enabled,
             commit=False,
         )
-        if requires_verification and str(subscription.verification_status) != "verified":
+        requested_at: datetime | None = None
+        if (
+            should_request_verification
+            and str(subscription.verification_status) != "verified"
+        ):
             requested_at = datetime.now(timezone.utc)
             updated = alert_subscription_crud.update_verification_state(
                 db,
@@ -302,6 +301,36 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
         db.rollback()
         raise
 
+    if should_request_verification and requested_at is not None:
+        subscription_id = cast(UUID, subscription.id)
+        token_secret = str(subscription.unsubscribe_token_hash or "")
+        verification_email = str(subscription.email)
+        db.rollback()
+        try:
+            _send_verification_email(
+                subscription_id=subscription_id,
+                email=verification_email,
+                unsubscribe_token_hash=token_secret,
+                requested_at=requested_at,
+            )
+        except HTTPException:
+            alert_subscription_crud.update_verification_state(
+                db,
+                investor_id=current_investor.id,
+                verification_status="failed",
+                expected_verification_status="pending",
+                expected_email=verification_email,
+                expected_verification_requested_at=requested_at,
+                verification_requested_at=requested_at,
+            )
+            raise
+        subscription, rule = _load_preferences(db, current_investor.id)
+        if subscription is None or rule is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Notification preferences changed concurrently",
+            )
+
     return _preference_response(
         investor=current_investor,
         subscription=subscription,
@@ -318,7 +347,7 @@ def resend_notification_verification(
     db: Session = Depends(get_db),
     current_investor: Investor = Depends(get_current_investor),
 ) -> NotificationPreferencesResponse:
-    """Reserve and issue at most one SES verification request per minute."""
+    """Reserve and send at most one confirmation email per minute."""
     _require_notifications_enabled()
     subscription, rule = _load_preferences(db, current_investor.id)
     if subscription is None or not subscription.enabled:
@@ -369,9 +398,15 @@ def resend_notification_verification(
         )
 
     reserved_id = cast(UUID, reserved.id)
+    token_secret = str(reserved.unsubscribe_token_hash or "")
     db.rollback()
     try:
-        _request_verification(email)
+        _send_verification_email(
+            subscription_id=reserved_id,
+            email=email,
+            unsubscribe_token_hash=token_secret,
+            requested_at=now,
+        )
     except HTTPException:
         alert_subscription_crud.update_verification_state(
             db,
@@ -390,6 +425,69 @@ def resend_notification_verification(
         subscription=refreshed or reserved,
         rule=rule,
     )
+
+
+@router.post("/verify", response_model=VerificationResponse)
+def verify_notification_email(
+    body: VerificationRequest,
+    db: Session = Depends(get_db),
+) -> VerificationResponse:
+    """Consume one signed, expiring alert-email confirmation token."""
+    claims = verification_token_claims(body.token)
+    if claims is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_VERIFICATION_MESSAGE,
+        )
+    subscription_id, _requested_at = claims
+    subscription = alert_subscription_crud.get_subscription(db, subscription_id)
+    if (
+        subscription is None
+        or not subscription.unsubscribe_token_hash
+        or subscription.verification_requested_at is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_VERIFICATION_MESSAGE,
+        )
+
+    requested_at = cast(datetime, subscription.verification_requested_at)
+    verified_id = verify_signed_verification_token(
+        body.token,
+        str(subscription.unsubscribe_token_hash),
+        requested_at,
+        now=datetime.now(timezone.utc),
+        ttl=timedelta(hours=settings.ALERT_VERIFICATION_TOKEN_TTL_HOURS),
+    )
+    if verified_id != subscription_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_VERIFICATION_MESSAGE,
+        )
+    if str(subscription.verification_status) == "verified":
+        return VerificationResponse(message=VERIFICATION_MESSAGE)
+    if str(subscription.verification_status) != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=INVALID_VERIFICATION_MESSAGE,
+        )
+
+    updated = alert_subscription_crud.update_verification_state(
+        db,
+        investor_id=cast(UUID, subscription.investor_id),
+        verification_status="verified",
+        expected_verification_status="pending",
+        expected_email=str(subscription.email),
+        expected_verification_requested_at=requested_at,
+        verification_requested_at=requested_at,
+        verified_at=datetime.now(timezone.utc),
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The verification request changed. Open the newest email.",
+        )
+    return VerificationResponse(message=VERIFICATION_MESSAGE)
 
 
 def _disable_with_unsubscribe_token(db: Session, token: str) -> None:

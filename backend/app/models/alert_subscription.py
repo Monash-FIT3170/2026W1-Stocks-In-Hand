@@ -16,7 +16,7 @@ from app.database.base import Base
 
 
 class AlertSubscription(Base):
-    """An investor's SES identity and watchlist-alert opt-in state."""
+    """An investor's confirmed email and watchlist-alert opt-in state."""
 
     __tablename__ = "alert_subscriptions"
     __table_args__ = (

@@ -20,7 +20,7 @@ on:
           - "false"
           - "true"
       enable_notifications:
-        description: Enable user-facing SES watchlist alerts
+        description: Enable user-facing Brevo watchlist alerts
         required: true
         default: "false"
         type: choice

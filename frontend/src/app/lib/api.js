@@ -144,3 +144,11 @@ export async function unsubscribeAlerts(token) {
     body: JSON.stringify({ token }),
   })
 }
+
+export async function verifyAlertEmail(token) {
+  return fetchJson("/notifications/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  })
+}

@@ -34,12 +34,12 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-    Description: Master switch for user-facing SES watchlist alerts.
+    Description: Master switch for user-facing Brevo watchlist alerts.
   AlertSenderEmail:
     Type: String
     Default: ""
     AllowedPattern: ^$|^[^@\s]+@[^@\s]+\.[^@\s]+$
-    Description: SES-verified sender address in the deployment region.
+    Description: Sender address verified in the Brevo account.
   AlertDailyBudget:
     Type: String
     Default: "180"
@@ -365,6 +365,11 @@ Resources:
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
           NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
           ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
+          FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
@@ -388,17 +393,6 @@ Resources:
               Effect: Allow
               Action: sqs:SendMessage
               Resource: !GetAtt DiscoveryQueue.Arn
-        - !If
-          - IsNotificationsEnabled
-          - Statement:
-              - Sid: ManageInvestorSesIdentities
-                Effect: Allow
-                Action:
-                  - ses:CreateEmailIdentity
-                  - ses:GetEmailIdentity
-                Resource: !Sub >-
-                  arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
-          - !Ref AWS::NoValue
       Events:
         ApiRoot:
           Type: HttpApi
@@ -606,39 +600,30 @@ Resources:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
           NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
           ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
           ALERT_DAILY_BUDGET: !Ref AlertDailyBudget
           ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun
           FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
       Policies:
         - Statement:
-            - Sid: ReadDatabaseParameter
+            - Sid: ReadNotificationParameters
               Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub >-
-                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
-            - Sid: DecryptDatabaseParameter
+              Resource:
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/brevo-api-key
+            - Sid: DecryptNotificationParameters
               Effect: Allow
               Action: kms:Decrypt
               Resource: "*"
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
-        - !If
-          - IsNotificationsEnabled
-          - Statement:
-              - Sid: ReadSesIdentities
-                Effect: Allow
-                Action: ses:GetEmailIdentity
-                Resource: !Sub >-
-                  arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*
-              - Sid: SendSesAlerts
-                Effect: Allow
-                Action:
-                  - ses:SendEmail
-                  - ses:SendRawEmail
-                Resource: !Sub >-
-                  arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${AlertSenderEmail}
-          - !Ref AWS::NoValue
       Events:
         NotificationMessages:
           Type: SQS

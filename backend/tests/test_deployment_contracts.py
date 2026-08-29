@@ -31,7 +31,7 @@ def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
     assert "EventType: viewer-response" in template
 
 
-def test_ses_notification_infrastructure_contract() -> None:
+def test_brevo_notification_infrastructure_contract() -> None:
     """Notification infrastructure must stay disabled, scoped, and retry-safe."""
     template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
         encoding="utf-8"
@@ -71,10 +71,14 @@ def test_ses_notification_infrastructure_contract() -> None:
 
     assert "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in api_function
     assert "ALERT_SENDER_EMAIL: !Ref AlertSenderEmail" in api_function
-    assert "ses:CreateEmailIdentity" in api_function
-    assert "ses:GetEmailIdentity" in api_function
+    assert "BREVO_API_KEY_PARAMETER: !If" in api_function
+    assert "${ParameterPathPrefix}/brevo-api-key" in api_function
     assert "- IsNotificationsEnabled" in api_function
-    assert "FRONTEND_BASE_URL" not in api_function
+    assert (
+        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
+        in api_function
+    )
+    assert "ses:" not in api_function.lower()
 
     assert (
         "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in analysis_function
@@ -96,9 +100,11 @@ def test_ses_notification_infrastructure_contract() -> None:
         "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
         in notification_function
     )
-    assert "ses:GetEmailIdentity" in notification_function
-    assert "ses:SendEmail" in notification_function
-    assert "ses:SendRawEmail" in notification_function
+    assert "BREVO_API_KEY_PARAMETER: !If" in notification_function
+    assert "${ParameterPathPrefix}/brevo-api-key" in notification_function
+    assert "Sid: ReadNotificationParameters" in notification_function
+    assert "ssm:GetParameter" in notification_function
+    assert "ses:" not in notification_function.lower()
     assert "- IsNotificationsEnabled" in notification_function
     assert "BatchSize: 10" in notification_function
     assert (
@@ -114,7 +120,7 @@ def test_ses_notification_infrastructure_contract() -> None:
     assert "NotificationDeadLetterQueueUrl:" in template
 
 
-def test_staging_workflow_wires_ses_notification_parameters() -> None:
+def test_staging_workflow_wires_brevo_notification_parameters() -> None:
     """The reviewed change set must carry the notification release controls."""
     workflow = (
         REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"

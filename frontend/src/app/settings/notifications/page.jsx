@@ -18,12 +18,12 @@ const SENTIMENT_OPTIONS = [
 const VERIFICATION_COPY = {
   unverified: {
     heading: "Email not verified",
-    message: "Enable alerts to request an email verification link from AWS.",
+    message: "Enable alerts to receive a confirmation link by email.",
     tone: "attention",
   },
   pending: {
     heading: "Verification pending",
-    message: "Check your inbox for an email from AWS and click the verification link.",
+    message: "Check your inbox and click the confirmation link we sent.",
     tone: "attention",
   },
   verified: {
@@ -33,7 +33,7 @@ const VERIFICATION_COPY = {
   },
   failed: {
     heading: "Verification failed",
-    message: "AWS could not verify this address. Request a new link and try again.",
+    message: "We could not confirm this address. Request a new link and try again.",
     tone: "error",
   },
 }
@@ -165,7 +165,7 @@ export default function NotificationSettingsPage() {
       const result = await resendAlertVerification()
       setPreferences(result)
       setDraft(draftFromPreferences(result))
-      setNotice("A new AWS verification email has been requested.")
+      setNotice("A new verification email has been sent.")
     } catch (requestError) {
       if (requestError.status === 401) {
         router.replace("/sign-in?next=/settings/notifications")
@@ -225,7 +225,7 @@ export default function NotificationSettingsPage() {
           <strong>The last email could not be delivered.</strong>
           <p>
             {preferences.last_delivery_error_code
-              ? `AWS reported ${preferences.last_delivery_error_code}.`
+              ? `The email service reported ${preferences.last_delivery_error_code}.`
               : "Check the verified address, then try again."}
             {lastDeliveryAt ? ` Last attempt: ${lastDeliveryAt}.` : ""}
           </p>

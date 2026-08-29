@@ -73,3 +73,26 @@ class UnsubscribeResponse(BaseModel):
     """A generic response that does not reveal whether a token matched."""
 
     message: str
+
+
+class VerificationRequest(BaseModel):
+    """One signed email-verification token."""
+
+    token: str = Field(min_length=16, max_length=512)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("token")
+    @classmethod
+    def strip_token(cls, value: str) -> str:
+        """Reject whitespace-only tokens and ignore surrounding whitespace."""
+        token = value.strip()
+        if not token:
+            raise ValueError("token must not be empty")
+        return token
+
+
+class VerificationResponse(BaseModel):
+    """Result of consuming a signed email-verification token."""
+
+    message: str

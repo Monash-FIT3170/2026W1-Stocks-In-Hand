@@ -502,7 +502,7 @@ def test_subscription_and_rule_upserts_reset_and_replace_values(
 def test_old_email_verification_cannot_verify_a_replaced_address(
     db_session: Session,
 ) -> None:
-    """A late SES callback may not verify a newly changed subscription email."""
+    """An old confirmation link may not verify a replacement email address."""
     investor, _, _, _ = _records(db_session)
     initial = subscription_crud.upsert_subscription(
         db_session,
@@ -526,7 +526,7 @@ def test_old_email_verification_cannot_verify_a_replaced_address(
         investor_id=investor.id,
         email="new.address@example.com",
     )
-    late_callback = subscription_crud.update_verification_state(
+    stale_confirmation = subscription_crud.update_verification_state(
         db_session,
         investor_id=investor.id,
         verification_status="verified",
@@ -535,7 +535,7 @@ def test_old_email_verification_cannot_verify_a_replaced_address(
         expected_verification_status="pending",
     )
 
-    assert late_callback is None
+    assert stale_confirmation is None
     db_session.refresh(changed)
     assert changed.email == "new.address@example.com"
     assert changed.verification_status == "unverified"
@@ -545,7 +545,7 @@ def test_old_email_verification_cannot_verify_a_replaced_address(
 def test_verified_subscription_rejects_a_stale_pending_downgrade(
     db_session: Session,
 ) -> None:
-    """An older SES pending read may not downgrade a confirmed identity."""
+    """An older request may not downgrade a confirmed email address."""
     investor, _, _, _ = _records(db_session)
     email = "stable.address@example.com"
     subscription_crud.upsert_subscription(
@@ -591,11 +591,11 @@ def test_verified_subscription_rejects_a_stale_pending_downgrade(
 
 
 @pytest.mark.parametrize("observed_status", ("unverified", "failed"))
-def test_fresh_ses_disagreement_can_downgrade_a_verified_subscription(
+def test_current_state_change_can_downgrade_a_verified_subscription(
     db_session: Session,
     observed_status: str,
 ) -> None:
-    """A current SES read may correct a previously verified local identity."""
+    """A current compare-and-set write may replace a verified local state."""
     investor, _, _, _ = _records(db_session)
     email = f"disagreement-{uuid.uuid4().hex}@example.com"
     subscription_crud.upsert_subscription(
@@ -804,10 +804,10 @@ def test_lease_protection_blocks_late_outcomes_and_sent_rows_are_final(
         db_session, claim.id, claim.claimed_at, "message-id"
     )
     assert sent is not None and sent.status == "sent"
-    assert sent.ses_message_id == "message-id"
+    assert sent.provider_message_id == "message-id"
     assert (
         delivery_crud.mark_rejected(
-            db_session, sent.id, claim.claimed_at, "MessageRejected"
+            db_session, sent.id, claim.claimed_at, "invalid_parameter"
         )
         is None
     )
@@ -825,7 +825,7 @@ def test_failed_claims_retry_immediately_and_suppressions_are_terminal(
     failed = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
     assert failed is not None
     assert delivery_crud.mark_failed(
-        db_session, failed.id, failed.claimed_at, "Throttling"
+        db_session, failed.id, failed.claimed_at, "rate_limit"
     ) is not None
     retry = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
     assert retry is not None and retry.id == failed.id
@@ -842,11 +842,11 @@ def test_failed_claims_retry_immediately_and_suppressions_are_terminal(
         db_session,
         rejected_claim.id,
         rejected_claim.claimed_at,
-        "MessageRejected",
-        "SES rejected the destination",
+        "invalid_parameter",
+        "Brevo rejected the destination",
     )
     assert rejected is not None and rejected.status == "rejected"
-    assert rejected.error_code == "MessageRejected"
+    assert rejected.error_code == "invalid_parameter"
 
     cap_artifact = _artifact_for_run(db_session, ticker.id, scrape_run.id)
     cap_claim = delivery_crud.claim(

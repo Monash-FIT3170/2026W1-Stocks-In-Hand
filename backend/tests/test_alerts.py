@@ -15,7 +15,6 @@ from unittest.mock import MagicMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
-from botocore.exceptions import ClientError  # type: ignore[import-untyped]
 from sqlalchemy.dialects import postgresql
 
 from app.api.routes import notification_preferences
@@ -117,27 +116,24 @@ def _lease(investor_id: UUID, *, rollup: bool = False) -> notify.DeliveryLease:
     )
 
 
-def _message_rejected() -> ClientError:
-    return ClientError(
-        {"Error": {"Code": "MessageRejected", "Message": "private detail"}},
-        "SendEmail",
+def _message_rejected() -> notify.brevo_alerts.BrevoApiError:
+    return notify.brevo_alerts.BrevoApiError(
+        status_code=400,
+        code="invalid_parameter",
     )
 
 
-def test_compose_files_run_localstack_with_safe_local_credentials() -> None:
-    """Development and test stacks must point SES at their local emulator."""
+def test_compose_files_keep_brevo_delivery_in_dry_run_by_default() -> None:
+    """Local stacks must not send real Brevo messages by default."""
     if not (REPOSITORY_ROOT / "docker-compose-dev.yml").is_file():
         pytest.skip("Repository-level compose files are outside this test image")
 
     for filename in ("docker-compose-dev.yml", "docker-compose-tests.yml"):
         source = (REPOSITORY_ROOT / filename).read_text(encoding="utf-8")
-        assert "localstack/localstack:3" in source
-        assert "SERVICES: ses,sesv2,sqs" in source
-        assert '"4566:4566"' in source
-        assert "AWS_ENDPOINT_URL_SES: http://localstack:4566" in source
-        assert "AWS_ACCESS_KEY_ID: test" in source
-        assert "AWS_SECRET_ACCESS_KEY: test" in source
-        assert "condition: service_healthy" in source
+        assert "NOTIFICATIONS_DRY_RUN" in source
+        assert "BREVO_API_KEY" in source
+        assert "localstack/localstack" not in source
+        assert "AWS_ENDPOINT_URL_SES" not in source
 
 
 def test_rule_matching_covers_label_and_confidence_boundaries() -> None:
@@ -199,7 +195,11 @@ def test_per_run_cap_suppresses_direct_and_requests_one_rollup(
     rollup = Mock()
     monkeypatch.setattr(notify, "_load_preferences", lambda _id: preferences)
     monkeypatch.setattr(notify, "_claim_direct", lambda *_args: (lease, None))
-    monkeypatch.setattr(notify, "_check_identity", lambda *_args: True)
+    monkeypatch.setattr(
+        notify,
+        "_check_recipient_confirmation",
+        lambda *_args: True,
+    )
     monkeypatch.setattr(notify, "_over_run_cap", lambda *_args: True)
     monkeypatch.setattr(notify, "_transition_delivery", transition)
     monkeypatch.setattr(notify, "_ensure_rollup", rollup)
@@ -207,7 +207,11 @@ def test_per_run_cap_suppresses_direct_and_requests_one_rollup(
     notify._process_watcher(context, preferences.investor_id)
 
     assert transition.call_args.args == (lease, "suppressed_cap")
-    rollup.assert_called_once_with(context, preferences, identity_checked=True)
+    rollup.assert_called_once_with(
+        context,
+        preferences,
+        confirmation_checked=True,
+    )
 
 
 def test_existing_rollup_prevents_a_second_rollup_send(
@@ -224,7 +228,7 @@ def test_existing_rollup_prevents_a_second_rollup_send(
     )
     monkeypatch.setattr(notify, "_send_rendered", send)
 
-    notify._ensure_rollup(context, preferences, identity_checked=True)
+    notify._ensure_rollup(context, preferences, confirmation_checked=True)
 
     send.assert_not_called()
 
@@ -232,7 +236,7 @@ def test_existing_rollup_prevents_a_second_rollup_send(
 def test_daily_budget_suppresses_without_send_or_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Budget exhaustion records a terminal suppression without SES."""
+    """Budget exhaustion records a terminal suppression without Brevo."""
     context = _context()
     preferences = _preferences()
     lease = _lease(preferences.investor_id)
@@ -240,7 +244,11 @@ def test_daily_budget_suppresses_without_send_or_retry(
     send = Mock()
     monkeypatch.setattr(notify, "_load_preferences", lambda _id: preferences)
     monkeypatch.setattr(notify, "_claim_direct", lambda *_args: (lease, None))
-    monkeypatch.setattr(notify, "_check_identity", lambda *_args: True)
+    monkeypatch.setattr(
+        notify,
+        "_check_recipient_confirmation",
+        lambda *_args: True,
+    )
     monkeypatch.setattr(notify, "_over_run_cap", lambda *_args: False)
     monkeypatch.setattr(notify, "_at_daily_budget", lambda: True)
     monkeypatch.setattr(notify, "_transition_delivery", transition)
@@ -253,10 +261,10 @@ def test_daily_budget_suppresses_without_send_or_retry(
     send.assert_not_called()
 
 
-def test_terminal_ses_error_updates_ledger_and_subscription(
+def test_terminal_brevo_error_updates_ledger_and_subscription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """MessageRejected must update both durable outcome records and stop."""
+    """A terminal provider error must update both outcome records and stop."""
     preferences = _preferences()
     lease = _lease(preferences.investor_id)
     db = MagicMock()
@@ -283,9 +291,9 @@ def test_terminal_ses_error_updates_ledger_and_subscription(
         "https://app.example.test/unsubscribe/?t=signed",
     )
 
-    assert rejected.call_args.args[3] == "MessageRejected"
+    assert rejected.call_args.args[3] == "invalid_parameter"
     assert mirrored.call_args.kwargs["delivery_status"] == "rejected"
-    assert mirrored.call_args.kwargs["error_code"] == "MessageRejected"
+    assert mirrored.call_args.kwargs["error_code"] == "invalid_parameter"
     db.commit.assert_called_once_with()
 
 

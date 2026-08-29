@@ -1,16 +1,4 @@
 services:
-  localstack:
-    image: localstack/localstack:3
-    environment:
-      SERVICES: ses,sesv2,sqs
-    ports:
-      - "4566:4566"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/health >/dev/null"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-
   db:
     image: postgres:15-alpine
     environment:
@@ -41,18 +29,16 @@ services:
       AWS_DEFAULT_REGION: ap-southeast-2
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
-      AWS_ENDPOINT_URL_SES: http://localstack:4566
       NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-true}
-      NOTIFICATIONS_DRY_RUN: ${NOTIFICATIONS_DRY_RUN:-false}
+      NOTIFICATIONS_DRY_RUN: ${NOTIFICATIONS_DRY_RUN:-true}
       ALERT_SENDER_EMAIL: ${ALERT_SENDER_EMAIL:-alerts@example.com}
-      FRONTEND_BASE_URL: http://localhost:3000
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       db:
-        condition: service_healthy
-      localstack:
         condition: service_healthy
     healthcheck:
       test: "curl localhost:8000/health"

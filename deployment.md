@@ -53,7 +53,7 @@ Private frontend S3             API Gateway HTTP API
                                       Notification Lambda
                                                 |
                                                 v
-                                           Amazon SES
+                                            Brevo API
 ```
 
 Each primary queue has its own dead-letter queue. Discovery, downloading, and
@@ -124,6 +124,7 @@ AWS-managed SSM key:
 ```text
 /stocks-in-hand/staging/database-url
 /stocks-in-hand/staging/groq-api-key
+/stocks-in-hand/staging/brevo-api-key
 ```
 
 The database URL must be the Supabase transaction-mode pooler URL used by
@@ -135,18 +136,24 @@ Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
 is configured separately from the set available for manual administrator
 requests.
 
-### SES watchlist alerts
+### Brevo watchlist alerts
 
 `NotificationsEnabled` is the deployment master switch and defaults to
 `false`. When false, analysis does not publish notification messages, the SQS
-event source stays disabled, and SES permissions are omitted. The notification
-queue, dead-letter queue, worker, log group, and alarm still exist for a safe
-dark launch.
+event source stays disabled, and the Brevo API key is not loaded. The
+notification queue, dead-letter queue, worker, log group, and alarm still exist
+for a safe dark launch.
 
 `AlertSenderEmail` is required when `NotificationsEnabled=true`. The address
-must be verified in SES in `ap-southeast-2`. The staging workflow passes it
-from the GitHub `ALERT_SENDER_EMAIL` variable. Set it in the protected
-`staging` environment before preparing an enabled change set.
+must be verified in the Brevo account. The staging workflow passes it from the
+GitHub `ALERT_SENDER_EMAIL` variable. Store the Brevo API key in the SSM
+`SecureString` parameter `/stocks-in-hand/staging/brevo-api-key`. Set the GitHub
+variable in the protected `staging` environment before preparing an enabled
+change set.
+
+Recipient confirmation is owned by the app. Enabling alerts sends a signed,
+24-hour link through Brevo. Clicking it marks that subscription as verified.
+Recipients do not need a Brevo account or a Brevo contact record.
 
 The other template controls are `AlertDailyBudget`, which defaults to `180`,
 and `AlertMaxPerInvestorPerRun`, which defaults to `5`. The worker sends at
@@ -176,7 +183,7 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
   at-least-once.
 - Database uniqueness, conditional S3 writes, and monotonic status transitions
   make retries idempotent.
-- Notification delivery uses a database claim before SES. Duplicate queue
+- Notification delivery uses a database claim before Brevo. Duplicate queue
   messages do not send a second email, and stale claims can be recovered.
 - Unsubscribe tokens are stored as hashes. The public endpoint returns the same
   response for valid and invalid tokens.
@@ -191,15 +198,15 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
 
 1. Run backend tests, frontend static export, static checks, image smoke tests,
    SAM validation, and CloudFormation linting. The compose suite includes
-   LocalStack and the notification alert contracts.
+   Brevo dry-run and notification alert contracts.
 2. Back up Supabase, preview legacy duplicate analysis rows, and apply the
    Alembic migration using the migration connection.
 3. Deploy `infra/bootstrap.yaml` to create the budget and ECR repositories.
 4. Store the runtime SSM parameters interactively.
 5. Build and push immutable API, scraper, and analysis images tagged with the
    full Git commit SHA.
-6. Verify the SES sender in `ap-southeast-2`, set the protected GitHub
-   `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
+6. Verify the sender in Brevo, store the Brevo API key in SSM, set the protected
+   GitHub `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
 7. Create the SAM change set with `ScheduleEnabled=false` and notifications
    disabled. Person 1 reviews it before Person 2 executes the approved ARN.
 8. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
@@ -208,7 +215,7 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
    every source.
 10. Verify the database, queues, private S3 object, analysis result, logs,
    duplicate suppression, and one DLQ redrive.
-11. Enable alerts through a second reviewed change set, then complete the SES
+11. Enable alerts through a second reviewed change set, then complete the Brevo
     smoke test below.
 12. Enable the weekly schedule only for sources that pass.
 13. Configure the manual GitHub OIDC workflow only after the first manual
@@ -221,7 +228,7 @@ migrations are never downgraded automatically.
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.
 
-## SES alert rollout and rollback
+## Brevo alert rollout and rollback
 
 Keep alerts disabled during the first deployment. Confirm the stack contains
 `NotificationQueue`, `NotificationFunction`, the notification DLQ alarm, and
@@ -229,28 +236,31 @@ the new alert tables. The notification SQS event source must remain disabled.
 
 Before enabling alerts:
 
-1. Confirm the sender identity is verified in SES in `ap-southeast-2`.
-2. Confirm `ALERT_SENDER_EMAIL` is set in the GitHub `staging` environment.
-3. Use one staging investor whose account email you control.
-4. Prepare a new release with `enable_notifications=true` and review its change
+1. Confirm the sender address is verified in the Brevo account.
+2. Confirm `/stocks-in-hand/staging/brevo-api-key` exists as an SSM
+   `SecureString`.
+3. Confirm `ALERT_SENDER_EMAIL` is set in the GitHub `staging` environment.
+4. Use one staging investor whose account email you control.
+5. Prepare a new release with `enable_notifications=true` and review its change
    set. `AlertSenderEmail` cannot be empty in this change set.
-5. Execute the approved change set, then enable alerts in the investor's
+6. Execute the approved change set, then enable alerts in the investor's
    notification settings.
-6. Click the SES verification link and confirm the UI reports `verified`.
-7. Trigger one bounded scrape and confirm exactly one email and one `sent`
+7. Click the app confirmation link from the Brevo email. Confirm the UI reports
+   that the address is verified.
+8. Trigger one bounded scrape and confirm exactly one email and one `sent`
    delivery ledger row.
-8. Replay the same notification message and confirm no second email is sent.
-9. Click unsubscribe and confirm the subscription is disabled.
+9. Replay the same notification message and confirm no second email is sent.
+10. Click unsubscribe and confirm the subscription is disabled.
 
-Use only a verified address for the real smoke test. LocalStack and unit tests
-do not prove SES sandbox delivery, identity email receipt, or inbox rendering.
+Use an inbox you control for the real smoke test. Dry-run and unit tests do not
+prove Brevo delivery, confirmation email receipt, or inbox rendering.
 
 To stop alert delivery, prepare and execute a reviewed change set with
-`enable_notifications=false`. This removes producer and SES permissions and
-disables the notification event source. Messages already in Queue D remain for
-up to four days. Inspect that queue before re-enabling alerts, since retained
-messages may run later. Do not purge or redrive it without an approved incident
-decision.
+`enable_notifications=false`. This stops the producer, skips Brevo secret
+loading, and disables the notification event source. Messages already in Queue
+D remain for up to four days. Inspect that queue before re-enabling alerts,
+since retained messages may run later. Do not purge or redrive it without an
+approved incident decision.
 
 ## Acceptance criteria
 
@@ -266,8 +276,8 @@ decision.
   DLQ.
 - Duplicate API, SQS, S3, and cross-run document deliveries do not create
   duplicate analysis results.
-- A verified, opted-in investor receives one matching SES alert. Replays do not
-  send another email, and the unsubscribe link disables future delivery.
+- A verified, opted-in investor receives one matching Brevo alert. Replays do
+  not send another email, and the unsubscribe link disables future delivery.
 - Buckets are private, the weekly schedule is disabled by default, retention
   policies are active, and projected AWS usage remains below US$10 per month.
 
@@ -278,6 +288,6 @@ before being placed on the weekly schedule. A documented source-specific
 exception is acceptable for the demo as long as the other sources pass and
 BHP remains manual.
 
-SES remains a separate release gate. LocalStack cannot prove recipient
-verification or real inbox delivery. Do not enable notifications for general
+Brevo remains a separate release gate. Dry-run cannot prove recipient
+confirmation or real inbox delivery. Do not enable notifications for general
 staging users until the verified-address smoke test passes.

@@ -20,8 +20,10 @@ from app.core.config import settings
 from app.schemas.notification import (
     NotificationPreferencesUpdate,
     UnsubscribeRequest,
+    VerificationRequest,
 )
 from app.services.unsubscribe_tokens import create_signed_unsubscribe_token
+from app.services.verification_tokens import create_signed_verification_token
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -100,34 +102,57 @@ def test_get_preferences_returns_safe_defaults(monkeypatch: pytest.MonkeyPatch) 
     assert response.unsubscribe_token is None
 
 
-def test_get_preferences_refreshes_pending_identity(
+def test_get_preferences_keeps_pending_local_confirmation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """GET should persist a verified SES status using guarded state changes."""
+    """GET must not ask an external provider for recipient identity state."""
     investor = _investor()
     pending = _subscription(investor_id=investor.id)
-    verified = _subscription(
-        investor_id=investor.id,
-        verification_status="verified",
-        verified_at=datetime.now(timezone.utc),
-    )
     rule = _rule()
     monkeypatch.setattr(routes, "_load_preferences", lambda *_args: (pending, rule))
-    monkeypatch.setattr(routes.ses_alerts, "identity_status", lambda _email: "verified")
-    update = MagicMock(return_value=verified)
-    monkeypatch.setattr(
-        routes.alert_subscription_crud,
-        "update_verification_state",
-        update,
-    )
 
     response = routes.get_notification_preferences(
         db=MagicMock(),
         current_investor=investor,
     )
 
-    assert response.verification_status == "verified"
-    update.assert_called_once()
+    assert response.verification_status == "pending"
+
+
+def test_verification_email_contains_current_signed_app_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider message must link back to the app with a valid token."""
+    subscription_id = uuid4()
+    requested_at = datetime.now(timezone.utc)
+    token_hash = "d" * 64
+    send = MagicMock(return_value="brevo-verification-message")
+    monkeypatch.setattr(
+        settings,
+        "FRONTEND_BASE_URL",
+        "https://app.example.test",
+        raising=False,
+    )
+    monkeypatch.setattr(routes.brevo_alerts, "send_email", send)
+
+    routes._send_verification_email(  # pylint: disable=protected-access
+        subscription_id=subscription_id,
+        email="investor@example.com",
+        unsubscribe_token_hash=token_hash,
+        requested_at=requested_at,
+    )
+
+    text_body = send.call_args.kwargs["text"]
+    token = text_body.split("?t=", 1)[1].splitlines()[0]
+    assert send.call_args.kwargs["to"] == "investor@example.com"
+    assert "/verify-notifications/?t=" in text_body
+    assert routes.verify_signed_verification_token(
+        token,
+        token_hash,
+        requested_at,
+        now=requested_at,
+        ttl=timedelta(hours=24),
+    ) == subscription_id
 
 
 def test_enable_preferences_returns_raw_token_once_and_stores_only_hash(
@@ -147,7 +172,7 @@ def test_enable_preferences_returns_raw_token_once_and_stores_only_hash(
         lambda *_args: None,
     )
     verification = MagicMock()
-    monkeypatch.setattr(routes.ses_alerts, "request_verification", verification)
+    monkeypatch.setattr(routes, "_send_verification_email", verification)
 
     subscription_upsert = MagicMock(return_value=pending)
     rule_upsert = MagicMock(return_value=rule)
@@ -162,6 +187,7 @@ def test_enable_preferences_returns_raw_token_once_and_stores_only_hash(
         "upsert_default_alert_rule",
         rule_upsert,
     )
+    monkeypatch.setattr(routes, "_load_preferences", lambda *_args: (pending, rule))
     monkeypatch.setattr(
         routes.alert_subscription_crud,
         "update_verification_state",
@@ -186,7 +212,8 @@ def test_enable_preferences_returns_raw_token_once_and_stores_only_hash(
         expected_hash
     )
     assert response.unsubscribe_token != expected_hash
-    verification.assert_called_once_with(investor.email)
+    verification.assert_called_once()
+    assert verification.call_args.kwargs["email"] == investor.email
     db.commit.assert_called_once()
 
 
@@ -202,7 +229,7 @@ def test_enable_is_blocked_while_deployment_switch_is_off(
         lambda *_args: None,
     )
     verification = MagicMock()
-    monkeypatch.setattr(routes.ses_alerts, "request_verification", verification)
+    monkeypatch.setattr(routes, "_send_verification_email", verification)
 
     with pytest.raises(HTTPException) as error:
         routes.update_notification_preferences(
@@ -230,7 +257,7 @@ def test_resend_verification_is_rate_limited(
         lambda *_args: (subscription, _rule()),
     )
     verification = MagicMock()
-    monkeypatch.setattr(routes.ses_alerts, "request_verification", verification)
+    monkeypatch.setattr(routes, "_send_verification_email", verification)
 
     with pytest.raises(HTTPException) as error:
         routes.resend_notification_verification(
@@ -243,10 +270,49 @@ def test_resend_verification_is_rate_limited(
     verification.assert_not_called()
 
 
-def test_resend_reserves_database_window_before_ses(
+def test_saving_preferences_cannot_bypass_verification_rate_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The persisted rate-limit reservation must precede the SES request."""
+    """Repeated preference saves must not send extra confirmation emails."""
+    investor = _investor()
+    subscription = _subscription(
+        investor_id=investor.id,
+        verification_requested_at=datetime.now(timezone.utc),
+    )
+    rule = _rule()
+    db = MagicMock()
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "get_subscription_by_investor",
+        lambda *_args: subscription,
+    )
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "upsert_subscription",
+        lambda *_args, **_kwargs: subscription,
+    )
+    monkeypatch.setattr(
+        routes.alert_rule_crud,
+        "upsert_default_alert_rule",
+        lambda *_args, **_kwargs: rule,
+    )
+    verification = MagicMock()
+    monkeypatch.setattr(routes, "_send_verification_email", verification)
+
+    response = routes.update_notification_preferences(
+        body=NotificationPreferencesUpdate(enabled=True),
+        db=db,
+        current_investor=investor,
+    )
+
+    assert response.verification_status == "pending"
+    verification.assert_not_called()
+
+
+def test_resend_reserves_database_window_before_brevo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The persisted rate-limit reservation must precede the Brevo request."""
     investor = _investor()
     subscription = _subscription(
         investor_id=investor.id,
@@ -279,9 +345,9 @@ def test_resend_reserves_database_window_before_ses(
         lambda *_args: subscription,
     )
     monkeypatch.setattr(
-        routes.ses_alerts,
-        "request_verification",
-        lambda _email: events.append("ses_requested"),
+        routes,
+        "_send_verification_email",
+        lambda **_kwargs: events.append("brevo_requested"),
     )
 
     response = routes.resend_notification_verification(
@@ -290,7 +356,83 @@ def test_resend_reserves_database_window_before_ses(
     )
 
     assert response.verification_status == "pending"
-    assert events == ["reserved", "transaction_released", "ses_requested"]
+    assert events == ["reserved", "transaction_released", "brevo_requested"]
+
+
+def test_signed_verification_token_confirms_pending_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A current signed link must complete the guarded local confirmation."""
+    requested_at = datetime.now(timezone.utc)
+    pending = _subscription(verification_requested_at=requested_at)
+    token = create_signed_verification_token(
+        pending.id,
+        pending.unsubscribe_token_hash,
+        requested_at,
+    )
+    verified = _subscription(
+        id=pending.id,
+        investor_id=pending.investor_id,
+        verification_status="verified",
+        verification_requested_at=requested_at,
+        verified_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "get_subscription",
+        lambda *_args: pending,
+    )
+    update = MagicMock(return_value=verified)
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "update_verification_state",
+        update,
+    )
+
+    response = routes.verify_notification_email(
+        VerificationRequest(token=token),
+        db=MagicMock(),
+    )
+
+    assert response.message == routes.VERIFICATION_MESSAGE
+    assert update.call_args.kwargs["verification_status"] == "verified"
+    assert update.call_args.kwargs["expected_verification_status"] == "pending"
+    assert update.call_args.kwargs["expected_verification_requested_at"] == (
+        requested_at
+    )
+
+
+def test_expired_verification_token_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expired links must not change subscription confirmation state."""
+    requested_at = datetime.now(timezone.utc) - timedelta(hours=25)
+    pending = _subscription(verification_requested_at=requested_at)
+    token = create_signed_verification_token(
+        pending.id,
+        pending.unsubscribe_token_hash,
+        requested_at,
+    )
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "get_subscription",
+        lambda *_args: pending,
+    )
+    update = MagicMock()
+    monkeypatch.setattr(
+        routes.alert_subscription_crud,
+        "update_verification_state",
+        update,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        routes.verify_notification_email(
+            VerificationRequest(token=token),
+            db=MagicMock(),
+        )
+
+    assert error.value.status_code == 400
+    update.assert_not_called()
 
 
 def test_raw_and_signed_unsubscribe_tokens_disable_without_oracle(
@@ -344,8 +486,8 @@ def test_raw_and_signed_unsubscribe_tokens_disable_without_oracle(
     assert disable.call_count == 2
 
 
-def test_router_authenticates_preferences_but_not_unsubscribe() -> None:
-    """Preference routes require a session while unsubscribe remains public."""
+def test_router_authenticates_preferences_but_not_public_token_routes() -> None:
+    """Preference routes require a session while token callbacks stay public."""
     notification_routes = [
         route
         for route in routes.router.routes
@@ -355,12 +497,14 @@ def test_router_authenticates_preferences_but_not_unsubscribe() -> None:
     assert {route.path for route in notification_routes} == {
         "/notifications/preferences",
         "/notifications/preferences/resend-verification",
+        "/notifications/verify",
         "/notifications/unsubscribe",
     }
     preference_routes = [
         route
         for route in notification_routes
-        if route.path != "/notifications/unsubscribe"
+        if route.path
+        not in {"/notifications/unsubscribe", "/notifications/verify"}
     ]
     assert len(preference_routes) == 3
     for route in preference_routes:
@@ -379,6 +523,17 @@ def test_router_authenticates_preferences_but_not_unsubscribe() -> None:
         for dependency in unsubscribe_route.dependant.dependencies
     }
     assert get_current_investor not in unsubscribe_dependencies
+
+    verification_route = next(
+        route
+        for route in notification_routes
+        if route.path == "/notifications/verify"
+    )
+    verification_dependencies = {
+        dependency.call
+        for dependency in verification_route.dependant.dependencies
+    }
+    assert get_current_investor not in verification_dependencies
 
     main_module = (REPOSITORY_ROOT / "backend" / "main.py").read_text(
         encoding="utf-8"

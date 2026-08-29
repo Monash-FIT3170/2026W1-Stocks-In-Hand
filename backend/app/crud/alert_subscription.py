@@ -55,7 +55,7 @@ def _normalise_token_hash(token_hash: str) -> str:
 
 
 def _verification_status(value: str) -> str:
-    """Validate one persisted SES verification status."""
+    """Validate one persisted application confirmation status."""
     status = str(value).strip().lower()
     if status not in VERIFICATION_STATUSES:
         allowed = ", ".join(sorted(VERIFICATION_STATUSES))
@@ -193,7 +193,7 @@ def update_verification_state(  # pylint: disable=too-many-arguments,too-many-br
     verified_at: datetime | None | object = _UNSET,
     commit: bool = True,
 ) -> AlertSubscription | None:
-    """Apply a guarded SES verification transition for one subscription."""
+    """Apply a guarded email-confirmation transition for one subscription."""
     commit = _validate_commit(commit)
     status = _verification_status(verification_status)
     expected_status = _verification_status(expected_verification_status)

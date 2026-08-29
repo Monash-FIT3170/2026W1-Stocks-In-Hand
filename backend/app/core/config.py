@@ -68,6 +68,13 @@ class Settings:
     )
     NOTIFICATION_QUEUE_URL: str = os.getenv("NOTIFICATION_QUEUE_URL", "")
     ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
+    ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    BREVO_API_KEY_PARAMETER: str = os.getenv("BREVO_API_KEY_PARAMETER", "")
+    BREVO_API_BASE_URL: str = os.getenv(
+        "BREVO_API_BASE_URL",
+        "https://api.brevo.com/v3",
+    )
     ALERT_DAILY_BUDGET: int = _env_int(
         "ALERT_DAILY_BUDGET",
         180,
@@ -87,11 +94,15 @@ class Settings:
         15,
         minimum=1,
     )
+    ALERT_VERIFICATION_TOKEN_TTL_HOURS: int = _env_int(
+        "ALERT_VERIFICATION_TOKEN_TTL_HOURS",
+        24,
+        minimum=1,
+    )
     FRONTEND_BASE_URL: str = os.getenv(
         "FRONTEND_BASE_URL",
         "http://localhost:3000",
     )
-    AWS_ENDPOINT_URL_SES: str = os.getenv("AWS_ENDPOINT_URL_SES", "")
     SOURCE_URLS: dict[str, str] = {
         ticker: os.getenv(f"{ticker}_SOURCE_URL", str(source.source_url))
         for ticker, source in SOURCES.items()

@@ -1,4 +1,4 @@
-"""SQLAlchemy model for the SES alert delivery ledger."""
+"""SQLAlchemy model for the provider-neutral alert delivery ledger."""
 
 # SQLAlchemy exposes ``func.now`` dynamically.
 # pylint: disable=not-callable
@@ -87,7 +87,7 @@ class AlertDelivery(Base):
         default="claimed",
         server_default="claimed",
     )
-    ses_message_id = Column(String, nullable=True)
+    provider_message_id = Column(String, nullable=True)
     error_code = Column(String, nullable=True)
     error_detail = Column(Text, nullable=True)
     claimed_at = Column(

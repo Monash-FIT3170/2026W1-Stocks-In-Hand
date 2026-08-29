@@ -1,10 +1,9 @@
-"""SQS consumer for database-backed SES watchlist alerts.
+"""SQS consumer for database-backed Brevo watchlist alerts.
 
 Durable ledger outcomes deduplicate normal SQS replays. The external boundary
-is still at least once: SES can accept a message immediately before the Lambda
-loses its response or its outcome transaction. A stale takeover may then send
-that message again. SES SendEmail has no idempotency key that can close this
-distributed transaction gap without choosing possible message loss instead.
+is still at least once: Brevo can accept a message immediately before the
+Lambda loses its response or its outcome transaction. A stale takeover may
+then send that message again.
 """
 
 from __future__ import annotations
@@ -20,10 +19,7 @@ from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
-from botocore.exceptions import (  # type: ignore[import-untyped]
-    BotoCoreError,
-    ClientError,
-)
+import httpx
 from pydantic import ValidationError
 from sqlalchemy import select
 
@@ -50,7 +46,7 @@ from app.models.artifact import Artifact  # noqa: E402
 from app.models.artifact_sentiment import ArtifactSentiment  # noqa: E402
 from app.models.artifact_summary import ArtifactSummary  # noqa: E402
 from app.models.ticker import Ticker  # noqa: E402
-from app.services import ses_alerts  # noqa: E402
+from app.services import brevo_alerts  # noqa: E402
 from app.services.alert_templates import (  # noqa: E402
     render_alert_email,
     render_rollup_email,
@@ -390,7 +386,7 @@ def _transition_delivery(  # pylint: disable=too-many-arguments,too-many-branche
     lease: DeliveryLease,
     outcome: str,
     *,
-    ses_message_id: str | None = None,
+    provider_message_id: str | None = None,
     error_code: str | None = None,
     error_detail: str | None = None,
 ) -> str:
@@ -402,7 +398,7 @@ def _transition_delivery(  # pylint: disable=too-many-arguments,too-many-branche
                 db,
                 lease.id,
                 lease.claimed_at,
-                ses_message_id or "",
+                provider_message_id or "",
                 commit=False,
             )
         elif outcome == "rejected":
@@ -464,64 +460,6 @@ def _transition_delivery(  # pylint: disable=too-many-arguments,too-many-branche
         return str(changed.status)
 
 
-def _reject_with_identity_correction(
-    lease: DeliveryLease,
-    preferences: WatcherPreferences,
-    verification_status: str,
-) -> None:
-    """Correct SES state and reject the delivery in one transaction."""
-    delivery_at = datetime.now(timezone.utc)
-    with database_session() as db:
-        correction_arguments: dict[str, Any] = {
-            "investor_id": preferences.investor_id,
-            "verification_status": verification_status,
-            "expected_verification_status": preferences.verification_status,
-            "expected_email": preferences.email,
-            "expected_verification_requested_at": (
-                preferences.verification_requested_at
-            ),
-            "commit": False,
-        }
-        if (
-            verification_status == "pending"
-            and preferences.verification_requested_at is not None
-        ):
-            correction_arguments["verification_requested_at"] = (
-                preferences.verification_requested_at
-            )
-        corrected = alert_subscription_crud.update_verification_state(
-            db,
-            **correction_arguments,
-        )
-        changed = alert_delivery_crud.mark_rejected(
-            db,
-            lease.id,
-            lease.claimed_at,
-            "recipient_not_verified",
-            "SES identity is not verified",
-            commit=False,
-        )
-        if corrected is None or changed is None:
-            raise RetryableNotificationError(
-                "Preferences changed during the SES identity check",
-                code="subscription_state_changed",
-            )
-        subscription = alert_subscription_crud.record_delivery_outcome(
-            db,
-            investor_id=lease.investor_id,
-            delivery_status="rejected",
-            delivery_at=delivery_at,
-            error_code="recipient_not_verified",
-            commit=False,
-        )
-        if subscription is None:
-            raise RetryableNotificationError(
-                "Subscription disappeared before rejection commit",
-                code="subscription_state_changed",
-            )
-        db.commit()
-
-
 def _fail_and_retry(lease: DeliveryLease, *, code: str) -> NoReturn:
     """Persist a sanitized retryable outcome, then fail the SQS record."""
     _transition_delivery(
@@ -536,42 +474,19 @@ def _fail_and_retry(lease: DeliveryLease, *, code: str) -> NoReturn:
     )
 
 
-def _check_identity(
+def _check_recipient_confirmation(
     lease: DeliveryLease,
     preferences: WatcherPreferences,
 ) -> bool:
-    """Require both local and live SES verification before sending."""
-    if preferences.verification_status != "verified":
-        _transition_delivery(
-            lease,
-            "rejected",
-            error_code="recipient_not_verified",
-            error_detail="Local subscription identity is not verified",
-        )
-        return False
-
-    try:
-        status = ses_alerts.identity_status(preferences.email)
-    except ValueError:
-        _transition_delivery(
-            lease,
-            "rejected",
-            error_code="invalid_recipient",
-            error_detail="Recipient address is invalid",
-        )
-        return False
-    except (ClientError, BotoCoreError):
-        _fail_and_retry(lease, code="ses_identity_check_failed")
-    except Exception:  # pylint: disable=broad-exception-caught
-        _fail_and_retry(lease, code="identity_check_failed")
-
-    if status == "verified":
+    """Require the application-owned recipient confirmation before sending."""
+    if preferences.verification_status == "verified":
         return True
-    if status == "temporary_failure":
-        _fail_and_retry(lease, code="ses_identity_temporary_failure")
-    if status not in {"unverified", "pending", "failed"}:
-        _fail_and_retry(lease, code="ses_identity_state_invalid")
-    _reject_with_identity_correction(lease, preferences, status)
+    _transition_delivery(
+        lease,
+        "rejected",
+        error_code="recipient_not_verified",
+        error_detail="The subscription email has not been confirmed",
+    )
     return False
 
 
@@ -615,7 +530,7 @@ def _send_alert(  # pylint: disable=too-many-arguments
             if delay > 0:
                 time.sleep(delay)
         try:
-            return ses_alerts.send_alert(
+            return brevo_alerts.send_email(
                 to=to,
                 subject=subject,
                 html=html,
@@ -633,7 +548,7 @@ def _send_rendered(
     rendered: tuple[str, str, str],
     unsubscribe_url: str,
 ) -> None:
-    """Send one rendered message and classify SES failures."""
+    """Send one rendered message and classify Brevo failures."""
     subject, html, text_body = rendered
     try:
         message_id = _send_alert(
@@ -643,19 +558,21 @@ def _send_rendered(
             text_body=text_body,
             unsubscribe_url=unsubscribe_url,
         )
-    except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code") or "ClientError")
-        if code in {"MessageRejected", "MessageRejectedException"}:
+    except brevo_alerts.BrevoApiError as exc:
+        code = exc.code[:128]
+        if not exc.retryable and exc.status_code in {400, 404, 422}:
             _transition_delivery(
                 lease,
                 "rejected",
                 error_code=code,
-                error_detail="SES rejected the recipient or message",
+                error_detail="Brevo rejected the recipient or message",
             )
             return
-        _fail_and_retry(lease, code=code[:128])
-    except BotoCoreError:
-        _fail_and_retry(lease, code="ses_transport_error")
+        _fail_and_retry(lease, code=code)
+    except httpx.HTTPError:
+        _fail_and_retry(lease, code="brevo_transport_error")
+    except brevo_alerts.BrevoAlertConfigurationError:
+        _fail_and_retry(lease, code="brevo_configuration_error")
     except ValueError as exc:
         code = (
             "invalid_recipient"
@@ -672,12 +589,12 @@ def _send_rendered(
             return
         _fail_and_retry(lease, code=code)
     except Exception:  # pylint: disable=broad-exception-caught
-        _fail_and_retry(lease, code="ses_send_failed")
+        _fail_and_retry(lease, code="brevo_send_failed")
 
     _transition_delivery(
         lease,
         "sent",
-        ses_message_id=message_id,
+        provider_message_id=message_id,
     )
 
 
@@ -723,7 +640,7 @@ def _ensure_rollup(  # pylint: disable=too-many-return-statements
     context: NotificationContext,
     preferences: WatcherPreferences,
     *,
-    identity_checked: bool,
+    confirmation_checked: bool,
 ) -> None:
     """Claim or recover the one rollup allowed for this scrape run."""
     lease, existing_status = _claim_rollup(context, preferences)
@@ -740,7 +657,10 @@ def _ensure_rollup(  # pylint: disable=too-many-return-statements
             code="rollup_claim_unavailable",
         )
 
-    if not identity_checked and not _check_identity(lease, preferences):
+    if not confirmation_checked and not _check_recipient_confirmation(
+        lease,
+        preferences,
+    ):
         return
     if _at_daily_budget():
         _transition_delivery(
@@ -804,7 +724,7 @@ def _process_watcher(  # pylint: disable=too-many-return-statements
             _ensure_rollup(
                 context,
                 preferences,
-                identity_checked=False,
+                confirmation_checked=False,
             )
             return
         if existing_status in {
@@ -819,7 +739,7 @@ def _process_watcher(  # pylint: disable=too-many-return-statements
             code="delivery_claim_unavailable",
         )
 
-    if not _check_identity(lease, preferences):
+    if not _check_recipient_confirmation(lease, preferences):
         return
     if _over_run_cap(context, investor_id):
         _transition_delivery(
@@ -831,7 +751,7 @@ def _process_watcher(  # pylint: disable=too-many-return-statements
         _ensure_rollup(
             context,
             preferences,
-            identity_checked=True,
+            confirmation_checked=True,
         )
         return
     if _at_daily_budget():

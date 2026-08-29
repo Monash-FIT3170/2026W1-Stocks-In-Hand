@@ -143,7 +143,7 @@ def claim(
                 "rule_id": rule_id,
                 "status": "claimed",
                 "claimed_at": claimed_at,
-                "ses_message_id": None,
+                "provider_message_id": None,
                 "error_code": None,
                 "error_detail": None,
                 "sent_at": None,
@@ -193,7 +193,7 @@ def claim_rollup(
                 "rule_id": rule_id,
                 "status": "claimed",
                 "claimed_at": claimed_at,
-                "ses_message_id": None,
+                "provider_message_id": None,
                 "error_code": None,
                 "error_detail": None,
                 "sent_at": None,
@@ -217,7 +217,7 @@ def _transition(
     expected_claimed_at: datetime,
     *,
     status: str | object,
-    ses_message_id: str | None = None,
+    provider_message_id: str | None = None,
     error_code: str | None = None,
     error_detail: str | None = None,
     sent_at: object | None = None,
@@ -235,7 +235,7 @@ def _transition(
         )
         .values(
             status=status,
-            ses_message_id=ses_message_id,
+            provider_message_id=provider_message_id,
             error_code=_trim(error_code, _ERROR_CODE_LIMIT),
             error_detail=_trim(error_detail, _ERROR_DETAIL_LIMIT),
             sent_at=sent_at,
@@ -249,14 +249,14 @@ def mark_sent(
     db: Session,
     delivery_id: UUID,
     expected_claimed_at: datetime,
-    ses_message_id: str,
+    provider_message_id: str,
     *,
     commit: bool = True,
 ) -> AlertDelivery | None:
     """Mark a leased direct or rollup delivery as sent."""
-    message_id = ses_message_id.strip()
+    message_id = provider_message_id.strip()
     if not message_id:
-        raise ValueError("ses_message_id must not be empty")
+        raise ValueError("provider_message_id must not be empty")
     return _transition(
         db,
         delivery_id,
@@ -265,7 +265,7 @@ def mark_sent(
             (AlertDelivery.artifact_id.is_(None), "rollup_sent"),
             else_="sent",
         ),
-        ses_message_id=message_id[:512],
+        provider_message_id=message_id[:512],
         sent_at=func.now(),
         commit=commit,
     )
