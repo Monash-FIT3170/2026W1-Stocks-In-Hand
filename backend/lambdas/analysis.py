@@ -6,7 +6,8 @@ import logging
 import os
 import re
 import time
-from urllib.parse import unquote_plus
+from pathlib import PurePosixPath
+from urllib.parse import unquote_plus, urlparse
 from uuid import UUID
 
 import boto3
@@ -23,7 +24,11 @@ from lambdas.download_validation import (
     DocumentFormat,
     validate_document_content,
 )
-from parsing.analysis import AnalysisOutput, analyse_document
+from parsing.analysis import (
+    AnalysisOutput,
+    analyse_document,
+)
+from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
 SUPPORTED_TICKERS = frozenset({"ANZ", "BHP", "CBA", "CSL", "WES"})
@@ -40,6 +45,21 @@ OBJECT_KEY = re.compile(
     r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
     re.IGNORECASE,
 )
+
+
+def _artifact_filename(artifact) -> str | None:
+    metadata = getattr(artifact, "artifact_metadata", None)
+    if isinstance(metadata, dict):
+        filename = metadata.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+    for attribute in ("document_url", "url"):
+        value = getattr(artifact, attribute, None)
+        if isinstance(value, str) and value:
+            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
+            if filename:
+                return filename
+    return None
 
 
 def parse_s3_notifications(
@@ -132,6 +152,9 @@ def _artifact_state(
             "s3_bucket": artifact.s3_bucket,
             "s3_key": artifact.s3_key,
             "checksum": artifact.checksum_sha256,
+            "source_type": getattr(artifact, "source_type", None),
+            "source_adapter": getattr(artifact, "source_adapter", None),
+            "filename": _artifact_filename(artifact),
         }
 
     if state["download_status"] == "stored":
@@ -344,6 +367,21 @@ def _analyse_object(
         max_pages=int(os.getenv("MAX_PDF_PAGES", "100")),
         document_format=document_format,
         max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
+        filename=state.get("filename") or key.rsplit("/", 1)[-1],
+        source_type=state.get("source_type"),
+        source_adapter=state.get("source_adapter"),
+    )
+    if output.parsed.classification is None:
+        raise RuntimeError("Analysis output is missing structured classification")
+    analysis_metadata = merge_classification_metadata(
+        {}, output.parsed.classification
+    )
+    analysis_metadata.update(
+        {
+            "extracted_data": output.parsed.extracted_data,
+            "page_count": output.parsed.page_count,
+            "document_format": document_format,
+        }
     )
 
     with database_session() as db:
@@ -353,13 +391,7 @@ def _analyse_object(
             db,
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
-            metadata={
-                "category": output.parsed.category,
-                "category_confidence": output.parsed.category_confidence,
-                "extracted_data": output.parsed.extracted_data,
-                "page_count": output.parsed.page_count,
-                "document_format": document_format,
-            },
+            metadata=analysis_metadata,
             summary=_summary_values(output),
             sentiment=_sentiment_values(output),
         )
@@ -379,6 +411,11 @@ def _analyse_object(
         attempt=attempt,
         page_count=output.parsed.page_count,
         category=output.parsed.category,
+        classification_status=output.parsed.classification.status,
+        primary_category=output.parsed.classification.primary_category,
+        classification_score=output.parsed.classification.score,
+        classifier_version=output.parsed.classification.classifier_version,
+        source_adapter=state.get("source_adapter"),
     )
 
 

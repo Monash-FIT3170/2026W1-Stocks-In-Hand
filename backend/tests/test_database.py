@@ -814,3 +814,72 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
         .count()
         == 1
     )
+
+
+def test_reclassification_command_filters_batches_and_is_idempotent(
+    db_session: Session,
+) -> None:
+    from tools.reclassify_artifacts import (
+        ReclassificationOptions,
+        run_reclassification,
+    )
+
+    csl = Ticker(symbol="RCLCSL", company_name="Reclassification CSL")
+    anz = Ticker(symbol="RCLANZ", company_name="Reclassification ANZ")
+    db_session.add_all((csl, anz))
+    db_session.flush()
+    csl_artifact = Artifact(
+        ticker_id=csl.id,
+        source_type="asx_announcement",
+        source_adapter="rclcsl",
+        artifact_type="asx_announcement_other",
+        title="Appendix 4D and Interim Financial Report",
+        raw_text="Appendix 4D. Half year report for the six months ended.",
+        artifact_metadata={"custom": "preserved"},
+    )
+    anz_artifact = Artifact(
+        ticker_id=anz.id,
+        source_type="asx_announcement",
+        source_adapter="rclanz",
+        artifact_type="asx_announcement_other",
+        title="Dividend Announcement",
+        raw_text="The board declared a dividend of 18 cents per share.",
+        artifact_metadata={},
+    )
+    db_session.add_all((csl_artifact, anz_artifact))
+    db_session.commit()
+    options = ReclassificationOptions(
+        dry_run=True,
+        ticker="RCLCSL",
+        batch_size=1,
+        limit=1,
+    )
+
+    dry_run = run_reclassification(db_session, options)
+    applied = run_reclassification(
+        db_session,
+        ReclassificationOptions(
+            dry_run=False,
+            ticker="RCLCSL",
+            batch_size=1,
+            limit=1,
+        ),
+    )
+    repeated = run_reclassification(
+        db_session,
+        ReclassificationOptions(
+            dry_run=False,
+            ticker="RCLCSL",
+            batch_size=1,
+            limit=1,
+        ),
+    )
+
+    db_session.refresh(csl_artifact)
+    db_session.refresh(anz_artifact)
+    assert dry_run.scanned == 1 and dry_run.changed == 1
+    assert applied.scanned == 1 and applied.changed == 1
+    assert repeated.scanned == 0 and repeated.changed == 0
+    assert csl_artifact.artifact_metadata["custom"] == "preserved"
+    assert csl_artifact.artifact_metadata["classification_method"] == "rules-v2"
+    assert anz_artifact.artifact_metadata == {}

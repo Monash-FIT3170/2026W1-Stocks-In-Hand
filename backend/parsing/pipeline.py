@@ -11,7 +11,6 @@ import platform
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from pprint import pprint
 
 
 # Make scrapers importable regardless of working directory
@@ -21,18 +20,25 @@ if str(_BACKEND_DIR) not in sys.path:
 
 from pypdf import PdfReader
 
-from categories import ReportCategory
-from classifier import classify
-from storage import store
 from scrapers.base import Announcement
+
+try:
+    from .analysis import ParsedDocument, apply_rules
+    from .classification import ClassificationResult
+    from .storage import store
+except ImportError:  # Support direct CLI execution.
+    from analysis import ParsedDocument, apply_rules
+    from classification import ClassificationResult
+    from storage import store
 
 
 @dataclass
 class ProcessedReport:
     announcement: Announcement
-    category: type[ReportCategory] | None
+    classification: ClassificationResult
+    category: str
     confidence: float
-    method: str  # always "rules"
+    method: str
     extracted_data: dict = field(default_factory=dict)
 
 
@@ -42,24 +48,41 @@ def extract_text(local_path: Path) -> str:
 
 
 def process_announcement(announcement: Announcement) -> ProcessedReport:
+    if announcement.local_path is None:
+        raise ValueError("Announcement local_path is required")
     text = extract_text(announcement.local_path)
-    pprint(text)
-    category, confidence, method = classify(announcement.title, text)
-
-    extracted_data = (
-        category.extract(announcement.title, text)
-        if category is not None
-        else {}
+    parsed = apply_rules(
+        ParsedDocument(
+            raw_text=text,
+            page_count=1,
+            category="UNKNOWN",
+            category_confidence=0.0,
+            extracted_data={},
+        ),
+        title=announcement.title,
+        filename=announcement.local_path.name,
+        source_type="asx_announcement",
+        source_adapter=str(
+            announcement.metadata.get("source_adapter") or announcement.ticker.lower()
+        ),
     )
+    if parsed.classification is None:
+        raise RuntimeError("Local parsing output is missing structured classification")
 
-    store(announcement, category, extracted_data, text)
+    store(
+        announcement,
+        classification=parsed.classification,
+        extracted_data=parsed.extracted_data,
+        raw_text=text,
+    )
 
     return ProcessedReport(
         announcement=announcement,
-        category=category,
-        confidence=confidence,
-        method=method,
-        extracted_data=extracted_data,
+        classification=parsed.classification,
+        category=parsed.category,
+        confidence=parsed.category_confidence,
+        method=parsed.classification.classifier_version,
+        extracted_data=parsed.extracted_data,
     )
 
 
@@ -95,7 +118,7 @@ if __name__ == "__main__":
             local_path=pdf_path,
         )
         report = process_announcement(ann)
-        category_name = report.category.name if report.category else "UNKNOWN"
+        category_name = report.category
         print(f"\n--- {filename} ---")
         print(f"Category:   {category_name}")
         print(f"Confidence: {report.confidence:.2f}  Method: {report.method}")

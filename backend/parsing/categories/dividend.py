@@ -107,9 +107,6 @@ class DividendAnnouncement(ReportCategory):
 
     name = "DividendAnnouncement"
 
-    _TITLE_KEYWORDS = ["dividend", "distribution", "franking"]
-    _TEXT_KEYWORDS = ["dividend", "ex-dividend", "payment date", "record date", "franking"]
-
     @classmethod
     def extract(cls, title: str, text: str, client=None) -> dict:
         if "Appendix 3A.1" in text:
