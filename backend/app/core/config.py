@@ -65,7 +65,20 @@ class Settings:
         os.getenv("COGNITO_LINK_EXISTING_BY_EMAIL", "false").lower() == "true"
     )
     DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
+    REDDIT_CLIENT_ID_PARAMETER: str = os.getenv(
+        "REDDIT_CLIENT_ID_PARAMETER",
+        "",
+    )
+    REDDIT_CLIENT_SECRET_PARAMETER: str = os.getenv(
+        "REDDIT_CLIENT_SECRET_PARAMETER",
+        "",
+    )
+    PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: str = os.getenv(
+        "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
+        "",
+    )
     DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
+    ANALYSIS_QUEUE_URL: str = os.getenv("ANALYSIS_QUEUE_URL", "")
     NOTIFICATIONS_ENABLED: bool = (
         os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
     )
@@ -149,6 +162,21 @@ class Settings:
     )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+    BLUESKY_IDENTIFIER: str = os.getenv("BLUESKY_IDENTIFIER", "")
+    BLUESKY_APP_PASSWORD: str = os.getenv("BLUESKY_APP_PASSWORD", "")
+    BLUESKY_SERVICE_URL: str = os.getenv(
+        "BLUESKY_SERVICE_URL",
+        "https://bsky.social",
+    ).rstrip("/")
+    BLUESKY_PUBLIC_API_URL: str = os.getenv(
+        "BLUESKY_PUBLIC_API_URL",
+        "https://public.api.bsky.app",
+    ).rstrip("/")
+    PUBLIC_DISCUSSION_FEED_URLS: list[str] = [
+        url.strip()
+        for url in os.getenv("PUBLIC_DISCUSSION_FEED_URLS", "").split(",")
+        if url.strip()
+    ]
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")

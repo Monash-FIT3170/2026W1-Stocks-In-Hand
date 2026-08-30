@@ -18,6 +18,7 @@ from app.api.routes import (
     artifact_sentiment,
     artifact_summary,
     auth,
+    blog,
     bluesky,
     category_sentiment,
     gemini,
@@ -26,6 +27,7 @@ from app.api.routes import (
     mastodon,
     news,
     notification_preferences,
+    public_discussion,
     reddit,
     scrape_run,
     ticker,
@@ -34,13 +36,12 @@ from app.api.routes import (
 )
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
-from app.database.connection import SessionLocal, get_db
+from app.database.connection import get_db
 from app.messages import QueueAMessage
 from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
 from app.services import scrape_queue
 from app.sources import source_for_ticker
-
 
 app = FastAPI(title="StonksInHand API")
 app.add_middleware(
@@ -65,9 +66,11 @@ for route_module in (
     information_platform,
     auth,
     news,
+    blog,
     reddit,
     bluesky,
     mastodon,
+    public_discussion,
     gemini,
     category_sentiment,
     announcement,

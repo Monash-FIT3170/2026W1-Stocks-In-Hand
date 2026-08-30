@@ -5,8 +5,9 @@ import { SparkIcon } from "../../components/icons"
 import { CategorySentiment } from "../../components/ticker/CategorySentiment"
 import { CitationLinks } from "../../components/ticker/CitationLinks"
 import { ClarityLayer } from "../../components/ticker/ClarityLayer"
+import { PublicDiscussionStatus } from "../../components/ticker/PublicDiscussionStatus"
 import { useTickerBrief } from "../../components/ticker/TickerBriefShell"
-import { fetchTickerCategorySentiment } from "../../lib/api"
+import { fetchTickerCategorySentiment, fetchTickerPublicDiscussionStatus } from "../../lib/api"
 import styles from "../../page.module.css"
 
 // Ticker brief summary tab for "/ticker/[symbol]".
@@ -15,18 +16,37 @@ import styles from "../../page.module.css"
 export default function TickerSummaryRoute() {
   const { error: briefError, isLoading: isBriefLoading, overview: data, symbol } = useTickerBrief()
   const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState({ categorySentiment: null, error: "", isLoading: true })
+  const [state, setState] = useState({
+    categoryError: "",
+    categorySentiment: null,
+    discussionError: "",
+    discussionStatus: null,
+    isLoading: true,
+  })
 
   useEffect(() => {
     let cancelled = false
 
-    setState({ categorySentiment: null, error: "", isLoading: true })
-    fetchTickerCategorySentiment(symbol)
-      .then((categorySentiment) => {
-        if (!cancelled) setState({ categorySentiment, error: "", isLoading: false })
-      })
-      .catch(() => {
-        if (!cancelled) setState({ categorySentiment: null, error: "Saved category signals are unavailable right now.", isLoading: false })
+    setState({
+      categoryError: "",
+      categorySentiment: null,
+      discussionError: "",
+      discussionStatus: null,
+      isLoading: true,
+    })
+    Promise.allSettled([
+      fetchTickerCategorySentiment(symbol),
+      fetchTickerPublicDiscussionStatus(symbol),
+    ])
+      .then(([categoryResult, discussionResult]) => {
+        if (cancelled) return
+        setState({
+          categoryError: categoryResult.status === "rejected" ? "Saved category signals are unavailable right now." : "",
+          categorySentiment: categoryResult.status === "fulfilled" ? categoryResult.value : null,
+          discussionError: discussionResult.status === "rejected" ? "Discussion pipeline status is unavailable right now." : "",
+          discussionStatus: discussionResult.status === "fulfilled" ? discussionResult.value : null,
+          isLoading: false,
+        })
       })
     return () => {
       cancelled = true
@@ -84,9 +104,12 @@ export default function TickerSummaryRoute() {
           <p>No analysed filing sentiment is available yet.</p>
         )}
       </article>
-      {state.error ? (
+      {!state.isLoading ? (
+        <PublicDiscussionStatus error={state.discussionError} status={state.discussionStatus} />
+      ) : null}
+      {state.categoryError ? (
         <div className={styles.inlineError} role="alert">
-          <p>Category signals could not be loaded. {state.error}</p>
+          <p>Category signals could not be loaded. {state.categoryError}</p>
           <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
         </div>
       ) : state.isLoading ? (

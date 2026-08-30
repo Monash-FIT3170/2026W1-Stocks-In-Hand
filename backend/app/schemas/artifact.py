@@ -1,8 +1,9 @@
-from enum import Enum
-from pydantic import BaseModel
-from typing import Optional, Any
 from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
 from uuid import UUID
+
+from pydantic import BaseModel
 
 
 class SourceType(str, Enum):
@@ -10,6 +11,7 @@ class SourceType(str, Enum):
     REDDIT           = "reddit"
     BLUESKY          = "bluesky"
     MASTODON         = "mastodon"
+    BLOG             = "blog"
     NEWS             = "news"
     HOTCOPPER        = "hotcopper"
 
@@ -22,6 +24,7 @@ class ArtifactType(str, Enum):
     REDDIT_POST            = "reddit_post"
     BLUESKY_POST           = "bluesky_post"
     MASTODON_POST          = "mastodon_post"
+    BLOG_POST              = "blog_post"
     HOTCOPPER_POST         = "hotcopper_post"
     NEWS_ARTICLE           = "news_article"
 
@@ -31,7 +34,7 @@ class ArtifactCreate(BaseModel):
     artifact_type:      ArtifactType
     title:              str
     url:                str
-    published_at:       datetime
+    published_at:       Optional[datetime] = None
     content_hash:       str
     raw_text:           str
     ticker_id:          Optional[UUID] = None

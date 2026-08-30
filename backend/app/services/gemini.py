@@ -9,6 +9,7 @@ from app.core.config import settings
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "groq-category-v1"
 NEWS_SUMMARY_PROMPT_VERSION = "groq-news-summary-v1"
+PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "groq-public-discussion-summary-v1"
 SUMMARY_PROMPT_VERSION = "groq-announcement-summary-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
@@ -161,6 +162,37 @@ Story text:
 """.strip()
 
 
+def _build_public_discussion_summary_prompt(
+    *,
+    title: str,
+    source_type: str,
+    raw_text: str,
+) -> str:
+    text = raw_text[:18000]
+    return f"""
+You are summarising one public discussion post for retail investors.
+
+Use only the supplied post. Treat every claim as an author's opinion or report,
+not as a confirmed company fact. Do not invent facts or give financial advice.
+Write in clear, plain English and avoid hype.
+
+Return strict JSON only with exactly these keys:
+summary: a concise 1-2 sentence summary of what the author says.
+about: one sentence naming the main company, event, or topic discussed.
+changed: one sentence describing the claimed development, or "No claimed change identified." if unclear.
+matters: one sentence explaining why the topic may interest investors, without endorsing the claim.
+
+Source type:
+{source_type}
+
+Title:
+{title}
+
+Post text:
+{text}
+""".strip()
+
+
 def _call_groq(prompt: str) -> str:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
@@ -239,6 +271,24 @@ def summarise_news_article(
             _build_news_summary_prompt(
                 title=title,
                 source_name=source_name,
+                raw_text=raw_text,
+            )
+        ),
+        include_clarity=False,
+    )
+
+
+def summarise_public_discussion(
+    *,
+    title: str,
+    source_type: str,
+    raw_text: str,
+) -> dict[str, object]:
+    return parse_summary_response(
+        _call_llm(
+            _build_public_discussion_summary_prompt(
+                title=title,
+                source_type=source_type,
                 raw_text=raw_text,
             )
         ),

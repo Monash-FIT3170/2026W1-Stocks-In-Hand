@@ -125,12 +125,16 @@ AWS-managed SSM key:
 /stocks-in-hand/staging/database-url
 /stocks-in-hand/staging/groq-api-key
 /stocks-in-hand/staging/brevo-api-key
+/stocks-in-hand/staging/reddit-client-id
+/stocks-in-hand/staging/reddit-client-secret
+/stocks-in-hand/staging/public-discussion-feed-urls
 ```
 
 The database URL must be the Supabase transaction-mode pooler URL used by
 short-lived Lambda connections. Use a direct or session-pooler connection for
-Alembic migrations. Groq is optional; FinBERT, extraction, and OCR continue
-without it.
+Alembic migrations. Groq and public discussion parameters are optional. Reddit
+is disabled without both Reddit parameters. Blog collection is disabled when
+the comma-separated feed allowlist parameter is absent.
 
 Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
 is configured separately from the set available for manual administrator
@@ -162,12 +166,15 @@ not create DLQ traffic.
 
 ## Schedule policy
 
-The EventBridge Scheduler resource is created in the disabled state. After
-manual validation it can run at 9:00 AM each Monday using the
-`Australia/Melbourne` timezone.
+Both EventBridge schedules are created in the disabled state. The announcement
+schedule runs at 9:00 AM each Monday. The public discussion schedule runs at
+10:00 AM on weekdays. Both use the `Australia/Melbourne` timezone.
 
 Enable only sources that have passed an AWS smoke test. If BHP still times out,
 leave BHP available for manual runs but omit it from `ScheduledTickers`.
+Public discussion collection defaults to Bluesky and Mastodon, ten items each,
+with one concurrent scheduler invocation. Reddit and blogs require their SSM
+settings before they are included.
 
 ## Security and reliability
 
@@ -207,17 +214,19 @@ leave BHP available for manual runs but omit it from `ScheduledTickers`.
    full Git commit SHA.
 6. Verify the sender in Brevo, store the Brevo API key in SSM, set the protected
    GitHub `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
-7. Create the SAM change set with `ScheduleEnabled=false` and notifications
-   disabled. Person 1 reviews it before Person 2 executes the approved ARN.
+7. Create the SAM change set with both schedule flags set to `false` and
+   notifications disabled. Person 1 reviews it before Person 2 executes the
+   approved ARN.
 8. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
    frontend bucket, and invalidate CloudFront.
 9. Create exactly one administrator and manually trigger one bounded run for
-   every source.
+   every enabled source. Public discussion collector routes require that
+   administrator session.
 10. Verify the database, queues, private S3 object, analysis result, logs,
-   duplicate suppression, and one DLQ redrive.
+    duplicate suppression, and one DLQ redrive.
 11. Enable alerts through a second reviewed change set, then complete the Brevo
     smoke test below.
-12. Enable the weekly schedule only for sources that pass.
+12. Enable either schedule only after its sources pass bounded smoke tests.
 13. Configure the manual GitHub OIDC workflow only after the first manual
      deployment succeeds.
 

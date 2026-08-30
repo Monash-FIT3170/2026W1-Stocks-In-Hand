@@ -7,7 +7,7 @@ RUN pip install \
     -r ${LAMBDA_TASK_ROOT}/requirements-api.txt
 
 COPY app ${LAMBDA_TASK_ROOT}/app
-COPY lambdas/__init__.py lambdas/common.py lambdas/schedule.py lambdas/notify.py ${LAMBDA_TASK_ROOT}/lambdas/
+COPY lambdas/__init__.py lambdas/common.py lambdas/schedule.py lambdas/notify.py lambdas/public_discussion_schedule.py ${LAMBDA_TASK_ROOT}/lambdas/
 COPY main.py lambda_api.py viewer.html ${LAMBDA_TASK_ROOT}/
 
 CMD ["lambda_api.handler"]

@@ -16,7 +16,6 @@ from pydantic import (
 
 from app.sources import SourceAdapter, adapter_matches_ticker
 
-
 _FORBIDDEN_METADATA_KEYS = {
     "authorization",
     "browser_cookie",
@@ -139,3 +138,16 @@ class NotificationMessage(BaseModel):
     def uppercase_ticker(cls, value: object) -> object:
         """Normalise the producer ticker before applying its pattern."""
         return value.strip().upper() if isinstance(value, str) else value
+
+
+class PublicDiscussionAnalysisMessage(BaseModel):
+    """Request analysis of public discussion text already stored in PostgreSQL."""
+
+    schema_version: Literal[1] = 1
+    message_type: Literal["public_discussion_analysis"] = (
+        "public_discussion_analysis"
+    )
+    artifact_id: UUID
+    requested_at: datetime = Field(default_factory=_utcnow)
+
+    model_config = {"extra": "forbid"}

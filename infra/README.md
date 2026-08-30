@@ -23,6 +23,8 @@ export OPERATIONS_EMAIL=you@example.com
 export MONTHLY_BUDGET_USD=10
 export BEDROCK_MONTHLY_BUDGET_USD=1
 export SCHEDULED_TICKERS=ANZ,BHP,CBA,CSL,WES
+export SCHEDULED_PUBLIC_DISCUSSION_SOURCES=bluesky,mastodon
+export PUBLIC_DISCUSSION_PER_SOURCE_LIMIT=10
 export RELEASE_SHA="$(git rev-parse HEAD)"
 export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -102,6 +104,41 @@ Verify one sender address in Brevo. Add that address as the protected GitHub
 environment variable `ALERT_SENDER_EMAIL`. A custom sending domain is not
 required for the first controlled staging test.
 
+Reddit credentials and the blog feed allowlist are optional. Store them only
+when those sources are enabled:
+
+```bash
+read -s "REDDIT_CLIENT_ID?Reddit client ID: "
+aws ssm put-parameter \
+  --region "$AWS_REGION" \
+  --name /stocks-in-hand/staging/reddit-client-id \
+  --type SecureString \
+  --value "$REDDIT_CLIENT_ID" \
+  --overwrite
+unset REDDIT_CLIENT_ID
+
+read -s "REDDIT_CLIENT_SECRET?Reddit client secret: "
+aws ssm put-parameter \
+  --region "$AWS_REGION" \
+  --name /stocks-in-hand/staging/reddit-client-secret \
+  --type SecureString \
+  --value "$REDDIT_CLIENT_SECRET" \
+  --overwrite
+unset REDDIT_CLIENT_SECRET
+
+read "PUBLIC_DISCUSSION_FEED_URLS?Comma-separated HTTPS RSS or Atom URLs: "
+aws ssm put-parameter \
+  --region "$AWS_REGION" \
+  --name /stocks-in-hand/staging/public-discussion-feed-urls \
+  --type String \
+  --value "$PUBLIC_DISCUSSION_FEED_URLS" \
+  --overwrite
+unset PUBLIC_DISCUSSION_FEED_URLS
+```
+
+Missing Reddit parameters disable Reddit collection. A missing feed allowlist
+disables blog collection. Public Bluesky and Mastodon collection need no key.
+
 ## 3. Build and push the Lambda images
 
 ```bash
@@ -180,6 +217,7 @@ sam deploy \
   --no-execute-changeset \
   --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -188,9 +226,12 @@ sam deploy \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=false" \
+    "PublicDiscussionScheduleEnabled=false" \
     "AnalysisEnabled=true" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
+    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
+    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
     "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
@@ -305,6 +346,7 @@ sam deploy \
   --template-file infra/template.yaml \
   --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -313,15 +355,32 @@ sam deploy \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=true" \
+    "PublicDiscussionScheduleEnabled=false" \
     "AnalysisEnabled=true" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
+    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
+    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
     "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
 ```
 
 Keep it disabled if the projected monthly cost exceeds US$10.
+
+The public discussion schedule runs at 10:00 AM on weekdays. It defaults to
+Bluesky and Mastodon with ten items from each source. Enable it only after the
+manual collector canaries pass:
+
+```text
+PublicDiscussionScheduleEnabled=true
+ScheduledPublicDiscussionSources=bluesky,mastodon
+PublicDiscussionPerSourceLimit=10
+```
+
+Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
+the feed allowlist exists. Each EventBridge event has a stable idempotency key,
+the Lambda has reserved concurrency one, and at most five blog feeds run.
 
 ## 10. Configure GitHub Actions with OIDC
 
@@ -386,8 +445,9 @@ small Bedrock opt-in for the later adapter:
 - the adapter must reject inputs over 2,000 tokens and set `maxTokens=64`.
 
 Use on-demand inference only. Do not create Provisioned Throughput. When the
-adapter and its mocked tests are ready, deploy one manual smoke test with
-`ScheduleEnabled=false`, `AnalysisEnabled=true`, and `BedrockEnabled=true`.
+adapter and its mocked tests are ready, deploy one manual smoke test with both
+schedule flags set to `false`, `AnalysisEnabled=true`, and
+`BedrockEnabled=true`.
 The public API Lambda intentionally has no Bedrock permission.
 
 For an immediate stop, prevent Queue C from starting another analysis Lambda:
@@ -417,6 +477,7 @@ sam deploy \
   --template-file infra/template.yaml \
   --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
   --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
   --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -425,9 +486,12 @@ sam deploy \
     "ParameterPathPrefix=/stocks-in-hand/staging" \
     "OperationsEmail=$OPERATIONS_EMAIL" \
     "ScheduleEnabled=false" \
+    "PublicDiscussionScheduleEnabled=false" \
     "AnalysisEnabled=false" \
     "BedrockEnabled=false" \
     "ScheduledTickers=$SCHEDULED_TICKERS" \
+    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
+    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
     "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
     "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
     "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"

@@ -965,6 +965,92 @@
   padding: 16px 18px;
 }
 
+.discussionStatusCard {
+  background: white;
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.discussionStatusHeader {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.discussionStatusHeader span,
+.discussionStatusMetric span {
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.discussionStatusHeader h2 {
+  font-size: 24px;
+  margin: 4px 0 0;
+}
+
+.discussionStatusPill {
+  background: #fff4df;
+  border-radius: 999px;
+  color: #8a4b00;
+  font-size: 12px;
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.discussionStatusPill_available {
+  background: #c7f2da;
+  color: var(--green);
+}
+
+.discussionStatusPill_failed {
+  background: #ffd0d0;
+  color: #8f2222;
+}
+
+.discussionStatusPill_unavailable {
+  background: #edf0ef;
+  color: #43504a;
+}
+
+.discussionStatusGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.discussionStatusMetric {
+  background: #f5f7f6;
+  border-radius: 16px;
+  display: grid;
+  gap: 4px;
+  padding: 16px;
+}
+
+.discussionStatusMetric strong {
+  color: var(--green);
+  font-size: 25px;
+}
+
+.discussionStatusSources,
+.discussionStatusNotice {
+  color: var(--muted);
+  line-height: 1.45;
+  margin: 18px 0 0;
+}
+
+.discussionStatusNotice {
+  background: #fff4df;
+  border-radius: 12px;
+  color: #8a4b00;
+  padding: 14px 16px;
+}
+
 .categorySentimentCard {
   background: white;
   border-radius: 28px;
@@ -1965,6 +2051,7 @@ button.emptyCard:hover {
   .announcementCard,
   .storyCard,
   .sentimentCard,
+  .discussionStatusCard,
   .categorySentimentCard,
   .timelineCard {
     padding: 22px;
@@ -1972,6 +2059,14 @@ button.emptyCard:hover {
 
   .categorySentimentHeader {
     flex-direction: column;
+  }
+
+  .discussionStatusHeader {
+    flex-direction: column;
+  }
+
+  .discussionStatusGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .categorySentimentGrid {

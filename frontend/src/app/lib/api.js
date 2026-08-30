@@ -193,3 +193,7 @@ export async function verifyAlertEmail(token) {
     body: JSON.stringify({ token }),
   })
 }
+
+export async function fetchTickerPublicDiscussionStatus(symbol) {
+  return fetchJsonCoalesced(`/public-discussion/ticker/${encodeURIComponent(symbol)}/status`)
+}
