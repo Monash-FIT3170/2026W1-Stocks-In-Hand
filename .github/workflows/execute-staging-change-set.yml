@@ -62,6 +62,26 @@ jobs:
             echo "waiter=stack-update-complete" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Capture the previous release for potential rollback
+        id: previous_release
+        if: steps.verify.outputs.waiter == 'stack-update-complete'
+        shell: bash
+        run: |
+          PREVIOUS_API_IMAGE="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Parameters[?ParameterKey=='ApiImageUri'].ParameterValue" \
+            --output text)"
+          if [ -z "$PREVIOUS_API_IMAGE" ] || [ "$PREVIOUS_API_IMAGE" = "None" ]; then
+            echo "ApiImageUri parameter is missing from the current stack" >&2
+            exit 1
+          fi
+          PREVIOUS_RELEASE_SHA="${PREVIOUS_API_IMAGE##*:}"
+          if ! [[ "$PREVIOUS_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not parse a 40-character SHA from $PREVIOUS_API_IMAGE" >&2
+            exit 1
+          fi
+          echo "release_sha=$PREVIOUS_RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Execute the approved change set
         shell: bash
         env:
