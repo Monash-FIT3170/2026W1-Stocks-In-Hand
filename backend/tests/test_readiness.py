@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from main import readiness
 
 
-def test_readiness_checks_the_artifact_duplicate_column() -> None:
+def test_readiness_checks_columns_repaired_after_baseline_drift() -> None:
     db = MagicMock()
 
     result = readiness(db)
@@ -18,8 +18,11 @@ def test_readiness_checks_the_artifact_duplicate_column() -> None:
         "status": "ready",
         "checks": {"database": "ok", "artifact_schema": "ok"},
     }
-    statement = str(db.execute.call_args.args[0])
-    assert statement == "SELECT is_duplicate FROM artifacts LIMIT 0"
+    statements = [str(call.args[0]) for call in db.execute.call_args_list]
+    assert statements == [
+        "SELECT is_duplicate FROM artifacts LIMIT 0",
+        "SELECT prompt_version FROM artifact_summaries LIMIT 0",
+    ]
 
 
 def test_readiness_returns_503_when_the_schema_is_incompatible() -> None:

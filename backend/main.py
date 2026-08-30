@@ -105,6 +105,7 @@ def readiness(db: Session = Depends(get_db)) -> dict:
     """Verify that the API can query the schema required by deployed routes."""
     try:
         db.execute(text("SELECT is_duplicate FROM artifacts LIMIT 0"))
+        db.execute(text("SELECT prompt_version FROM artifact_summaries LIMIT 0"))
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
