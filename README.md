@@ -71,10 +71,14 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset. Defaults to `bluesky,mastodon`. |
 | `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source. Defaults to `10` and is capped at `25`. |
 | `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value. Defaults to `ASX`. |
-| `GROQ_API_KEY` | Yes | From console.groq.com — used for ticker categorisation and Reddit summarisation |
-| `GROQ_MODEL` | No | Defaults to `openai/gpt-oss-120b` |
-| `GEMINI_API_KEY` | No | Legacy setting; ticker sentiment does not use Gemini |
-| `GEMINI_MODEL` | No | Legacy Gemini model setting |
+| `LLM_PROVIDER` | No | Defaults to `bedrock`. `groq` remains available only for an explicit local rollback. |
+| `BEDROCK_ENABLED` | For generated summaries | Must be `true` before the app invokes Bedrock. Defaults to `false`. |
+| `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
+| `BEDROCK_SERVICE_TIER` | No | `default`, `flex`, or `priority`. AWS queued analysis uses `flex`. |
+| `BEDROCK_MAX_PROMPT_CHARS` | No | Rejects prompts over 30,000 characters by default. |
+| `BEDROCK_MAX_OUTPUT_TOKENS` | No | Caps generated output at 1,024 tokens by default. |
+| `GROQ_API_KEY` | Local rollback only | Not loaded by the AWS deployment. |
+| `GROQ_MODEL` | Local rollback only | Defaults to `openai/gpt-oss-120b`. |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
 | `NOTIFICATIONS_ENABLED` | No | Master switch for watchlist alerts. Defaults to `false` outside the development compose stack. |
 | `NOTIFICATIONS_DRY_RUN` | No | Renders and logs alerts without contacting Brevo. The example environment sets it to `true`. |
@@ -89,6 +93,20 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 | `ALERT_CLAIM_STALE_MINUTES` | No | Age at which an unfinished delivery claim may be retried. Defaults to `15`. |
 | `FRONTEND_BASE_URL` | No | Public frontend base used in unsubscribe links. Defaults to `http://localhost:3000`. |
 | `ALERT_VERIFICATION_TOKEN_TTL_HOURS` | No | Lifetime of email confirmation links. Defaults to `24`. |
+
+### Use Bedrock locally
+
+Set `BEDROCK_ENABLED=true` and add temporary AWS credentials to `backend/.env`.
+Use an IAM identity limited to `bedrock:InvokeModel` for the approved model. Do
+not use an AWS root key. Then let Compose use that file for interpolation:
+
+```bash
+docker compose --env-file backend/.env -f docker-compose-dev.yml up -d --build backend
+```
+
+The normal Compose command keeps placeholder AWS credentials, so it cannot make
+an accidental paid Bedrock call. Confirm model access before testing one bounded
+summary request.
 
 ## Watchlist email alerts
 
@@ -126,13 +144,13 @@ signed email link, so they do not need to be added to Brevo first. See the
 | Method | Path | Description |
 |---|---|---|
 | POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
-| POST | `/sentiment/{ticker}` | Full pipeline: pulls recent ASX artifacts plus relevant Reddit, Bluesky and Mastodon posts, runs Groq categorisation/summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact. Params include `reddit_limit`, `bluesky_limit` and `mastodon_limit` |
+| POST | `/sentiment/{ticker}` | Admin-only full pipeline: pulls recent ASX artifacts plus relevant Reddit, Bluesky and Mastodon posts, runs Bedrock categorisation and summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact. Params include `reddit_limit`, `bluesky_limit` and `mastodon_limit` |
 
 ### Reddit (PRAW)
 | Method | Path | Description |
 |---|---|---|
 | POST | `/reddit/scrape` | Admin-only bounded Reddit collection. Params: `subreddit` (default: ASX), `limit` (default: 10) |
-| GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Read stored Reddit posts mentioning a ticker, summarise with Groq/LLaMA, return dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
+| GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Authenticated Bedrock summary of stored Reddit posts mentioning a ticker. Returns dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
 
 ### Bluesky (public API)
 | Method | Path | Description |
@@ -152,10 +170,10 @@ signed email link, so they do not need to be added to Brevo first. See the
 | GET | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker |
 | POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
-### Groq / legacy LLM route
+### Bedrock analysis routes
 | Method | Path | Description |
 |---|---|---|
-| POST | `/gemini/categorise/recent` | Legacy route name. Uses Groq on recent ASX artifacts for a ticker and classifies them into financial categories (earnings, dividends, etc). Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/gemini/categorise/recent` | Admin-only legacy route name. Uses Bedrock on recent ASX artifacts and classifies them into financial categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
 
 ### Scraping
 | Method | Path | Description |

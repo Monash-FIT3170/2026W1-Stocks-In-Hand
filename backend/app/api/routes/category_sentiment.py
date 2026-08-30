@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin_investor
 from app.api.routes import reddit as reddit_route
 from app.crud import artifact as artifact_crud
 from app.crud import artifact_sentiment as artifact_sentiment_crud
@@ -12,16 +13,17 @@ from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_ticker_mention import ArtifactTickerMention
+from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.schemas.category_sentiment import (
     CategorySentimentRequest,
     CategorySentimentResponse,
 )
-from app.services import groq as groq_service
+from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
-CATEGORY_SENTIMENT_KEYS = (*groq_service.CATEGORY_KEYS, "user_discussion")
+CATEGORY_SENTIMENT_KEYS = (*llm_service.CATEGORY_KEYS, "user_discussion")
 DEFAULT_SENTIMENT_DAYS = 365
 FALLBACK_CATEGORY_KEYWORDS = {
     "revenue": (
@@ -136,7 +138,7 @@ def _fallback_recent_asx_categories(
     asx_limit: int,
     offset: int,
 ):
-    categories = {key: "" for key in groq_service.CATEGORY_KEYS}
+    categories = {key: "" for key in llm_service.CATEGORY_KEYS}
     artifacts = _recent_asx_artifacts(
         ticker=ticker,
         db=db,
@@ -256,12 +258,12 @@ def _categorise_recent_asx(ticker: str, db: Session, days: int, asx_limit: int, 
 
     try:
         if batch_size > 0:
-            categories = groq_service.categorise_chunk_in_batches(
+            categories = llm_service.categorise_chunk_in_batches(
                 chunk,
                 batch_size,
             )
         else:
-            categories = groq_service.categorise_chunk(chunk)
+            categories = llm_service.categorise_chunk(chunk)
         if any(categories.values()):
             return categories
         return fallback_categories
@@ -353,7 +355,7 @@ def _summarise_recent_public_discussion(
     except Exception as exc:
         raise HTTPException(
             status_code=502,
-            detail="Public discussion Groq summarisation request failed",
+            detail="Public discussion LLM summarisation request failed",
         ) from exc
 
 
@@ -677,6 +679,7 @@ def analyse_ticker_category_sentiments(
     batch_size: int = 0,
     persist: bool = True,
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     """Compatibility endpoint for clients that previously posted this request."""
     return build_ticker_category_sentiment(

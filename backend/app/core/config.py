@@ -190,10 +190,30 @@ class Settings:
         for url in os.getenv("PUBLIC_DISCUSSION_FEED_URLS", "").split(",")
         if url.strip()
     ]
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "bedrock").strip().lower()
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    BEDROCK_ENABLED: bool = (
+        os.getenv("BEDROCK_ENABLED", "false").lower() == "true"
+    )
+    BEDROCK_MODEL_ID: str = os.getenv(
+        "BEDROCK_MODEL_ID",
+        "openai.gpt-oss-120b-1:0",
+    ).strip()
+    BEDROCK_SERVICE_TIER: str = os.getenv(
+        "BEDROCK_SERVICE_TIER",
+        "default",
+    ).strip().lower()
+    BEDROCK_MAX_PROMPT_CHARS: int = _env_int(
+        "BEDROCK_MAX_PROMPT_CHARS",
+        30000,
+        minimum=1000,
+    )
+    BEDROCK_MAX_OUTPUT_TOKENS: int = _env_int(
+        "BEDROCK_MAX_OUTPUT_TOKENS",
+        1024,
+        minimum=128,
+    )
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     MARKETAUX_API_TOKEN: str = _first_env(
         "MARKETAUX_API_TOKEN",
@@ -222,6 +242,17 @@ settings = Settings()
 
 if settings.AUTH_PROVIDER not in {"legacy", "dual", "cognito"}:
     raise ValueError("AUTH_PROVIDER must be 'legacy', 'dual', or 'cognito'")
+
+if settings.LLM_PROVIDER not in {"bedrock", "groq"}:
+    raise ValueError("LLM_PROVIDER must be 'bedrock' or 'groq'")
+
+if settings.BEDROCK_SERVICE_TIER not in {"default", "flex", "priority"}:
+    raise ValueError(
+        "BEDROCK_SERVICE_TIER must be 'default', 'flex', or 'priority'"
+    )
+
+if not settings.BEDROCK_MODEL_ID:
+    raise ValueError("BEDROCK_MODEL_ID must not be empty")
 
 if settings.AUTH_PROVIDER in {"dual", "cognito"}:
     missing_cognito_settings = [

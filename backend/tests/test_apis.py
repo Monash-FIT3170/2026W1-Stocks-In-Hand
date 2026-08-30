@@ -508,34 +508,19 @@ def test_public_discussion_summary_combines_all_sources() -> None:
     assert captured_posts[2]["score"] == 7
 
 
-def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
-    """Reddit summaries should use the configured Groq model, not a hardcoded ID."""
+def test_summarise_reddit_posts_uses_provider_routing() -> None:
+    """Reddit summaries should use the shared provider boundary."""
     from app.api.routes import reddit
 
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content=(
-                    '{"summary": "Retail investors are mixed on BHP.", '
-                    '"dominant_sentiment": "mixed", '
-                    '"key_themes": ["iron ore"]}'
-                )
-            )
-        )
-    ]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_response
-
     with patch.object(
-        reddit,
-        "_get_groq_client",
-        return_value=mock_client,
-    ), patch.object(
-        reddit.settings,
-        "GROQ_MODEL",
-        "openai/gpt-oss-120b",
-    ):
+        reddit.llm_service,
+        "summarise_reddit_digest",
+        return_value={
+            "summary": "Retail investors are mixed on BHP.",
+            "dominant_sentiment": "mixed",
+            "key_themes": ["iron ore"],
+        },
+    ) as summarise:
         result = reddit._summarise_reddit_posts(
             "BHP",
             [
@@ -548,11 +533,9 @@ def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
         )
 
     assert result["summary"] == "Retail investors are mixed on BHP."
-    mock_client.chat.completions.create.assert_called_once()
-    assert (
-        mock_client.chat.completions.create.call_args.kwargs["model"]
-        == "openai/gpt-oss-120b"
-    )
+    assert result["post_count"] == 1
+    summarise.assert_called_once()
+    assert summarise.call_args.kwargs["ticker_symbol"] == "BHP"
 
 
 def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
@@ -739,7 +722,7 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
         "get_artifact",
         return_value=artifact,
     ), patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_announcement",
         return_value={
             "summary": "The company confirmed its dividend timetable.",
@@ -796,7 +779,7 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         "get_artifact",
         return_value=artifact,
     ), patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_news_article",
         return_value={
             "summary": "BHP reported higher copper production.",
@@ -805,13 +788,13 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
             "matters": "The increase may affect revenue expectations.",
         },
     ) as summarise_news, patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_announcement",
     ) as summarise_announcement:
         result = gemini.summarise_artifact(artifact.id, db=db)
 
     assert result["about"] == "The story covers BHP's quarterly copper output."
-    assert result["prompt_version"] == "groq-news-summary-v1"
+    assert result["prompt_version"] == "llm-news-summary-v2"
     summarise_news.assert_called_once_with(
         title="BHP production story",
         source_name="Example News",

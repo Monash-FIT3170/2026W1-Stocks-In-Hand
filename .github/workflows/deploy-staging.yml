@@ -45,7 +45,7 @@ on:
           - "false"
           - "true"
       enable_bedrock:
-        description: Grant analysis access to Nova Micro
+        description: Grant API and analysis access to Bedrock GPT-OSS 120B
         required: true
         default: "false"
         type: choice

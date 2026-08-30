@@ -16,7 +16,7 @@ services:
       retries: 5
 
   backend:
-    # Contains api key for groq usage
+    # Use --env-file backend/.env to pass temporary AWS values into interpolation.
     env_file:
       - ./backend/.env
     build:
@@ -27,8 +27,9 @@ services:
       SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL,COL,TLS,TCL,COH}
       AWS_REGION: ap-southeast-2
       AWS_DEFAULT_REGION: ap-southeast-2
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-true}
       NOTIFICATIONS_DRY_RUN: ${NOTIFICATIONS_DRY_RUN:-true}
       ALERT_SENDER_EMAIL: ${ALERT_SENDER_EMAIL:-alerts@example.com}

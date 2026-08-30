@@ -70,9 +70,9 @@ The deployment starts with these fixed limits:
 | AWS monthly budget | US$10 |
 | Amazon Bedrock monthly budget | US$1 |
 | Amazon Bedrock access | Disabled |
-| Amazon Bedrock model | Nova Micro only |
-| Bedrock input per request | 2,000 tokens |
-| Bedrock output per request | 64 tokens |
+| Amazon Bedrock model | GPT-OSS 120B only |
+| Bedrock prompt per request | 30,000 characters |
+| Bedrock output per request | 1,024 tokens |
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
 | Document size | 10 MiB |
@@ -102,15 +102,16 @@ actual-spend emails at 10, 50, and 100 percent of US$1. Both budgets exclude
 credits and refunds so usage is visible before promotional credits run out.
 These notifications are not a hard spending cap and billing data can be
 delayed. The only zero-charge Bedrock setting is `BedrockEnabled=false`, which
-omits model invocation permission from the analysis Lambda. The immediate cost
-controls are the disabled schedule, bounded document counts, short retention,
-API throttling, and Lambda reserved concurrency.
+omits model invocation permission from the API and analysis Lambdas. The
+immediate cost controls are the disabled schedule, bounded document counts,
+short retention, API throttling, and Lambda reserved concurrency.
 
-Bedrock is restricted to on-demand `amazon.nova-micro-v1:0` in Sydney. No
-Provisioned Throughput is created. `AnalysisEnabled=false` stops Queue C from
-starting new work, while `BedrockEnabled=false` removes Bedrock permission. The
-2,000 input-token and 64 output-token values are ready for the Bedrock adapter;
-the current release still uses local FinBERT and does not make Bedrock calls.
+Bedrock is restricted to on-demand `openai.gpt-oss-120b-1:0` in Sydney. No
+Provisioned Throughput is created. API requests use Standard tier. Queued
+analysis uses Flex tier. `AnalysisEnabled=false` stops Queue C from starting new
+work, while `BedrockEnabled=false` removes Bedrock permission. Prompts over
+30,000 characters are rejected and generated output is capped at 1,024 tokens.
+Local FinBERT remains responsible for sentiment analysis.
 
 The deployment intentionally avoids paid-by-default features such as
 provisioned concurrency, X-Ray, detailed API metrics, customer-managed KMS
@@ -123,7 +124,6 @@ AWS-managed SSM key:
 
 ```text
 /stocks-in-hand/staging/database-url
-/stocks-in-hand/staging/groq-api-key
 /stocks-in-hand/staging/brevo-api-key
 /stocks-in-hand/staging/reddit-client-id
 /stocks-in-hand/staging/reddit-client-secret
@@ -132,7 +132,7 @@ AWS-managed SSM key:
 
 The database URL must be the Supabase transaction-mode pooler URL used by
 short-lived Lambda connections. Use a direct or session-pooler connection for
-Alembic migrations. Groq and public discussion parameters are optional. Reddit
+Alembic migrations. Brevo and public discussion parameters are optional. Reddit
 is disabled without both Reddit parameters. Blog collection is disabled when
 the comma-separated feed allowlist parameter is absent.
 

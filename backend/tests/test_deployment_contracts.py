@@ -146,6 +146,43 @@ def test_staging_workflow_wires_brevo_notification_parameters() -> None:
     assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
 
 
+def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
+    """Bedrock must be opt-in, model-scoped, and free of Groq secrets."""
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    api_function = template.split("  ApiFunction:", 1)[1].split(
+        "  DiscoveryFunction:", 1
+    )[0]
+    analysis_function = template.split("  AnalysisFunction:", 1)[1].split(
+        "  NotificationFunction:", 1
+    )[0]
+
+    assert 'Default: "false"' in template.split("  BedrockEnabled:", 1)[1]
+    for function in (api_function, analysis_function):
+        assert "LLM_PROVIDER: bedrock" in function
+        assert "BEDROCK_ENABLED: !Ref BedrockEnabled" in function
+        assert "BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0" in function
+        assert 'BEDROCK_MAX_PROMPT_CHARS: "30000"' in function
+        assert 'BEDROCK_MAX_OUTPUT_TOKENS: "1024"' in function
+        assert "- IsBedrockEnabled" in function
+        assert "Action: bedrock:InvokeModel" in function
+        assert (
+            "foundation-model/openai.gpt-oss-120b-1:0"
+            in function
+        )
+        assert "GROQ_API_KEY_PARAMETER" not in function
+        assert "bedrock:CountTokens" not in function
+
+    assert "BEDROCK_SERVICE_TIER: default" in api_function
+    assert "BEDROCK_SERVICE_TIER: flex" in analysis_function
+
+    runtime_requirements = (
+        REPOSITORY_ROOT / "backend" / "requirements-api.txt"
+    ).read_text(encoding="utf-8")
+    assert "groq==" not in runtime_requirements.lower()
+
+
 def test_legacy_release_retains_cognito_foundation() -> None:
     template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
 

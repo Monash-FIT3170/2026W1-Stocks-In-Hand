@@ -69,7 +69,7 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-    Description: Grants the analysis Lambda access to the approved Bedrock model.
+    Description: Grants the API and analysis Lambdas access to the approved Bedrock model.
   ScheduledTickers:
     Type: String
     Default: ANZ,BHP,CBA,CSL,WES
@@ -397,7 +397,12 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
-          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
+          LLM_PROVIDER: bedrock
+          BEDROCK_ENABLED: !Ref BedrockEnabled
+          BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
+          BEDROCK_SERVICE_TIER: default
+          BEDROCK_MAX_PROMPT_CHARS: "30000"
+          BEDROCK_MAX_OUTPUT_TOKENS: "1024"
           REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
           REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
           PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
@@ -442,6 +447,15 @@ Resources:
               Effect: Allow
               Action: sqs:SendMessage
               Resource: !GetAtt AnalysisQueue.Arn
+        - !If
+          - IsBedrockEnabled
+          - Statement:
+              - Sid: InvokeApprovedBedrockModel
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/openai.gpt-oss-120b-1:0
+          - !Ref AWS::NoValue
       Events:
         ApiRoot:
           Type: HttpApi
@@ -571,7 +585,6 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
-          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
           RAW_DOCUMENT_BUCKET: !Ref RawDocumentBucket
           MAX_DOCUMENT_BYTES: "10485760"
           MAX_PDF_PAGES: "100"
@@ -580,10 +593,12 @@ Resources:
           MAX_ANALYSIS_CHARS: "50000"
           NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
           NOTIFICATION_QUEUE_URL: !Ref NotificationQueue
+          LLM_PROVIDER: bedrock
           BEDROCK_ENABLED: !Ref BedrockEnabled
-          BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
-          BEDROCK_MAX_INPUT_TOKENS: "2000"
-          BEDROCK_MAX_OUTPUT_TOKENS: "64"
+          BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
+          BEDROCK_SERVICE_TIER: flex
+          BEDROCK_MAX_PROMPT_CHARS: "30000"
+          BEDROCK_MAX_OUTPUT_TOKENS: "1024"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters
@@ -615,11 +630,9 @@ Resources:
           - Statement:
               - Sid: InvokeApprovedBedrockModel
                 Effect: Allow
-                Action:
-                  - bedrock:CountTokens
-                  - bedrock:InvokeModel
+                Action: bedrock:InvokeModel
                 Resource: !Sub >-
-                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0
+                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/openai.gpt-oss-120b-1:0
           - !Ref AWS::NoValue
       Events:
         AnalysisMessages:

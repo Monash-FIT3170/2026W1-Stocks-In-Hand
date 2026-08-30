@@ -1,14 +1,12 @@
 import hashlib
-import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import praw
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from groq import Groq
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
+from app.api.deps import get_current_investor, require_admin_investor
 from app.core.config import settings
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
@@ -17,6 +15,7 @@ from app.database.connection import SessionLocal, get_db
 from app.models.investor import Investor
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
+from app.services import llm as llm_service
 from app.services import public_discussion as public_discussion_service
 
 router = APIRouter(prefix="/reddit", tags=["reddit"])
@@ -53,10 +52,6 @@ def _content_hash(post_id: str) -> str:
     return hashlib.sha256(f"reddit:{post_id}".encode()).hexdigest()
 
 
-def _get_groq_client() -> Groq:
-    return Groq(api_key=settings.GROQ_API_KEY)
-
-
 def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict], source_name: str = "Reddit") -> dict:
     if not posts:
         return {
@@ -64,49 +59,12 @@ def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict], source_name: 
             "post_count": 0,
         }
 
-    post_block = ""
-    for i, p in enumerate(posts, 1):
-        post_block += f"{i}. [{p['score']} upvotes] {p['title']}\n"
-        if p["body"]:
-            post_block += f"   {p['body'][:300]}\n"
-        post_block += "\n"
-
-    prompt = f"""You are a financial analyst reading public discussion posts about ASX-listed company {ticker_symbol}.
-
-Here are the most relevant recent posts from {source_name} (ordered by engagement):
-
-{post_block[:12000]}
-
-Write a short 2-3 sentence summary of what retail investors are saying about {ticker_symbol}.
-Focus on: overall sentiment, key concerns or excitement, any recurring themes.
-Be objective and concise and do not use —. Do not invent facts not present in the posts.
-
-Return JSON only, no explanation:
-{{
-  "summary": "2-3 sentence summary here",
-  "dominant_sentiment": "bullish | bearish | mixed | neutral",
-  "key_themes": ["theme1", "theme2"]
-}}"""
-
-    response = _get_groq_client().chat.completions.create(
-        model=settings.GROQ_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+    result = llm_service.summarise_reddit_digest(
+        ticker_symbol=ticker_symbol,
+        posts=posts,
+        source_name=source_name,
     )
-
-    raw = response.choices[0].message.content or ""
-    # strip markdown fences Groq sometimes wraps around JSON
-    clean = raw.strip()
-    if clean.startswith("```"):
-        clean = clean.split("```")[1]          # get content between fences
-        if clean.startswith("json"):
-            clean = clean[4:]                  # strip the "json" language tag
-        clean = clean.strip()
-    try:
-        result = json.loads(clean)
-    except json.JSONDecodeError:
-        result = {"summary": raw, "dominant_sentiment": "unknown", "key_themes": []}
-    return result
+    return {**result, "post_count": len(posts)}
 
 
 def _get_or_create_reddit_platform(db: Session):
@@ -277,6 +235,7 @@ def reddit_ticker_sentiment(
     days: int = 30,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _investor: Investor = Depends(get_current_investor),
 ):
     posts = artifact_crud.get_reddit_posts_for_ticker(
         db=db,
@@ -305,11 +264,15 @@ def reddit_ticker_sentiment(
         for a in posts
     ]
 
-    result = _summarise_reddit_posts(
-        ticker_symbol=ticker_symbol.upper(),
-        posts=post_dicts,
-    )
-
+    try:
+        result = _summarise_reddit_posts(
+            ticker_symbol=ticker_symbol.upper(),
+            posts=post_dicts,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
         "ticker":        ticker_symbol.upper(),
         "days_searched": days,

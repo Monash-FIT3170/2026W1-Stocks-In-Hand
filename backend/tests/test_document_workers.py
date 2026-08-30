@@ -973,8 +973,11 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
         }
     )
     monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.groq.summarise_public_discussion", summarise)
-    monkeypatch.setattr("app.services.groq.active_model_name", lambda: "test-groq")
+    monkeypatch.setattr("app.services.llm.summarise_public_discussion", summarise)
+    monkeypatch.setattr(
+        "app.services.llm.active_model_name",
+        lambda: "bedrock:test-model",
+    )
 
     output = analyse_public_discussion_text(
         title="$BHP earnings outlook",
@@ -984,7 +987,7 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
 
     assert output.parsed.category == "USER_DISCUSSION"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "test-groq"
+    assert output.summary_model == "bedrock:test-model"
     analyse_sentiment.assert_called_once_with(
         "$BHP earnings outlook\n\nI think profit will rise next year."
     )
@@ -1014,8 +1017,8 @@ def test_analysis_worker_persists_public_discussion_results(
             "changed": "No claimed change identified.",
             "matters": "Earnings interest BHP investors.",
         },
-        summary_model="test-groq",
-        summary_prompt_version="groq-public-discussion-summary-v1",
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-public-discussion-summary-v2",
         sentiment={
             "sentiment_label": "neutral",
             "label": "neutral",

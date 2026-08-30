@@ -76,7 +76,6 @@ def load_runtime_configuration() -> None:
 
     parameter_names = {
         "DATABASE_URL": os.getenv("DATABASE_URL_PARAMETER", ""),
-        "GROQ_API_KEY": os.getenv("GROQ_API_KEY_PARAMETER", ""),
         "BREVO_API_KEY": os.getenv("BREVO_API_KEY_PARAMETER", ""),
         "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID_PARAMETER", ""),
         "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET_PARAMETER", ""),
@@ -101,7 +100,6 @@ def load_runtime_configuration() -> None:
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code")
             if variable in {
-                "GROQ_API_KEY",
                 "BREVO_API_KEY",
                 "REDDIT_CLIENT_ID",
                 "REDDIT_CLIENT_SECRET",

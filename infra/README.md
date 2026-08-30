@@ -70,21 +70,9 @@ aws ssm put-parameter \
 unset DATABASE_URL
 ```
 
-Groq summaries are optional:
-
-```bash
-read -s "GROQ_API_KEY?Groq API key: "
-aws ssm put-parameter \
-  --region "$AWS_REGION" \
-  --name /stocks-in-hand/staging/groq-api-key \
-  --type SecureString \
-  --value "$GROQ_API_KEY" \
-  --overwrite
-unset GROQ_API_KEY
-```
-
-If the Groq parameter is absent, extraction, classification, OCR, and FinBERT
-still run.
+Bedrock uses the Lambda execution role, so it does not need an API key in SSM.
+When `BedrockEnabled=false`, extraction, classification, OCR, and FinBERT still
+run without generated summaries.
 
 Brevo is required only when watchlist notifications are enabled. Create an API
 key in Brevo, then store it without printing or committing it:
@@ -425,8 +413,8 @@ In GitHub:
 9. run **Publish staging frontend** with the approved full Git SHA;
 10. leave `enable_notifications` set to `false` until the Brevo smoke test;
 11. leave `enable_schedule` set to `false` for ordinary deployments;
-12. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
-13. leave `enable_analysis` set to `true` for the current local model; and
+12. leave `enable_bedrock` set to `false` until model access and the canary are approved;
+13. leave `enable_analysis` set to `true` for deterministic and FinBERT analysis; and
 14. set `scheduled_tickers` only to sources that passed their AWS smoke test.
 
 The workflows request short-lived AWS tokens through OIDC. Preparation,
@@ -435,20 +423,24 @@ prevents an image build from bypassing Person 1's change-set review.
 
 ## Bedrock limits
 
-The current image still uses local FinBERT. The infrastructure prepares a
-small Bedrock opt-in for the later adapter:
+The image keeps local FinBERT for sentiment and uses Bedrock only for generated
+summaries and evidence categorisation:
 
 - `BedrockEnabled=false` omits Bedrock permission by default;
-- only the analysis Lambda can receive Bedrock permission;
-- only regional `amazon.nova-micro-v1:0` can be invoked;
-- analysis remains at concurrency one and SQS batch size one; and
-- the adapter must reject inputs over 2,000 tokens and set `maxTokens=64`.
+- the API and analysis Lambdas receive permission only when Bedrock is enabled;
+- IAM permits only regional `openai.gpt-oss-120b-1:0`;
+- API requests use Standard tier and cost-bearing routes require authentication;
+- queued analysis uses Flex tier, concurrency one, and SQS batch size one;
+- prompts are capped at 30,000 characters and completions at 1,024 tokens; and
+- responses must pass the existing strict JSON schemas before storage.
 
 Use on-demand inference only. Do not create Provisioned Throughput. When the
-adapter and its mocked tests are ready, deploy one manual smoke test with both
+adapter tests pass, request access to the model in Sydney. Deploy one manual
+smoke test with both
 schedule flags set to `false`, `AnalysisEnabled=true`, and
 `BedrockEnabled=true`.
-The public API Lambda intentionally has no Bedrock permission.
+Run one artifact first. Review its token counts and stored output before a
+bounded batch.
 
 For an immediate stop, prevent Queue C from starting another analysis Lambda:
 
