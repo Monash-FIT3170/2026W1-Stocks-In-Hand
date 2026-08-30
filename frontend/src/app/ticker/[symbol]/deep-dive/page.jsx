@@ -9,7 +9,7 @@ import styles from "../../../page.module.css"
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
 // Timeline entries come from DB-backed ticker artifacts.
 export default function TickerDeepDiveRoute() {
-  const { symbol } = useTickerBrief()
+  const { isLoading: isBriefLoading, symbol } = useTickerBrief()
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState({
     error: "",
@@ -18,6 +18,10 @@ export default function TickerDeepDiveRoute() {
   })
 
   useEffect(() => {
+    // The brief endpoint initializes deployed tickers on a fresh database.
+    // Waiting for it avoids racing the timeline request against that setup.
+    if (isBriefLoading) return
+
     let cancelled = false
 
     async function loadDeepDive() {
@@ -26,9 +30,15 @@ export default function TickerDeepDiveRoute() {
         if (!cancelled) {
           setState({ error: "", isLoading: false, timeline })
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setState({ error: "The deep-dive timeline is unavailable right now. Check your connection and try again.", isLoading: false, timeline: [] })
+          setState({
+            error: error instanceof Error
+              ? error.message
+              : "The deep-dive timeline is unavailable right now.",
+            isLoading: false,
+            timeline: [],
+          })
         }
       }
     }
@@ -37,7 +47,7 @@ export default function TickerDeepDiveRoute() {
     return () => {
       cancelled = true
     }
-  }, [attempt, symbol])
+  }, [attempt, isBriefLoading, symbol])
 
   if (state.isLoading) {
     return (
@@ -61,7 +71,7 @@ export default function TickerDeepDiveRoute() {
     timeline.length > 0 ? <DeepDiveTimeline timeline={timeline} /> : (
       <div className={styles.emptyCard}>
         <h2>No deep-dive timeline yet</h2>
-        <p>The analysis pipeline has not stored enough source material for {symbol}.</p>
+        <p>No announcements have been stored for {symbol} yet. Run the data pipeline to populate this timeline.</p>
       </div>
     )
   )

@@ -31,19 +31,33 @@ TABLES = (
 )
 
 
+def _change_data_api_privileges(table: str, action: str, recipient_keyword: str) -> None:
+    """Change Supabase role privileges without breaking plain PostgreSQL installs."""
+    for role in ("anon", "authenticated"):
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+                    {action} ON TABLE public."{table}" {recipient_keyword} {role};
+                END IF;
+            END
+            $$
+            """
+        )
+
+
 def upgrade() -> None:
     for table in TABLES:
         op.execute(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY')
-        op.execute(
-            f'REVOKE ALL PRIVILEGES ON TABLE public."{table}" '
-            "FROM anon, authenticated"
-        )
+        _change_data_api_privileges(table, "REVOKE ALL PRIVILEGES", "FROM")
 
 
 def downgrade() -> None:
     for table in reversed(TABLES):
         op.execute(f'ALTER TABLE public."{table}" DISABLE ROW LEVEL SECURITY')
-        op.execute(
-            f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public."{table}" '
-            "TO anon, authenticated"
+        _change_data_api_privileges(
+            table,
+            "GRANT SELECT, INSERT, UPDATE, DELETE",
+            "TO",
         )
