@@ -4,9 +4,9 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
-from xml.etree import ElementTree
 
 import httpx
+from defusedxml import ElementTree
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
