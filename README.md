@@ -178,7 +178,7 @@ signed email link, so they do not need to be added to Brevo first. See the
 ### Scraping
 | Method | Path | Description |
 |---|---|---|
-| POST | `/scrape/{ticker}` | Trigger background ASX announcement scrape for a ticker. Available tickers: BHP, CBA, ANZ, CSL, WES |
+| POST | `/scrape/{ticker}` | Trigger a background ASX announcement scrape for any supported ticker. Automatic schedules remain separately controlled by `SCHEDULED_TICKERS`. |
 | GET | `/headlines` | Scrape live Yahoo Finance headlines via Playwright (default ticker BHP.AX) |
 
 ### Storage (direct DB access)

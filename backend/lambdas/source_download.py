@@ -42,9 +42,43 @@ _ADAPTER_HOSTS: dict[SourceAdapter, frozenset[str]] = {
     "cba": frozenset(
         {"www.commbank.com.au", "commbank.com.au", "yourir.info"}
     ),
+    "coh": frozenset(
+        {
+            "www.cochlear.com",
+            "cochlear.com",
+            "coh.live.irmau.com",
+        }
+    ),
+    "col": frozenset({"www.colesgroup.com.au", "colesgroup.com.au"}),
     "csl": frozenset({"investors.csl.com"}),
+    "mqg": frozenset({"www.macquarie.com", "macquarie.com"}),
+    "org": frozenset(
+        {"www.originenergy.com.au", "originenergy.com.au"}
+    ),
+    "rio": frozenset(
+        {
+            "www.riotinto.com",
+            "riotinto.com",
+            "ne-cdn.eurolandir.com",
+            "tools.eurolandir.com",
+        }
+    ),
+    "tcl": frozenset(
+        {"www.transurban.com", "transurban.com", "yourir.info"}
+    ),
+    "tls": frozenset(
+        {
+            "www.telstra.com.au",
+            "telstra.com.au",
+            "events.miraqle.com",
+        }
+    ),
+    "wds": frozenset({"www.woodside.com", "woodside.com"}),
     "wes": frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"}),
 }
+_BROWSER_REQUEST_ADAPTERS = frozenset(
+    {"coh", "col", "mqg", "org", "rio", "tcl", "tls", "wds"}
+)
 _YOURIR_BASES = {
     "anz": "https://yourir.info/resources/4d216b570d08af30/announcements",
     "cba": "https://yourir.info/resources/e381e7bfa5abbe55/announcements",
@@ -108,11 +142,13 @@ async def _request_document(
     url: str,
     referer: str,
     max_bytes: int,
+    params: Mapping[str, str] | None = None,
 ) -> DownloadedDocument:
     requested_url = _validated_url(adapter, url)
     response: APIResponse = await context.request.get(
         requested_url,
         headers={"Referer": referer},
+        params=params,
         timeout=120_000,
     )
     final_url = _validated_url(adapter, response.url)
@@ -293,6 +329,52 @@ async def _download_wes(
         await page.close()
 
 
+def _request_referer(
+    adapter: SourceAdapter,
+    source_url: str,
+    metadata: Mapping[str, object],
+) -> str:
+    """Choose one scraper-produced, adapter-scoped page to seed the session."""
+    for key in ("feed_url", "article_url", "listing_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return _validated_url(adapter, value)
+    return _validated_url(adapter, source_url)
+
+
+async def _download_browser_request(
+    context: BrowserContext,
+    *,
+    adapter: SourceAdapter,
+    source_url: str,
+    document_url: str,
+    metadata: Mapping[str, object],
+    max_bytes: int,
+) -> DownloadedDocument:
+    """Recreate the short-lived browser session used by expanded adapters."""
+    referer = _request_referer(adapter, source_url, metadata)
+    page = await context.new_page()
+    try:
+        await page.goto(referer, wait_until="domcontentloaded", timeout=60_000)
+        _validated_url(adapter, page.url)
+    finally:
+        await page.close()
+
+    params = (
+        {"appID": "a50955429d255a58", "liveness": "live"}
+        if adapter == "tcl"
+        else None
+    )
+    return await _request_document(
+        context,
+        adapter=adapter,
+        url=document_url,
+        referer=referer,
+        max_bytes=max_bytes,
+        params=params,
+    )
+
+
 async def resolve_session_download(
     *,
     source_adapter: str,
@@ -303,7 +385,9 @@ async def resolve_session_download(
     max_bytes: int,
 ) -> DownloadedDocument:
     """Resolve and download one document using a fresh, non-persisted session."""
-    if source_adapter not in {"anz", "bhp", "cba", "wes"}:
+    if source_adapter not in {"anz", "bhp", "cba", "wes"}.union(
+        _BROWSER_REQUEST_ADAPTERS
+    ):
         raise PermanentDocumentError(
             "Source does not use a browser download session",
             code="unsupported_source",
@@ -352,6 +436,15 @@ async def resolve_session_download(
                     adapter=adapter,
                     url=resolved_url,
                     referer=validated_document_url,
+                    max_bytes=max_bytes,
+                )
+            if adapter in _BROWSER_REQUEST_ADAPTERS:
+                return await _download_browser_request(
+                    context,
+                    adapter=adapter,
+                    source_url=validated_source_url,
+                    document_url=validated_document_url,
+                    metadata=metadata,
                     max_bytes=max_bytes,
                 )
             return await _download_wes(

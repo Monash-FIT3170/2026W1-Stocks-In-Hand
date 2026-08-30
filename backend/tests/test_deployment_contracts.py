@@ -1,6 +1,37 @@
 from pathlib import Path
 
+from app.sources import SOURCES
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_all_canonical_tickers_are_deployable_but_schedule_stays_conservative() -> None:
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    expected = "ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES"
+
+    assert set(SOURCES) == set(expected.split(","))
+    assert f"SUPPORTED_TICKERS: {expected}" in template
+    scheduled_parameter = template.split("  ScheduledTickers:", 1)[1].split(
+        "  ScheduledPublicDiscussionSources:", 1
+    )[0]
+    assert "Default: ANZ,BHP,CBA,CSL,WES" in scheduled_parameter
+
+    ticker_layout = (
+        REPOSITORY_ROOT
+        / "frontend"
+        / "src"
+        / "app"
+        / "ticker"
+        / "[symbol]"
+        / "layout.jsx"
+    ).read_text(encoding="utf-8")
+    deployed_list = ticker_layout.split("const DEPLOYED_TICKERS = [", 1)[1].split(
+        "]", 1
+    )[0]
+    for ticker in SOURCES:
+        assert f'"{ticker}"' in deployed_list
 
 
 def test_local_backend_installs_cognito_jwt_dependency() -> None:

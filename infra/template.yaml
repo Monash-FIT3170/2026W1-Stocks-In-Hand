@@ -415,7 +415,7 @@ Resources:
             - !Sub ${ParameterPathPrefix}/brevo-api-key
             - ""
           FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
-          SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
+          SUPPORTED_TICKERS: ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
           AUTH_PROVIDER: !Ref AuthProvider

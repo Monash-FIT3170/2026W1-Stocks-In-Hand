@@ -37,7 +37,23 @@ from lambdas.download_validation import (
 from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
-SUPPORTED_TICKERS = frozenset({"ANZ", "BHP", "CBA", "CSL", "WES"})
+SUPPORTED_TICKERS = frozenset(
+    {
+        "ANZ",
+        "BHP",
+        "CBA",
+        "COH",
+        "COL",
+        "CSL",
+        "MQG",
+        "ORG",
+        "RIO",
+        "TCL",
+        "TLS",
+        "WDS",
+        "WES",
+    }
+)
 FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "pdf": "pdf",
     "txt": "txt",
@@ -45,7 +61,7 @@ FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "docx": "docx",
 }
 OBJECT_KEY = re.compile(
-    r"^raw/(?P<ticker>ANZ|BHP|CBA|CSL|WES)/"
+    r"^raw/(?P<ticker>ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)/"
     r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
     r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
