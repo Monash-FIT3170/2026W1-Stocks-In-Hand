@@ -120,7 +120,7 @@ class COHScraper(BaseScraper):
             """() => {
                 return Array.from(document.querySelectorAll('a[id*="lnkbtnYear"], a'))
                     .map(a => (a.textContent || '').trim())
-                    .filter(t => /^\d{4}$/.test(t));
+                    .filter(t => /^\\d{4}$/.test(t));
             }"""
         )
 
