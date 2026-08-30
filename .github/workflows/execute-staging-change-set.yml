@@ -77,6 +77,38 @@ jobs:
           aws cloudformation wait "${{ steps.verify.outputs.waiter }}" \
             --stack-name "$STACK_NAME"
 
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install health check dependencies
+        shell: bash
+        run: pip install --disable-pip-version-check httpx
+
+      - name: Resolve the API endpoint
+        id: api
+        shell: bash
+        run: |
+          API_ENDPOINT="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+            --output text)"
+          if [ -z "$API_ENDPOINT" ] || [ "$API_ENDPOINT" = "None" ]; then
+            echo "ApiEndpoint stack output is missing" >&2
+            exit 1
+          fi
+          echo "api_endpoint=$API_ENDPOINT" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for the deployed API to report healthy
+        shell: bash
+        run: |
+          python backend/scripts/wait_for_health.py \
+            --url "${{ steps.api.outputs.api_endpoint }}/health"
+
       - name: Record deployment outputs
         shell: bash
         run: |
