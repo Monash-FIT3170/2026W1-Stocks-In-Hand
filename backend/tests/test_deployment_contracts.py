@@ -97,7 +97,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
 
     assert "ImageUri: !Ref ApiImageUri" in notification_function
     assert "lambdas.notify.handler" in notification_function
-    assert "ReservedConcurrentExecutions: 1" in notification_function
+    assert "ReservedConcurrentExecutions" not in notification_function
     assert "ALERT_DAILY_BUDGET: !Ref AlertDailyBudget" in notification_function
     assert (
         "ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun"
@@ -233,7 +233,7 @@ def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None
     )[0]
 
     assert 'Default: "false"' in parameter
-    assert "ReservedConcurrentExecutions: 1" in function
+    assert "ReservedConcurrentExecutions" not in function
     assert "PublicDiscussionPerSourceLimit" in function
     assert "MaximumRetryAttempts: 2" in template
     assert "lambdas/public_discussion_schedule.py" in dockerfile
