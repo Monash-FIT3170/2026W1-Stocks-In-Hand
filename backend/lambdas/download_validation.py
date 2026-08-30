@@ -253,12 +253,14 @@ def download_document(
     max_bytes: int,
     client: httpx.Client | None = None,
     resolve_hosts: bool = True,
+    hosts: frozenset[str] | None = None,
+    referer: str = "https://investors.csl.com/",
 ) -> DownloadedDocument:
     """Download one bounded, allowlisted document and validate its real format."""
     if max_bytes <= len(PDF_MAGIC):
         raise ValueError("max_bytes must be larger than a document header")
 
-    current_url = validate_download_url(url)
+    current_url = validate_download_url(url, hosts=hosts)
     owned_client = client is None
     http_client = client or httpx.Client(
         follow_redirects=False,
@@ -273,7 +275,7 @@ def download_document(
             with http_client.stream(
                 "GET",
                 current_url,
-                headers={"Referer": "https://investors.csl.com/"},
+                headers={"Referer": referer},
             ) as response:
                 if response.status_code in REDIRECT_CODES:
                     location = response.headers.get("location")
@@ -282,7 +284,10 @@ def download_document(
                             "Redirect response has no Location header",
                             code="invalid_redirect",
                         )
-                    current_url = validate_download_url(urljoin(current_url, location))
+                    current_url = validate_download_url(
+                        urljoin(current_url, location),
+                        hosts=hosts,
+                    )
                     continue
 
                 if response.status_code == 404:

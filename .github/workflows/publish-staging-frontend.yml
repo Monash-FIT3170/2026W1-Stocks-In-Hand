@@ -48,6 +48,28 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           role-session-name: stocks-in-hand-frontend
 
+      - name: Resolve the deployed authentication configuration
+        shell: bash
+        run: |
+          AUTH_PROVIDER="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AuthProvider'].OutputValue" \
+            --output text)"
+          USER_POOL_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" \
+            --output text)"
+          APP_CLIENT_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolClientId'].OutputValue" \
+            --output text)"
+          {
+            echo "NEXT_PUBLIC_AUTH_PROVIDER=$AUTH_PROVIDER"
+            echo "NEXT_PUBLIC_AWS_REGION=$AWS_REGION"
+            echo "NEXT_PUBLIC_COGNITO_USER_POOL_ID=$USER_POOL_ID"
+            echo "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=$APP_CLIENT_ID"
+          } >> "$GITHUB_ENV"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -61,6 +83,7 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: /api
         run: |
           npm ci
+          npm test
           npm run build
           test -f out/index.html
 

@@ -1,3 +1,9 @@
+import {
+  getCognitoAccessToken,
+  isCognitoAuthEnabled,
+  signOutFromCognito,
+} from "../../auth/cognito"
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
 const requestCache = new Map()
 const DEFAULT_READ_TTL_MS = 30_000
@@ -5,7 +11,42 @@ const DEFAULT_READ_TTL_MS = 30_000
 export async function apiFetch(path, options = {}) {
   const baseUrl = API_BASE_URL.replace(/\/$/, "")
   const apiPath = path.startsWith("/") ? path : `/${path}`
-  return fetch(`${baseUrl}${apiPath}`, options)
+  const headers = new Headers(options.headers || {})
+  let accessToken = null
+
+  if (!headers.has("Authorization")) {
+    accessToken = await getCognitoAccessToken()
+    if (accessToken) {
+      headers.set("Authorization", `Bearer ${accessToken}`)
+    }
+  }
+
+  const requestUrl = `${baseUrl}${apiPath}`
+  let response = await fetch(requestUrl, {
+    ...options,
+    headers,
+  })
+
+  if (response.status === 401 && accessToken && isCognitoAuthEnabled()) {
+    try {
+      const refreshedToken = await getCognitoAccessToken({ forceRefresh: true })
+      if (refreshedToken) {
+        headers.set("Authorization", `Bearer ${refreshedToken}`)
+        response = await fetch(requestUrl, {
+          ...options,
+          headers,
+        })
+      }
+    } catch {
+      await signOutFromCognito().catch(() => {})
+      return response
+    }
+    if (response.status === 401) {
+      await signOutFromCognito().catch(() => {})
+    }
+  }
+
+  return response
 }
 
 export async function fetchJson(path, options = {}) {

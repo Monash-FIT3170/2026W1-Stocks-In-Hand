@@ -37,6 +37,16 @@ class Settings:
         "postgresql://user:password@localhost:5432/spike"
     )
     AWS_REGION: str = os.getenv("AWS_REGION", "ap-southeast-2")
+    AUTH_PROVIDER: str = os.getenv("AUTH_PROVIDER", "legacy").strip().lower()
+    COGNITO_USER_POOL_ID: str = os.getenv("COGNITO_USER_POOL_ID", "").strip()
+    COGNITO_APP_CLIENT_ID: str = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
+    COGNITO_ISSUER: str = os.getenv("COGNITO_ISSUER", "").strip()
+    COGNITO_JWKS_CACHE_SECONDS: int = int(
+        os.getenv("COGNITO_JWKS_CACHE_SECONDS", "300")
+    )
+    COGNITO_LINK_EXISTING_BY_EMAIL: bool = (
+        os.getenv("COGNITO_LINK_EXISTING_BY_EMAIL", "false").lower() == "true"
+    )
     DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
     DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
     SOURCE_URLS: dict[str, str] = {
@@ -101,3 +111,20 @@ class Settings:
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 settings = Settings()
+
+if settings.AUTH_PROVIDER not in {"legacy", "dual", "cognito"}:
+    raise ValueError("AUTH_PROVIDER must be 'legacy', 'dual', or 'cognito'")
+
+if settings.AUTH_PROVIDER in {"dual", "cognito"}:
+    missing_cognito_settings = [
+        name
+        for name in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID")
+        if not getattr(settings, name)
+    ]
+    if missing_cognito_settings:
+        raise ValueError(
+            "Cognito authentication requires: "
+            + ", ".join(missing_cognito_settings)
+        )
+    if settings.COGNITO_JWKS_CACHE_SECONDS <= 0:
+        raise ValueError("COGNITO_JWKS_CACHE_SECONDS must be greater than zero")
