@@ -205,6 +205,27 @@ docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
 ```
 
+## Automatic local announcement bootstrap
+
+`docker-compose-dev.yml` includes a one-shot `content-bootstrap` service. After
+the backend is healthy it checks the official company sources for the supported
+tickers, processes at most three announcements per ticker from the last year,
+and exits. Existing documents and complete summaries are retained, so the job
+is safe to run again on later Docker starts.
+
+Local Docker uses the Groq fallback by default. Add `GROQ_API_KEY` to the
+untracked `backend/.env` to generate structured summaries. Without a key, the
+website still starts and collected announcements remain available, but summary
+generation is skipped. The bootstrap is development-only and is not used by
+the AWS deployment.
+
+To start the application without running collection, name only the long-running
+services:
+
+```bash
+docker compose -f docker-compose-dev.yml up --build db backend frontend
+```
+
 ## Setup
 Before doing any development work in this repository, you must run the init.sh script. It only needs to be run once, unless dependencies change majorly and it may need to be re-run, but this will be clearly communicated
 

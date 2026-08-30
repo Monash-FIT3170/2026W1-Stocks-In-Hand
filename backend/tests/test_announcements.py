@@ -16,6 +16,7 @@ from app.crud.announcement import (
     _sydney_date_end,
     _sydney_date_start,
     _sydney_day_bounds,
+    get_announcements,
 )
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
@@ -121,3 +122,41 @@ def test_custom_date_bounds_use_sydney_calendar_days() -> None:
 
     assert start.isoformat() == "2026-05-01T00:00:00+10:00"
     assert end.isoformat() == "2026-05-17T00:00:00+10:00"
+
+
+def test_announcement_feed_uses_stable_secondary_id_ordering() -> None:
+    class QueryStub:
+        def __init__(self) -> None:
+            self.ordering = ()
+
+        def options(self, *_args):
+            return self
+
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *ordering):
+            self.ordering = ordering
+            return self
+
+        def offset(self, _offset):
+            return self
+
+        def limit(self, _limit):
+            return self
+
+        def all(self):
+            return []
+
+    class DbStub:
+        def __init__(self) -> None:
+            self.query_stub = QueryStub()
+
+        def query(self, _model):
+            return self.query_stub
+
+    db = DbStub()
+
+    assert get_announcements(db) == []
+    assert len(db.query_stub.ordering) == 2
+    assert str(db.query_stub.ordering[1]) == "artifacts.id DESC"

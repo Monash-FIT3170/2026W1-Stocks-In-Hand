@@ -24,6 +24,8 @@ services:
       target: production
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
+      # Local Docker uses the existing Groq fallback unless explicitly overridden.
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL,COL,TLS,TCL,COH,WDS,MQG,ORG,RIO}
       AWS_REGION: ap-southeast-2
       AWS_DEFAULT_REGION: ap-southeast-2
@@ -47,6 +49,38 @@ services:
       timeout: 1s
       retries: 3
       start_period: 10s
+    volumes:
+      - ./backend/_data:/data
+      - ./output:/app/output
+
+  content-bootstrap:
+    # One-shot, bounded development collector. It cannot block backend/frontend
+    # startup and the storage pipeline skips documents already in PostgreSQL.
+    env_file:
+      - ./backend/.env
+    build:
+      context: ./backend
+      target: production
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      FINBERT_MODEL: /app/finbert
+    command:
+      - python
+      - -m
+      - scripts.populate_local_content
+      - --sources
+      - asx
+      - --tickers
+      - ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
+      - --lookback-days
+      - "365"
+      - --max-documents
+      - "3"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: "no"
     volumes:
       - ./backend/_data:/data
       - ./output:/app/output

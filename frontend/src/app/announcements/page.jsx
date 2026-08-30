@@ -6,6 +6,7 @@ import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
 import { AnnouncementFilters } from "../components/announcements/AnnouncementFilters"
 import { TrendingStocks } from "../components/announcements/TrendingStocks"
 import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
+import { appendAnnouncementPage } from "./pagination"
 import styles from "../page.module.css"
 
 const ANNOUNCEMENT_PAGE_SIZE = 6
@@ -65,6 +66,7 @@ function AnnouncementsContent() {
     isLoading: true,
     isLoadingMore: false,
     loadMoreError: "",
+    nextOffset: 0,
     trendingStocks: [],
   })
 
@@ -80,16 +82,19 @@ function AnnouncementsContent() {
           fetchTrendingAnnouncements({ days: 7, limit: 4 }),
         ])
         if (!cancelled) {
-          setState({
-            announcementCards: announcements.map((item) => ({
+          const firstPage = announcements.map((item) => ({
               ...item,
               time: formatAnnouncementTimestamp(item.published_at),
-            })),
+            }))
+          const page = appendAnnouncementPage([], firstPage, 0)
+          setState({
+            announcementCards: page.announcementCards,
             errorMessage: "",
             hasMore: announcements.length === ANNOUNCEMENT_PAGE_SIZE,
             isLoading: false,
             isLoadingMore: false,
             loadMoreError: "",
+            nextOffset: page.nextOffset,
             trendingStocks,
           })
         }
@@ -102,6 +107,7 @@ function AnnouncementsContent() {
             isLoading: false,
             isLoadingMore: false,
             loadMoreError: "",
+            nextOffset: 0,
             trendingStocks: [],
           })
         }
@@ -120,18 +126,26 @@ function AnnouncementsContent() {
       const announcements = await fetchAnnouncements({
         ...filters,
         limit: ANNOUNCEMENT_PAGE_SIZE,
-        offset: state.announcementCards.length,
+        offset: state.nextOffset,
       })
       const nextCards = announcements.map((item) => ({
         ...item,
         time: formatAnnouncementTimestamp(item.published_at),
       }))
-      setState((current) => ({
-        ...current,
-        announcementCards: [...current.announcementCards, ...nextCards],
-        hasMore: announcements.length === ANNOUNCEMENT_PAGE_SIZE,
-        isLoadingMore: false,
-      }))
+      setState((current) => {
+        const page = appendAnnouncementPage(
+          current.announcementCards,
+          nextCards,
+          current.nextOffset,
+        )
+        return {
+          ...current,
+          announcementCards: page.announcementCards,
+          hasMore: announcements.length === ANNOUNCEMENT_PAGE_SIZE,
+          isLoadingMore: false,
+          nextOffset: page.nextOffset,
+        }
+      })
     } catch {
       setState((current) => ({
         ...current,
