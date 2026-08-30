@@ -209,3 +209,15 @@ In the root folder of the project
 ```bash
 docker compose -f docker-compose-tests.yml up --build
 ```
+
+## Document classification
+
+ASX documents use the deterministic, in-process `rules-v2` classifier. It
+returns `classified`, `needs_review` or `unknown`, together with stable category
+identifiers, ordered candidates and matched rule evidence. Its numeric score is
+a rules score, not a probability. Ambiguous and unknown results remain
+`UNKNOWN` for legacy consumers.
+
+See [the advanced content classification guide](docs/advanced-content-classification.md)
+for the taxonomy, fixture evaluator, extension process and bounded
+reclassification command.
