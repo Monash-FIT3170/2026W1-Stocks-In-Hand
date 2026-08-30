@@ -260,10 +260,12 @@ def test_alert_migration_applies_supabase_table_security() -> None:
         "op.execute(f'ALTER TABLE public.\"{table}\" "
         "ENABLE ROW LEVEL SECURITY')"
     ) in migration
-    assert (
-        'f\'REVOKE ALL PRIVILEGES ON TABLE public.\"{table}\" \'\n'
-        '            "FROM anon, authenticated"'
-    ) in migration
+    assert "def _revoke_data_api_privileges()" in migration
+    assert "WHERE rolname = 'anon'" in migration
+    assert "WHERE rolname = 'authenticated'" in migration
+    assert migration.count("REVOKE ALL PRIVILEGES ON TABLE") == 2
+    assert "_revoke_data_api_privileges()" in migration
+    assert "FROM anon, authenticated" not in migration
 
 
 def test_alert_subscription_and_default_rule_persist(
@@ -813,10 +815,10 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
     )
 
 
-def test_announcements_feed_and_trending_only_count_asx_artifacts(
+def test_announcements_feed_and_trending_include_supported_content_sources(
     db_session: Session,
 ) -> None:
-    """Announcement APIs should count only ASX-sourced artifacts.
+    """The market feed should combine ASX, news, and Reddit artifacts.
 
     Duplicates are no longer filtered at read time: ``parsing/storage.py`` skips
     them at insert time by ``content_hash``, so an announcement never reaches the
@@ -850,15 +852,34 @@ def test_announcements_feed_and_trending_only_count_asx_artifacts(
         content_hash=f"visible-{uuid.uuid4()}",
     )
     reddit = Artifact(
-        ticker_id=ticker.id,
         source_type="reddit",
         artifact_type="reddit_post",
-        title="Non ASX source",
+        title="Retail investor discussion",
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
     )
-    db_session.add_all([announcement, reddit])
+    news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Publisher report",
+        raw_text="News article body",
+        published_at=published_at,
+        content_hash=f"news-{uuid.uuid4()}",
+        artifact_metadata={"source_name": "Example News"},
+    )
+    db_session.add_all([announcement, reddit, news])
+    db_session.flush()
+    db_session.add(
+        ArtifactTickerMention(
+            artifact_id=reddit.id,
+            ticker_id=ticker.id,
+            match_method="ticker_symbol",
+            match_confidence=0.85,
+            matched_text=symbol,
+        )
+    )
     db_session.commit()
 
     announcements = list_announcements(
@@ -869,12 +890,18 @@ def test_announcements_feed_and_trending_only_count_asx_artifacts(
     announcement_ids = {item.id for item in announcements}
 
     assert announcement.id in announcement_ids
-    assert reddit.id not in announcement_ids
+    assert reddit.id in announcement_ids
+    assert news.id in announcement_ids
+    items_by_id = {item.id: item for item in announcements}
+    assert items_by_id[announcement.id].source_type == "asx_announcement"
+    assert items_by_id[reddit.id].source_type == "reddit"
+    assert items_by_id[reddit.id].ticker == symbol
+    assert items_by_id[news.id].source_name == "Example News"
 
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
     trend = next(item for item in trending if item.symbol == symbol)
 
-    assert trend.count == 1
+    assert trend.count == 3
 
 
 def test_ticker_brief_aside_returns_empty_database_state(

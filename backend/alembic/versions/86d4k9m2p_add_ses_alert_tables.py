@@ -25,6 +25,34 @@ ALERT_TABLES = (
 )
 
 
+def _revoke_data_api_privileges() -> None:
+    """Revoke Supabase roles without breaking plain PostgreSQL installs."""
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                REVOKE ALL PRIVILEGES ON TABLE
+                    public."alert_subscriptions",
+                    public."alert_rules",
+                    public."alert_deliveries"
+                FROM anon;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM pg_roles WHERE rolname = 'authenticated'
+            ) THEN
+                REVOKE ALL PRIVILEGES ON TABLE
+                    public."alert_subscriptions",
+                    public."alert_rules",
+                    public."alert_deliveries"
+                FROM authenticated;
+            END IF;
+        END
+        $$
+        """
+    )
+
+
 def upgrade() -> None:
     op.create_table(
         "alert_subscriptions",
@@ -278,10 +306,7 @@ def upgrade() -> None:
 
     for table in ALERT_TABLES:
         op.execute(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY')
-        op.execute(
-            f'REVOKE ALL PRIVILEGES ON TABLE public."{table}" '
-            "FROM anon, authenticated"
-        )
+    _revoke_data_api_privileges()
 
 
 def downgrade() -> None:

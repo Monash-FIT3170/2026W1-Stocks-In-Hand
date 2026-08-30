@@ -40,6 +40,15 @@ def _env_confidence(name: str, default: float) -> float:
     return value
 
 
+def _first_env(*names: str) -> str:
+    """Return the first non-empty value from equivalent environment names."""
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 class Settings:
     """Application configuration loaded from environment variables.
 
@@ -162,6 +171,10 @@ class Settings:
     )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+    REDDIT_USER_AGENT: str = os.getenv(
+        "REDDIT_USER_AGENT",
+        "windows:stocks-in-hand:1.0.0 (read-only ASX market research)",
+    )
     BLUESKY_IDENTIFIER: str = os.getenv("BLUESKY_IDENTIFIER", "")
     BLUESKY_APP_PASSWORD: str = os.getenv("BLUESKY_APP_PASSWORD", "")
     BLUESKY_SERVICE_URL: str = os.getenv(
@@ -182,7 +195,10 @@ class Settings:
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
-    MARKETAUX_API_TOKEN: str = os.getenv("MARKETAUX_API_TOKEN", "")
+    MARKETAUX_API_TOKEN: str = _first_env(
+        "MARKETAUX_API_TOKEN",
+        "MARKETAUX_API_KEY",
+    )
     MARKETAUX_BASE_URL: str = os.getenv(
         "MARKETAUX_BASE_URL",
         "https://api.marketaux.com/v1",

@@ -263,6 +263,27 @@ def test_social_collectors_link_each_saved_artifact(
     queue_analysis.assert_called_once_with(db, artifact, link_artifact.return_value)
 
 
+def test_reddit_client_uses_configured_user_agent() -> None:
+    from app.api.routes import reddit
+
+    with patch.object(reddit.settings, "REDDIT_CLIENT_ID", "client"), patch.object(
+        reddit.settings,
+        "REDDIT_CLIENT_SECRET",
+        "secret",
+    ), patch.object(
+        reddit.settings,
+        "REDDIT_USER_AGENT",
+        "windows:test-client:1.0.0 (read-only test)",
+    ), patch.object(reddit.praw, "Reddit") as praw_client:
+        reddit._get_reddit_client()
+
+    praw_client.assert_called_once_with(
+        client_id="client",
+        client_secret="secret",
+        user_agent="windows:test-client:1.0.0 (read-only test)",
+    )
+
+
 def test_public_discussion_analysis_queue_requires_a_match_and_configuration() -> None:
     from app.services import public_discussion
 

@@ -5,8 +5,12 @@ import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.api.routes import announcement as announcement_routes
 from app.crud.announcement import (
     _announcement_from_artifact,
     _sydney_date_end,
@@ -15,6 +19,18 @@ from app.crud.announcement import (
 )
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
+
+
+def test_announcements_route_accepts_path_without_trailing_slash(monkeypatch) -> None:
+    app = FastAPI()
+    app.include_router(announcement_routes.router)
+    app.dependency_overrides[announcement_routes.get_db] = lambda: None
+    monkeypatch.setattr(announcement_routes.crud, "get_announcements", lambda *_args, **_kwargs: [])
+
+    response = TestClient(app).get("/announcements", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_announcement_mapping_uses_metadata_and_ticker_symbol() -> None:

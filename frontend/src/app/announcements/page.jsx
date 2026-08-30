@@ -42,8 +42,8 @@ function formatAnnouncementTimestamp(value) {
   return `${datePart}, ${timePart}`
 }
 
-// Announcements route for "/announcements".
-// This page renders only DB-backed announcement data so empty/error states expose
+// Market updates route for "/announcements".
+// This page renders only DB-backed source data so empty/error states expose
 // integration problems immediately.
 function AnnouncementsContent() {
   const searchParams = useSearchParams()
@@ -156,8 +156,8 @@ function AnnouncementsContent() {
     <section className={styles.contentPage}>
         <div className={styles.announcementsHero}>
           <div>
-            <h1>ASX Announcements</h1>
-            <p>Recent ASX filings and publisher reports, summarised in plain English with links back to available source material.</p>
+            <h1>Market Updates</h1>
+            <p>Recent ASX filings, publisher news, and Reddit discussions with links back to the original sources.</p>
           </div>
           <div className={styles.announcementControls}>
             <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
@@ -167,7 +167,7 @@ function AnnouncementsContent() {
         <div className={styles.announcementList}>
           {isLoading ? <div className={styles.contentSkeleton} aria-live="polite">Loading announcements…</div> : null}
           {errorMessage ? <div className={styles.emptyCard} role="alert"><h2>Could not load announcements</h2><p>{errorMessage}</p><button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button></div> : null}
-          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.emptyCard}><h2>No ASX announcements found</h2><p>Adjust the filters or check back after the next pipeline run.</p></div> : null}
+          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.emptyCard}><h2>No market updates found</h2><p>Adjust the filters or collect new ASX, news, and Reddit content.</p></div> : null}
           {announcementCards.map((item) => <AnnouncementCard item={item} key={item.id} />)}
           {loadMoreError ? <p className={styles.authError} role="alert">{loadMoreError}</p> : null}
           {hasMore ? (

@@ -3,6 +3,14 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_local_backend_installs_cognito_jwt_dependency() -> None:
+    requirements = (
+        REPOSITORY_ROOT / "backend" / "requirements.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "PyJWT[crypto]==2.13.0" in requirements.splitlines()
+
+
 def test_api_image_does_not_own_finbert_inference() -> None:
     dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile.api").read_text(encoding="utf-8")
     route = (
