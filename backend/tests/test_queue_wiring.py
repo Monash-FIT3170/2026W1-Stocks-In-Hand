@@ -121,11 +121,14 @@ def test_analysis_function_consumption_is_gated_by_the_analysis_toggle() -> None
 # Producers (least-privilege sqs:SendMessage scoping)
 # ---------------------------------------------------------------------------
 
-def test_api_function_may_only_enqueue_to_discovery_queue() -> None:
+def test_api_function_may_only_enqueue_to_discovery_and_analysis_queues() -> None:
+    # The AnalysisQueue grant backs the public-discussion inline-analysis
+    # path (backend/app/services/public_discussion.py); the API must still
+    # never write to the Download queue.
     block = _resource("ApiFunction")
     assert "Resource: !GetAtt DiscoveryQueue.Arn" in block
+    assert "Resource: !GetAtt AnalysisQueue.Arn" in block
     assert "DownloadQueue.Arn" not in block
-    assert "AnalysisQueue.Arn" not in block
 
 
 def test_scheduler_function_may_only_enqueue_to_discovery_queue() -> None:
