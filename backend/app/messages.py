@@ -15,7 +15,6 @@ from pydantic import (
 
 from app.sources import SourceAdapter, adapter_matches_ticker
 
-
 _FORBIDDEN_METADATA_KEYS = {
     "authorization",
     "browser_cookie",
@@ -119,3 +118,16 @@ class QueueBMessage(BaseModel):
         if not adapter_matches_ticker(self.ticker, self.source_adapter):
             raise ValueError("source_adapter does not match ticker")
         return self
+
+
+class PublicDiscussionAnalysisMessage(BaseModel):
+    """Request analysis of public discussion text already stored in PostgreSQL."""
+
+    schema_version: Literal[1] = 1
+    message_type: Literal["public_discussion_analysis"] = (
+        "public_discussion_analysis"
+    )
+    artifact_id: UUID
+    requested_at: datetime = Field(default_factory=_utcnow)
+
+    model_config = {"extra": "forbid"}

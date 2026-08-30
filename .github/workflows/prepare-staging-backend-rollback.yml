@@ -88,6 +88,7 @@ jobs:
             --role-arn "$CFN_ROLE_ARN" \
             --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -99,9 +100,12 @@ jobs:
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
               "ScheduleEnabled=false" \
+              "PublicDiscussionScheduleEnabled=false" \
               "AnalysisEnabled=true" \
               "BedrockEnabled=false" \
               "ScheduledTickers=ANZ,BHP,CBA,CSL,WES" \
+              "ScheduledPublicDiscussionSources=bluesky,mastodon" \
+              "PublicDiscussionPerSourceLimit=10" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
               "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
