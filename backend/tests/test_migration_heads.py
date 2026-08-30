@@ -15,4 +15,4 @@ def test_integrated_migration_graph_has_one_head() -> None:
 
     heads = ScriptDirectory.from_config(config).get_heads()
 
-    assert heads == ["86d7m4q2xmerge"]
+    assert len(heads) == 1, f"Expected one migration head, found: {heads}"
