@@ -59,6 +59,14 @@ jobs:
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue | [0]" \
+            --output text)"
+          if [[ ! "$FRONTEND_BASE_URL" =~ ^https://[^[:space:]]+$ ]]; then
+            echo "The existing stack does not expose a valid HTTPS FrontendUrl" >&2
+            exit 1
+          fi
           for image in api scraper analysis; do
             aws ecr describe-images \
               --repository-name "stocks-in-hand-$image" \
@@ -68,6 +76,7 @@ jobs:
             echo "ECR_REGISTRY=$ECR_REGISTRY"
             echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
             echo "RELEASE_SHA=$RELEASE_SHA"
+            echo "FRONTEND_BASE_URL=$FRONTEND_BASE_URL"
           } >> "$GITHUB_ENV"
 
       - name: Set up AWS SAM
@@ -98,6 +107,7 @@ jobs:
             --parameter-overrides \
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
+              "FrontendBaseUrl=$FRONTEND_BASE_URL" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
               "AuthProvider=legacy" \
               "ScheduleEnabled=false" \

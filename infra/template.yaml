@@ -12,6 +12,11 @@ Parameters:
     Type: String
     Default: /stocks-in-hand/staging
     AllowedPattern: ^/[A-Za-z0-9/_.-]+$
+  FrontendBaseUrl:
+    Type: String
+    Default: https://example.invalid
+    AllowedPattern: ^https://[^\s/]+(?:/.*)?$
+    Description: Public frontend URL used in user-facing links.
   OperationsEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
@@ -414,7 +419,7 @@ Resources:
             - IsNotificationsEnabled
             - !Sub ${ParameterPathPrefix}/brevo-api-key
             - ""
-          FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
+          FRONTEND_BASE_URL: !Ref FrontendBaseUrl
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
@@ -668,7 +673,7 @@ Resources:
             - ""
           ALERT_DAILY_BUDGET: !Ref AlertDailyBudget
           ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun
-          FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
+          FRONTEND_BASE_URL: !Ref FrontendBaseUrl
       Policies:
         - Statement:
             - Sid: ReadNotificationParameters

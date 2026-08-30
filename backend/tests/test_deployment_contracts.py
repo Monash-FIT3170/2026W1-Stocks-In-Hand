@@ -81,10 +81,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
     assert "BREVO_API_KEY_PARAMETER: !If" in api_function
     assert "${ParameterPathPrefix}/brevo-api-key" in api_function
     assert "- IsNotificationsEnabled" in api_function
-    assert (
-        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
-        in api_function
-    )
+    assert "FRONTEND_BASE_URL: !Ref FrontendBaseUrl" in api_function
     assert "ses:" not in api_function.lower()
 
     assert (
@@ -103,10 +100,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
         "ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun"
         in notification_function
     )
-    assert (
-        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
-        in notification_function
-    )
+    assert "FRONTEND_BASE_URL: !Ref FrontendBaseUrl" in notification_function
     assert "BREVO_API_KEY_PARAMETER: !If" in notification_function
     assert "${ParameterPathPrefix}/brevo-api-key" in notification_function
     assert "Sid: ReadNotificationParameters" in notification_function
@@ -144,6 +138,25 @@ def test_staging_workflow_wires_brevo_notification_parameters() -> None:
     )
     assert '"NotificationsEnabled=${{ inputs.enable_notifications }}"' in workflow
     assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
+    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in workflow
+
+
+def test_frontend_url_does_not_create_api_cloudfront_dependency_cycle() -> None:
+    """Functions behind CloudFront must not depend on the distribution."""
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    api_function = template.split("  ApiFunction:", 1)[1].split(
+        "  DiscoveryFunction:", 1
+    )[0]
+    notification_function = template.split("  NotificationFunction:", 1)[1].split(
+        "  SchedulerFunction:", 1
+    )[0]
+
+    assert "FrontendBaseUrl:" in template
+    assert "FRONTEND_BASE_URL: !Ref FrontendBaseUrl" in api_function
+    assert "FrontendDistribution.DomainName" not in api_function
+    assert "FRONTEND_BASE_URL: !Ref FrontendBaseUrl" in notification_function
 
 
 def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
@@ -255,3 +268,4 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert "PublicDiscussionPerSourceLimit=" in deploy
     assert '"PublicDiscussionScheduleEnabled=false"' in rollback
     assert "PublicDiscussionSchedulerFunction=" in rollback
+    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
