@@ -35,8 +35,10 @@ from app.services import scrape_queue
 from app.sources import source_for_ticker
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 app = FastAPI(title="StonksInHand API")
@@ -90,8 +92,15 @@ def root():
 
 
 @app.get("/health")
-def health() -> dict:
-    """Return the health status of the API process."""
+def health(db: Session = Depends(get_db)) -> dict:
+    """Return whether the API process can reach its database."""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": "database unreachable"},
+        )
     return {"status": "ok"}
 
 

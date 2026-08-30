@@ -1,4 +1,5 @@
 """PyTest tests for the APIs in main.py"""
+import json
 import sys
 from pathlib import Path
 
@@ -6,11 +7,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main
 from unittest.mock import patch, MagicMock
+from sqlalchemy.exc import OperationalError
 
 
-def test_health() -> None:
-    """Confirming that the health API returns the "ok" status as expected"""
-    assert main.health() == {"status": "ok"}
+def test_health_ok_when_database_reachable() -> None:
+    """The health endpoint reports ok once it can query the database."""
+    db = MagicMock()
+    assert main.health(db=db) == {"status": "ok"}
+    db.execute.assert_called_once()
+
+
+def test_health_reports_error_when_database_unreachable() -> None:
+    """The health endpoint reports a 503 when the database can't be reached."""
+    db = MagicMock()
+    db.execute.side_effect = OperationalError(
+        "SELECT 1", {}, Exception("connection refused")
+    )
+    response = main.health(db=db)
+    assert response.status_code == 503
+    assert json.loads(response.body) == {
+        "status": "error",
+        "detail": "database unreachable",
+    }
 
 
 def test_news_feed_does_not_use_raw_text_as_summary() -> None:
