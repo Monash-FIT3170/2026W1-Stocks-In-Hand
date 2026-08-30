@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   id-token: write
+  actions: write
 
 concurrency:
   group: stocks-in-hand-staging-execute
@@ -143,3 +144,41 @@ jobs:
             echo ""
             echo "Change set: \`${{ inputs.change_set_arn }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare an automatic rollback after a failed health check
+        if: failure() && steps.previous_release.outputs.release_sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh workflow run prepare-staging-backend-rollback.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF_NAME" \
+            -f release_sha="${{ steps.previous_release.outputs.release_sha }}" \
+            -f compatibility_reference="auto-triggered: health check failed on $GITHUB_SHA"; then
+            {
+              echo "### Automatic rollback preparation triggered"
+              echo ""
+              echo "This deploy failed its post-deploy health check. A rollback"
+              echo "change set targeting \`${{ steps.previous_release.outputs.release_sha }}\`"
+              echo "is being prepared and still requires Person 1 review and"
+              echo "Person 2 execution before anything changes."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Could not automatically start the rollback workflow - the pipeline's GitHub token does not have permission to trigger another workflow run."
+            {
+              echo "### Automatic rollback trigger unavailable"
+              echo ""
+              echo "This deploy failed its post-deploy health check, but the"
+              echo "pipeline could not automatically start"
+              echo "\`prepare-staging-backend-rollback.yml\` (insufficient"
+              echo "GitHub Actions permissions on the pipeline's token)."
+              echo ""
+              echo "**Run it manually**, using these inputs:"
+              echo ""
+              echo "- \`release_sha\`: \`${{ steps.previous_release.outputs.release_sha }}\`"
+              echo "- \`compatibility_reference\`: your own confirmation that the"
+              echo "  previous release is compatible with the current database"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
