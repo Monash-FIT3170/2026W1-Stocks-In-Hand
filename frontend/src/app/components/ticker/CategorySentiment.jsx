@@ -35,7 +35,7 @@ function categoryRows(sentiment) {
 
 function emptyCategoryMessage(label) {
   if (label === "User discussion") {
-    return "No Reddit discussion summary has been stored for this ticker yet."
+    return "No public discussion summary has been stored for this ticker yet."
   }
   return `No ${label.toLowerCase()} evidence in the stored ASX announcements.`
 }
