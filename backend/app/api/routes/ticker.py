@@ -36,17 +36,65 @@ DEFAULT_TICKERS = {
         "sector": "Financials",
         "industry": "Banks",
     },
+    "COL": {
+        "company_name": "Coles Group Limited",
+        "exchange": "ASX",
+        "sector": "Consumer Staples",
+        "industry": "Food & Staples Retailing",
+    },
+    "COH": {
+        "company_name": "Cochlear Limited",
+        "exchange": "ASX",
+        "sector": "Health Care",
+        "industry": "Health Care Equipment & Supplies",
+    },
     "CSL": {
         "company_name": "CSL Limited",
         "exchange": "ASX",
         "sector": "Health Care",
         "industry": "Biotechnology",
     },
+    "TCL": {
+        "company_name": "Transurban Group",
+        "exchange": "ASX",
+        "sector": "Industrials",
+        "industry": "Highways & Railtracks",
+    },
+    "TLS": {
+        "company_name": "Telstra Group Limited",
+        "exchange": "ASX",
+        "sector": "Communication Services",
+        "industry": "Diversified Telecommunication Services",
+    },
     "WES": {
         "company_name": "Wesfarmers Limited",
         "exchange": "ASX",
         "sector": "Consumer Discretionary",
         "industry": "Consumer Staples Distribution & Retail",
+    },
+    "WDS": {
+        "company_name": "Woodside Energy Group Limited",
+        "exchange": "ASX",
+        "sector": "Energy",
+        "industry": "Oil, Gas & Consumable Fuels",
+    },
+    "MQG": {
+        "company_name": "Macquarie Group Limited",
+        "exchange": "ASX",
+        "sector": "Financials",
+        "industry": "Capital Markets",
+    },
+    "ORG": {
+        "company_name": "Origin Energy Limited",
+        "exchange": "ASX",
+        "sector": "Energy",
+        "industry": "Oil, Gas & Consumable Fuels",
+    },
+    "RIO": {
+        "company_name": "Rio Tinto Limited",
+        "exchange": "ASX",
+        "sector": "Materials",
+        "industry": "Diversified Metals & Mining",
     },
 }
 
