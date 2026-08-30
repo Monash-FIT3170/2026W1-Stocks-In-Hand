@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -14,7 +15,7 @@ import httpx
 import pytest
 from pypdf import PdfWriter
 
-from app.messages import QueueAMessage, QueueBMessage
+from app.messages import NotificationMessage, QueueAMessage, QueueBMessage
 from lambdas import analysis, discovery, download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -623,10 +624,31 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
         },
     )
     calls: dict[str, object] = {}
+    events: list[str] = []
 
     @contextmanager
     def fake_session():
-        yield object()
+        events.append("session_enter")
+        try:
+            yield object()
+        finally:
+            events.append("session_exit")
+
+    def fake_started(*_args, **_kwargs):
+        calls["started"] = True
+        events.append("started")
+
+    def fake_stored(*_args, **kwargs):
+        calls["stored"] = kwargs
+        events.append("stored")
+
+    def fake_completed(*_args, **_kwargs):
+        calls["completed"] = True
+        events.append("completed")
+
+    def fake_publish(**kwargs):
+        calls["published"] = kwargs
+        events.append("published")
 
     monkeypatch.setattr(
         analysis,
@@ -644,17 +666,19 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     )
     monkeypatch.setattr(analysis, "analyse_document", lambda *_args, **_kwargs: output)
     monkeypatch.setattr(analysis, "database_session", fake_session)
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+    monkeypatch.setattr(analysis, "_publish_notification", fake_publish)
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
+        fake_started,
     )
     monkeypatch.setattr(
         "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
+        fake_stored,
     )
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
+        fake_completed,
     )
 
     analysis._analyse_object(
@@ -673,6 +697,128 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     assert calls["stored"]["raw_text"] == "Revenue increased."
     assert calls["stored"]["sentiment"]["sentiment_label"] == "positive"
     assert calls["completed"] is True
+    assert calls["published"] == {
+        "artifact_id": artifact_id,
+        "ticker": "CSL",
+        "scrape_run_id": run_id,
+        "sentiment": calls["stored"]["sentiment"],
+    }
+    assert events == [
+        "session_enter",
+        "started",
+        "session_exit",
+        "session_enter",
+        "stored",
+        "session_exit",
+        "session_enter",
+        "completed",
+        "session_exit",
+        "published",
+    ]
+
+
+def test_analysis_notification_matches_consumer_contract(monkeypatch):
+    artifact_id = uuid4()
+    run_id = uuid4()
+    sqs = MagicMock()
+    client_factory = MagicMock(return_value=sqs)
+    monkeypatch.setenv(
+        "NOTIFICATION_QUEUE_URL",
+        "https://sqs.ap-southeast-2.amazonaws.com/123/notifications",
+    )
+    monkeypatch.setattr(analysis.boto3, "client", client_factory)
+    analysis._notification_sqs_client.cache_clear()
+
+    try:
+        for _ in range(2):
+            analysis._publish_notification(
+                artifact_id=artifact_id,
+                ticker="csl",
+                scrape_run_id=run_id,
+                sentiment={
+                    "sentiment_label": "positive",
+                    "confidence_score": 0.9,
+                },
+            )
+    finally:
+        analysis._notification_sqs_client.cache_clear()
+
+    client_factory.assert_called_once_with("sqs")
+    assert sqs.send_message.call_count == 2
+    published = sqs.send_message.call_args.kwargs
+    assert published["QueueUrl"].endswith("/notifications")
+    body = json.loads(published["MessageBody"])
+    assert set(body) == {
+        "schema_version",
+        "artifact_id",
+        "ticker",
+        "scrape_run_id",
+        "sentiment_label",
+        "confidence_score",
+    }
+    message = NotificationMessage.model_validate(body)
+    assert message.artifact_id == artifact_id
+    assert message.scrape_run_id == run_id
+    assert message.ticker == "CSL"
+    assert message.sentiment_label == "positive"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "label"),
+    [("false", "positive"), ("true", "neutral")],
+)
+def test_analysis_notification_prefilter_skips_publish(monkeypatch, enabled, label):
+    publish = MagicMock()
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
+    monkeypatch.setattr(analysis, "_publish_notification", publish)
+
+    analysis._try_publish_notification(
+        artifact_id=uuid4(),
+        ticker="CSL",
+        scrape_run_id=uuid4(),
+        sentiment={"sentiment_label": label, "confidence_score": 0.9},
+        correlation="message-1",
+        attempt=1,
+    )
+
+    publish.assert_not_called()
+
+
+def test_analysis_notification_publish_failure_never_raises(monkeypatch, caplog):
+    artifact_id = uuid4()
+    run_id = uuid4()
+    private_detail = "private queue detail"
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+
+    def fail_publish(**_kwargs):
+        raise RuntimeError(private_detail)
+
+    monkeypatch.setattr(analysis, "_publish_notification", fail_publish)
+
+    with caplog.at_level(logging.ERROR):
+        analysis._try_publish_notification(
+            artifact_id=artifact_id,
+            ticker="CSL",
+            scrape_run_id=run_id,
+            sentiment={
+                "sentiment_label": "negative",
+                "confidence_score": 0.8,
+            },
+            correlation="message-1",
+            attempt=2,
+        )
+
+    assert private_detail not in caplog.text
+    event = json.loads(caplog.records[-1].message)
+    assert event == {
+        "stage": "analysis",
+        "event": "notification_publish_failed",
+        "correlation_id": "message-1",
+        "run_id": str(run_id),
+        "artifact_id": str(artifact_id),
+        "attempt": 2,
+        "error_code": "RuntimeError",
+    }
 
 
 def test_pdf_page_limit_is_permanent(tmp_path):

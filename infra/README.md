@@ -84,6 +84,24 @@ unset GROQ_API_KEY
 If the Groq parameter is absent, extraction, classification, OCR, and FinBERT
 still run.
 
+Brevo is required only when watchlist notifications are enabled. Create an API
+key in Brevo, then store it without printing or committing it:
+
+```bash
+read -s "BREVO_API_KEY?Brevo API key: "
+aws ssm put-parameter \
+  --region "$AWS_REGION" \
+  --name /stocks-in-hand/staging/brevo-api-key \
+  --type SecureString \
+  --value "$BREVO_API_KEY" \
+  --overwrite
+unset BREVO_API_KEY
+```
+
+Verify one sender address in Brevo. Add that address as the protected GitHub
+environment variable `ALERT_SENDER_EMAIL`. A custom sending domain is not
+required for the first controlled staging test.
+
 ## 3. Build and push the Lambda images
 
 ```bash
@@ -339,16 +357,18 @@ In GitHub:
 
 1. create an environment named `staging`;
 2. add environment variable `AWS_DEPLOY_ROLE_ARN` with that output;
-3. add environment variable `OPERATIONS_EMAIL`; and
-4. require Person 1 approval for the `staging` environment;
-5. run **Prepare staging release** to build images and create a change set;
-6. have Person 1 review the uploaded change-set JSON;
-7. have Person 2 run **Execute approved staging change set** with the approved ARN;
-8. run **Publish staging frontend** with the approved full Git SHA;
-9. leave `enable_schedule` set to `false` for ordinary deployments;
-10. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
-11. leave `enable_analysis` set to `true` for the current local model; and
-12. set `scheduled_tickers` only to sources that passed their AWS smoke test.
+3. add environment variable `OPERATIONS_EMAIL`;
+4. add `ALERT_SENDER_EMAIL` after verifying that sender address in Brevo;
+5. require Person 1 approval for the `staging` environment;
+6. run **Prepare staging release** to build images and create a change set;
+7. have Person 1 review the uploaded change-set JSON;
+8. have Person 2 run **Execute approved staging change set** with the approved ARN;
+9. run **Publish staging frontend** with the approved full Git SHA;
+10. leave `enable_notifications` set to `false` until the Brevo smoke test;
+11. leave `enable_schedule` set to `false` for ordinary deployments;
+12. leave `enable_bedrock` set to `false` until the Bedrock adapter is tested;
+13. leave `enable_analysis` set to `true` for the current local model; and
+14. set `scheduled_tickers` only to sources that passed their AWS smoke test.
 
 The workflows request short-lived AWS tokens through OIDC. Preparation,
 execution, frontend publishing, and rollback are separate manual actions. This

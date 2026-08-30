@@ -1,6 +1,7 @@
 """Versioned SQS message contracts for the ASX document pipeline."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -119,3 +120,22 @@ class QueueBMessage(BaseModel):
         if not adapter_matches_ticker(self.ticker, self.source_adapter):
             raise ValueError("source_adapter does not match ticker")
         return self
+
+
+class NotificationMessage(BaseModel):
+    """An analyzed artifact that may match investor alert preferences."""
+
+    schema_version: Literal[1] = 1
+    artifact_id: UUID
+    ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
+    scrape_run_id: UUID
+    sentiment_label: Literal["positive", "negative"]
+    confidence_score: Decimal = Field(ge=0, le=1)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def uppercase_ticker(cls, value: object) -> object:
+        """Normalise the producer ticker before applying its pattern."""
+        return value.strip().upper() if isinstance(value, str) else value

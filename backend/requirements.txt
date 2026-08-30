@@ -15,3 +15,6 @@ praw==7.7.1
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 email-validator==2.2.0
+boto3==1.43.58
+mangum==0.19.0
+defusedxml==0.7.1

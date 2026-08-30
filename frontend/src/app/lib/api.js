@@ -58,7 +58,9 @@ export async function fetchJson(path, options = {}) {
   const data = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(data?.detail || "Failed to fetch API data")
+    const error = new Error(data?.detail || "Failed to fetch API data")
+    error.status = response.status
+    throw error
   }
 
   return data
@@ -152,4 +154,42 @@ export async function fetchTickerDeepDive(symbol) {
 
 export async function fetchTickerCategorySentiment(symbol) {
   return fetchJsonCoalesced(`/sentiment/${encodeURIComponent(symbol)}`)
+}
+
+export async function fetchNotificationPreferences() {
+  return fetchJson("/notifications/preferences", {
+    credentials: "include",
+  })
+}
+
+export async function updateNotificationPreferences(preferences) {
+  return fetchJson("/notifications/preferences", {
+    method: "PUT",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preferences),
+  })
+}
+
+export async function resendAlertVerification() {
+  return fetchJson("/notifications/preferences/resend-verification", {
+    method: "POST",
+    credentials: "include",
+  })
+}
+
+export async function unsubscribeAlerts(token) {
+  return fetchJson("/notifications/unsubscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  })
+}
+
+export async function verifyAlertEmail(token) {
+  return fetchJson("/notifications/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  })
 }

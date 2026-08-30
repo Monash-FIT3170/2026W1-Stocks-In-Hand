@@ -28,6 +28,14 @@ on:
         options:
           - "false"
           - "true"
+      enable_notifications:
+        description: Enable user-facing Brevo watchlist alerts
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       enable_bedrock:
         description: Grant analysis access to Nova Micro
         required: true
@@ -248,6 +256,7 @@ jobs:
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
+            --image-repositories "NotificationFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --no-confirm-changeset \
             --no-execute-changeset \
             --no-fail-on-empty-changeset \
@@ -258,6 +267,8 @@ jobs:
               "AuthProvider=${{ inputs.auth_provider }}" \
               "ScheduleEnabled=${{ inputs.enable_schedule }}" \
               "AnalysisEnabled=${{ inputs.enable_analysis }}" \
+              "NotificationsEnabled=${{ inputs.enable_notifications }}" \
+              "AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}" \
               "BedrockEnabled=${{ inputs.enable_bedrock }}" \
               "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \

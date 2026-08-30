@@ -1,3 +1,5 @@
+"""Environment-backed application settings."""
+
 import os
 from pathlib import Path
 
@@ -22,6 +24,21 @@ def _load_local_env() -> None:
 
 
 _load_local_env()
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
+
+
+def _env_confidence(name: str, default: float) -> float:
+    value = float(os.getenv(name, str(default)))
+    if not 0 <= value <= 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return value
+
 
 class Settings:
     """Application configuration loaded from environment variables.
@@ -49,8 +66,55 @@ class Settings:
     )
     DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
     DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
+    NOTIFICATIONS_ENABLED: bool = (
+        os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
+    )
+    NOTIFICATIONS_DRY_RUN: bool = (
+        os.getenv("NOTIFICATIONS_DRY_RUN", "false").lower() == "true"
+    )
+    ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED: bool = (
+        os.getenv("ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED", "false").lower()
+        == "true"
+    )
+    NOTIFICATION_QUEUE_URL: str = os.getenv("NOTIFICATION_QUEUE_URL", "")
+    ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
+    ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    BREVO_API_KEY_PARAMETER: str = os.getenv("BREVO_API_KEY_PARAMETER", "")
+    BREVO_API_BASE_URL: str = os.getenv(
+        "BREVO_API_BASE_URL",
+        "https://api.brevo.com/v3",
+    )
+    ALERT_DAILY_BUDGET: int = _env_int(
+        "ALERT_DAILY_BUDGET",
+        180,
+        minimum=0,
+    )
+    ALERT_MAX_PER_INVESTOR_PER_RUN: int = _env_int(
+        "ALERT_MAX_PER_INVESTOR_PER_RUN",
+        5,
+        minimum=1,
+    )
+    ALERT_DEFAULT_MIN_CONFIDENCE: float = _env_confidence(
+        "ALERT_DEFAULT_MIN_CONFIDENCE",
+        0.75,
+    )
+    ALERT_CLAIM_STALE_MINUTES: int = _env_int(
+        "ALERT_CLAIM_STALE_MINUTES",
+        15,
+        minimum=1,
+    )
+    ALERT_VERIFICATION_TOKEN_TTL_HOURS: int = _env_int(
+        "ALERT_VERIFICATION_TOKEN_TTL_HOURS",
+        24,
+        minimum=1,
+    )
+    FRONTEND_BASE_URL: str = os.getenv(
+        "FRONTEND_BASE_URL",
+        "http://localhost:3000",
+    )
     SOURCE_URLS: dict[str, str] = {
-        ticker: os.getenv(f"{ticker}_SOURCE_URL", source.source_url)
+        ticker: os.getenv(f"{ticker}_SOURCE_URL", str(source.source_url))
         for ticker, source in SOURCES.items()
     }
     SUPPORTED_TICKERS: list[str] = [
@@ -96,7 +160,7 @@ class Settings:
         "https://api.marketaux.com/v1",
     )
     NEWS_FETCH_LIMIT: int = int(os.getenv("NEWS_FETCH_LIMIT", "10"))
-    
+
     CORS_ORIGINS: list[str] = [
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")

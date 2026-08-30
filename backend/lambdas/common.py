@@ -77,6 +77,7 @@ def load_runtime_configuration() -> None:
     parameter_names = {
         "DATABASE_URL": os.getenv("DATABASE_URL_PARAMETER", ""),
         "GROQ_API_KEY": os.getenv("GROQ_API_KEY_PARAMETER", ""),
+        "BREVO_API_KEY": os.getenv("BREVO_API_KEY_PARAMETER", ""),
     }
     missing = {
         variable: parameter

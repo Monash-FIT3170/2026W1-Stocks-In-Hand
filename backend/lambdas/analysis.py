@@ -6,11 +6,14 @@ import logging
 import os
 import re
 import time
+from functools import lru_cache
+from typing import Any
 from urllib.parse import unquote_plus
 from uuid import UUID
 
 import boto3
 
+from app.messages import NotificationMessage
 from lambdas.common import (
     PermanentDocumentError,
     correlation_id,
@@ -274,6 +277,70 @@ def _sentiment_values(output: AnalysisOutput) -> dict:
     }
 
 
+@lru_cache(maxsize=1)
+def _notification_sqs_client() -> Any:
+    """Reuse the notification queue client within one warm Lambda process."""
+    return boto3.client("sqs")
+
+
+def _publish_notification(
+    *,
+    artifact_id: UUID,
+    ticker: str,
+    scrape_run_id: UUID,
+    sentiment: dict,
+) -> None:
+    """Publish one validated notification message to the configured queue."""
+    queue_url = os.getenv("NOTIFICATION_QUEUE_URL", "").strip()
+    if not queue_url:
+        raise RuntimeError("Notification queue URL is not configured")
+    message = NotificationMessage(
+        artifact_id=artifact_id,
+        ticker=ticker,
+        scrape_run_id=scrape_run_id,
+        sentiment_label=sentiment["sentiment_label"],
+        confidence_score=sentiment["confidence_score"],
+    )
+    _notification_sqs_client().send_message(
+        QueueUrl=queue_url,
+        MessageBody=message.model_dump_json(),
+    )
+
+
+def _try_publish_notification(  # pylint: disable=too-many-arguments
+    *,
+    artifact_id: UUID,
+    ticker: str,
+    scrape_run_id: UUID,
+    sentiment: dict,
+    correlation: str,
+    attempt: int,
+) -> None:
+    """Publish an eligible result without risking the analysis pipeline."""
+    if os.getenv("NOTIFICATIONS_ENABLED", "false").lower() != "true":
+        return
+    if sentiment.get("sentiment_label") not in {"negative", "positive"}:
+        return
+    try:
+        _publish_notification(
+            artifact_id=artifact_id,
+            ticker=ticker,
+            scrape_run_id=scrape_run_id,
+            sentiment=sentiment,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        log_event(
+            stage=STAGE,
+            event="notification_publish_failed",
+            level=logging.ERROR,
+            correlation_id=correlation,
+            run_id=scrape_run_id,
+            artifact_id=artifact_id,
+            attempt=attempt,
+            error_code=type(exc).__name__,
+        )
+
+
 def _mark_failed(artifact_id: UUID, error: str) -> None:
     try:
         with database_session() as db:
@@ -345,6 +412,7 @@ def _analyse_object(
         document_format=document_format,
         max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
     )
+    sentiment = _sentiment_values(output)
 
     with database_session() as db:
         from app.crud.artifact import store_artifact_analysis
@@ -361,13 +429,22 @@ def _analyse_object(
                 "document_format": document_format,
             },
             summary=_summary_values(output),
-            sentiment=_sentiment_values(output),
+            sentiment=sentiment,
         )
 
     with database_session() as db:
         from app.crud.scrape_run import mark_artifact_analysis_completed
 
         mark_artifact_analysis_completed(db, artifact_id)
+
+    _try_publish_notification(
+        artifact_id=artifact_id,
+        ticker=ticker,
+        scrape_run_id=state["run_id"],
+        sentiment=sentiment,
+        correlation=correlation,
+        attempt=attempt,
+    )
 
     log_event(
         stage=STAGE,

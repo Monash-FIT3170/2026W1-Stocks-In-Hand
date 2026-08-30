@@ -36,6 +36,26 @@ Parameters:
       - "true"
       - "false"
     Description: Set false to stop Queue C from starting new analysis work.
+  NotificationsEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Master switch for user-facing Brevo watchlist alerts.
+  AlertSenderEmail:
+    Type: String
+    Default: ""
+    AllowedPattern: ^$|^[^@\s]+@[^@\s]+\.[^@\s]+$
+    Description: Sender address verified in the Brevo account.
+  AlertDailyBudget:
+    Type: String
+    Default: "180"
+    AllowedPattern: ^[0-9]+$
+  AlertMaxPerInvestorPerRun:
+    Type: String
+    Default: "5"
+    AllowedPattern: ^[1-9][0-9]*$
   BedrockEnabled:
     Type: String
     Default: "false"
@@ -53,9 +73,17 @@ Parameters:
   AnalysisImageUri:
     Type: String
 
+Rules:
+  AlertSenderRequiredWhenNotificationsEnabled:
+    RuleCondition: !Equals [!Ref NotificationsEnabled, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AlertSenderEmail, ""]]
+        AssertDescription: AlertSenderEmail is required when notifications are enabled.
+
 Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
   IsAnalysisEnabled: !Equals [!Ref AnalysisEnabled, "true"]
+  IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]
   IsBedrockEnabled: !Equals [!Ref BedrockEnabled, "true"]
 
 Resources:
@@ -85,6 +113,13 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub stocks-in-hand-${Environment}-analysis-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  NotificationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-notification-dlq
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
 
@@ -119,6 +154,17 @@ Resources:
       VisibilityTimeout: 4320
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt AnalysisDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-notification
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn
         maxReceiveCount: 5
 
   AnalysisQueuePolicy:
@@ -336,6 +382,13 @@ Resources:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
           GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
+          FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
@@ -500,6 +553,8 @@ Resources:
           MAX_OCR_PAGES: "5"
           MAX_OCR_PIXELS_PER_PAGE: "8000000"
           MAX_ANALYSIS_CHARS: "50000"
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          NOTIFICATION_QUEUE_URL: !Ref NotificationQueue
           BEDROCK_ENABLED: !Ref BedrockEnabled
           BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
           BEDROCK_MAX_INPUT_TOKENS: "2000"
@@ -523,6 +578,14 @@ Resources:
               Action: s3:GetObject
               Resource: !Sub ${RawDocumentBucket.Arn}/raw/*
         - !If
+          - IsNotificationsEnabled
+          - Statement:
+              - Sid: EnqueueNotifications
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt NotificationQueue.Arn
+          - !Ref AWS::NoValue
+        - !If
           - IsBedrockEnabled
           - Statement:
               - Sid: InvokeApprovedBedrockModel
@@ -540,6 +603,60 @@ Resources:
             Queue: !GetAtt AnalysisQueue.Arn
             BatchSize: 1
             Enabled: !If [IsAnalysisEnabled, true, false]
+
+  NotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-notification
+      AutoPublishAlias: live
+      PackageType: Image
+      ImageUri: !Ref ApiImageUri
+      ImageConfig:
+        Command:
+          - lambdas.notify.handler
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 300
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
+          ALERT_DAILY_BUDGET: !Ref AlertDailyBudget
+          ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun
+          FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}
+      Policies:
+        - Statement:
+            - Sid: ReadNotificationParameters
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/brevo-api-key
+            - Sid: DecryptNotificationParameters
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+      Events:
+        NotificationMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            Enabled: !If [IsNotificationsEnabled, true, false]
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
 
   SchedulerFunction:
     Type: AWS::Serverless::Function
@@ -640,6 +757,12 @@ Resources:
       LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-analysis
       RetentionInDays: 7
 
+  NotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-notification
+      RetentionInDays: 7
+
   SchedulerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -702,6 +825,25 @@ Resources:
       Dimensions:
         - Name: QueueName
           Value: !GetAtt AnalysisDeadLetterQueue.QueueName
+
+  NotificationDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stocks-in-hand-${Environment}-notification-dlq
+      AlarmDescription: Notification messages require operator review.
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt NotificationDeadLetterQueue.QueueName
 
   FrontendOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
@@ -887,11 +1029,15 @@ Outputs:
     Value: !Ref DownloadQueue
   AnalysisQueueUrl:
     Value: !Ref AnalysisQueue
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue
   DiscoveryDeadLetterQueueUrl:
     Value: !Ref DiscoveryDeadLetterQueue
   DownloadDeadLetterQueueUrl:
     Value: !Ref DownloadDeadLetterQueue
   AnalysisDeadLetterQueueUrl:
     Value: !Ref AnalysisDeadLetterQueue
+  NotificationDeadLetterQueueUrl:
+    Value: !Ref NotificationDeadLetterQueue
   WeeklyScheduleName:
     Value: !Ref WeeklyScrapeSchedule
