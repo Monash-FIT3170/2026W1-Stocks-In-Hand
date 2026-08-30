@@ -1,0 +1,146 @@
+name: Validate staging release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - "*-integration-merge"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-staging-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Test, build images, and lint infrastructure
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stocks_in_hand_test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stocks_in_hand_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stocks_in_hand_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out the selected commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-api.txt
+            backend/requirements-testing.txt
+
+      - name: Install backend test dependencies
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r backend/requirements-api.txt \
+            -r backend/requirements-testing.txt \
+            pypdf==6.14.2 \
+            defusedxml==0.7.1 \
+            playwright==1.61.0
+
+      - name: Reproduce and repair the deployed schema drift
+        working-directory: backend
+        shell: bash
+        run: |
+          python -c "from sqlalchemy import create_engine, text; import os; engine=create_engine(os.environ['DATABASE_URL'], isolation_level='AUTOCOMMIT'); connection=engine.connect(); connection.execute(text('CREATE ROLE anon NOLOGIN')); connection.execute(text('CREATE ROLE authenticated NOLOGIN')); connection.close(); engine.dispose()"
+          alembic upgrade 86d2cognitoidentity
+          python -c "from sqlalchemy import create_engine, text; import os; engine=create_engine(os.environ['DATABASE_URL']); connection=engine.connect(); connection.execute(text('ALTER TABLE artifacts DROP COLUMN is_duplicate')); connection.commit(); connection.close(); engine.dispose()"
+          alembic upgrade head
+
+      - name: Run backend tests and security checks
+        shell: bash
+        run: |
+          python -m pytest -q backend/tests
+          python -m bandit -q -r backend/app backend/main.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run frontend tests and legacy production build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+          NEXT_PUBLIC_AUTH_PROVIDER: legacy
+        run: |
+          npm ci
+          npm test
+          npm run build
+
+      - name: Run dual-mode Cognito production build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+          NEXT_PUBLIC_AUTH_PROVIDER: dual
+          NEXT_PUBLIC_AWS_REGION: ap-southeast-2
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ap-southeast-2_example
+          NEXT_PUBLIC_COGNITO_APP_CLIENT_ID: exampleclientid
+        run: npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image without pushing
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.api
+          platforms: linux/amd64
+          provenance: false
+          push: false
+          cache-from: type=gha,scope=validation-api
+          cache-to: type=gha,mode=max,scope=validation-api
+
+      - name: Build scraper image without pushing
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.scraper
+          platforms: linux/amd64
+          provenance: false
+          push: false
+          cache-from: type=gha,scope=validation-scraper
+          cache-to: type=gha,mode=max,scope=validation-scraper
+
+      - name: Build analysis image without pushing
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile.analysis
+          platforms: linux/amd64
+          provenance: false
+          push: false
+          cache-from: type=gha,scope=validation-analysis
+          cache-to: type=gha,mode=max,scope=validation-analysis
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: Validate the SAM template
+        shell: bash
+        run: sam validate --lint --template-file infra/template.yaml

@@ -259,3 +259,23 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert "PublicDiscussionSchedulerFunction=" in rollback
     assert "OutputKey=='FrontendUrl'" in rollback
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
+
+
+def test_staging_validation_workflow_cannot_deploy() -> None:
+    validation = (
+        REPOSITORY_ROOT
+        / ".github"
+        / "workflows"
+        / "validate-staging-release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in validation
+    assert "sam validate --lint" in validation
+    assert "Dockerfile.api" in validation
+    assert "Dockerfile.scraper" in validation
+    assert "Dockerfile.analysis" in validation
+    assert "push: false" in validation
+    assert "environment: staging" not in validation
+    assert "configure-aws-credentials" not in validation
+    assert "sam deploy" not in validation
+    assert "docker login" not in validation
