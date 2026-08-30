@@ -82,7 +82,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
     assert "${ParameterPathPrefix}/brevo-api-key" in api_function
     assert "- IsNotificationsEnabled" in api_function
     assert (
-        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
+        "FRONTEND_BASE_URL: !Ref FrontendBaseUrl"
         in api_function
     )
     assert "ses:" not in api_function.lower()
@@ -104,7 +104,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
         in notification_function
     )
     assert (
-        "FRONTEND_BASE_URL: !Sub https://${FrontendDistribution.DomainName}"
+        "FRONTEND_BASE_URL: !Ref FrontendBaseUrl"
         in notification_function
     )
     assert "BREVO_API_KEY_PARAMETER: !If" in notification_function
@@ -253,5 +253,9 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert "enable_public_discussion_schedule:" in deploy
     assert "PublicDiscussionSchedulerFunction=" in deploy
     assert "PublicDiscussionPerSourceLimit=" in deploy
+    assert "OutputKey=='FrontendUrl'" in deploy
+    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in deploy
     assert '"PublicDiscussionScheduleEnabled=false"' in rollback
     assert "PublicDiscussionSchedulerFunction=" in rollback
+    assert "OutputKey=='FrontendUrl'" in rollback
+    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback

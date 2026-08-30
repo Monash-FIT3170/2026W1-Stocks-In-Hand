@@ -170,11 +170,20 @@ jobs:
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+            --output text)"
+          if [ -z "$FRONTEND_BASE_URL" ] || [ "$FRONTEND_BASE_URL" = "None" ]; then
+            echo "The existing stack does not expose FrontendUrl" >&2
+            exit 1
+          fi
           {
             echo "AWS_ACCOUNT_ID=$ACCOUNT_ID"
             echo "ECR_REGISTRY=$REGISTRY"
             echo "RELEASE_SHA=$GITHUB_SHA"
             echo "CFN_ROLE_ARN=$CFN_ROLE"
+            echo "FRONTEND_BASE_URL=$FRONTEND_BASE_URL"
           } >> "$GITHUB_ENV"
           {
             echo "registry=$REGISTRY"
@@ -283,6 +292,7 @@ jobs:
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "FrontendBaseUrl=$FRONTEND_BASE_URL" \
               "AuthProvider=${{ inputs.auth_provider }}" \
               "ScheduleEnabled=${{ inputs.enable_schedule }}" \
               "PublicDiscussionScheduleEnabled=${{ inputs.enable_public_discussion_schedule }}" \
