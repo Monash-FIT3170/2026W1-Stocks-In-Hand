@@ -39,6 +39,7 @@ from parsing.analysis import (
     extract_pdf,
 )
 from parsing.classification import ClassificationInput, classify_document
+from pypdf import PdfWriter
 from scrapers.base import Announcement
 from scrapers.companies.csl import CSLScraper
 

@@ -69,6 +69,21 @@ OBJECT_KEY = re.compile(
 )
 
 
+def _artifact_filename(artifact) -> str | None:
+    metadata = getattr(artifact, "artifact_metadata", None)
+    if isinstance(metadata, dict):
+        filename = metadata.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+    for attribute in ("document_url", "url"):
+        value = getattr(artifact, attribute, None)
+        if isinstance(value, str) and value:
+            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
+            if filename:
+                return filename
+    return None
+
+
 def parse_public_discussion_message(
     record: dict,
 ) -> PublicDiscussionAnalysisMessage | None:
