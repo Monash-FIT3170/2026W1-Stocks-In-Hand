@@ -10,25 +10,24 @@ backend used by Docker and production-like runs. If Postgres is not available th
 skip themselves, which keeps local test runs useful while still giving the Docker
 test environment a real database verification path.
 
-The schema these tests cover is the simplified 10-table schema created by the
-``0001_initial_minimal`` migration.
+The schema these tests cover is the current migrated application schema.
 """
 
 import sys
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
-from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi import Request
-from starlette.responses import Response
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
+from starlette.responses import Response
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -38,17 +37,17 @@ from app.database.base import Base
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 
-
-# Every table the 0001_initial_minimal migration creates. Kept as an exact set so a
-# model that drifts from the migration in either direction fails this file.
+# Every application table. Kept as an exact set so model and migration drift fails.
 EXPECTED_TABLES = {
     "artifacts",
     "artifact_sentiments",
     "artifact_summaries",
+    "artifact_ticker_mentions",
     "auth_sessions",
     "information_platforms",
     "investors",
@@ -148,8 +147,8 @@ def test_sqlalchemy_mappers_configure() -> None:
     configure_mappers()
 
 
-def test_migrated_database_matches_the_minimal_schema() -> None:
-    """The migrated database should contain exactly the 10 tables and no more.
+def test_migrated_database_matches_the_application_schema() -> None:
+    """The migrated database should contain exactly the application tables.
 
     The application relies on Alembic migrations to create the real Postgres
     schema. This test introspects the connected database and confirms that the
@@ -473,6 +472,127 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.author == "testuser"
     assert saved.artifact_metadata["score"] == 42
     assert saved.artifact_metadata["subreddit"] == "ASX"
+
+
+def test_ticker_mentions_connect_social_sentiment_to_ticker(
+    db_session: Session,
+) -> None:
+    """A social artifact can reach ticker sentiment through the join table."""
+    from app.api.routes.category_sentiment import read_ticker_category_sentiment
+
+    ticker = Ticker(
+        symbol=f"P{uuid.uuid4().hex[:8].upper()}",
+        company_name="Public Discussion Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    artifact = Artifact(
+        ticker_id=None,
+        source_type="mastodon",
+        artifact_type="mastodon_post",
+        title=f"Investors discuss {ticker.symbol}",
+        url="https://aus.social/@investor/123",
+        raw_text=f"I am positive about {ticker.symbol} after the update.",
+        content_hash=f"public-discussion-{uuid.uuid4()}",
+        published_at=datetime.now(timezone.utc),
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ArtifactTickerMention(
+                artifact_id=artifact.id,
+                ticker_id=ticker.id,
+                match_method="ticker_symbol",
+                match_confidence=0.95,
+                matched_text=ticker.symbol,
+            ),
+            ArtifactSentiment(
+                artifact_id=artifact.id,
+                sentiment_label="positive",
+                confidence_score=0.9,
+                model_used="test-finbert",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = read_ticker_category_sentiment(ticker.symbol, db_session)
+    discussion = result["categories"]["user_discussion"]
+
+    assert artifact.ticker_id is None
+    assert discussion["available"] is True
+    assert discussion["sentiment_label"] == "positive"
+    assert discussion["sources_count"] == 1
+    assert discussion["sources"] == [
+        {
+            "source_type": "mastodon",
+            "title": f"Investors discuss {ticker.symbol}",
+            "url": "https://aus.social/@investor/123",
+            "author": None,
+            "published_at": artifact.published_at,
+        }
+    ]
+
+
+def test_public_discussion_backfill_is_dry_run_first_and_idempotent(
+    db_session: Session,
+) -> None:
+    from app.services.public_discussion import backfill_artifact_ticker_mentions
+
+    symbol = f"Q{uuid.uuid4().hex[:5].upper()}"
+    ticker = Ticker(
+        symbol=symbol,
+        company_name="Quartz Exchange Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+    matching = Artifact(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title=f"Watching ${symbol} today",
+        raw_text="The update is worth reading.",
+        url="https://reddit.test/matching",
+        content_hash=f"backfill-match-{uuid.uuid4()}",
+        published_at=datetime.now(timezone.utc),
+    )
+    unrelated = Artifact(
+        source_type="mastodon",
+        artifact_type="mastodon_post",
+        title=f"prefix{symbol}suffix is a username",
+        raw_text="No company discussion here.",
+        url="https://aus.social/unrelated",
+        content_hash=f"backfill-unrelated-{uuid.uuid4()}",
+        published_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([matching, unrelated])
+    db_session.commit()
+
+    dry_run = backfill_artifact_ticker_mentions(db_session, execute=False)
+
+    assert dry_run == {
+        "dry_run": True,
+        "artifacts_scanned": 2,
+        "matched_artifacts": 1,
+        "matches_found": 1,
+        "new_mentions": 1,
+        "mentions_written": 0,
+    }
+    assert db_session.query(ArtifactTickerMention).count() == 0
+
+    executed = backfill_artifact_ticker_mentions(db_session, execute=True)
+    repeated = backfill_artifact_ticker_mentions(db_session, execute=True)
+
+    assert executed["mentions_written"] == 1
+    assert repeated["new_mentions"] == 0
+    assert repeated["mentions_written"] == 0
+    mention = db_session.query(ArtifactTickerMention).one()
+    assert mention.artifact_id == matching.id
+    assert mention.ticker_id == ticker.id
+    assert mention.match_method == "cashtag"
 
 
 def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None:

@@ -62,10 +62,14 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 
 | Variable | Required | Description |
 |---|---|---|
-| `REDDIT_CLIENT_ID` | Yes | From reddit.com/prefs/apps — the string under "personal use script", key for developers available on Discord. |
-| `REDDIT_CLIENT_SECRET` | Yes | The secret field from your Reddit app, key for developers available on Discord. |
-| `REDDIT_SEED_SUBREDDIT` | No | Subreddit scraped on backend startup. Defaults to `ASX` |
-| `REDDIT_SEED_LIMIT` | No | Number of Reddit posts fetched on backend startup. Defaults to `50` |
+| `REDDIT_CLIENT_ID` | For Reddit | Client ID from a Reddit script application. |
+| `REDDIT_CLIENT_SECRET` | For Reddit | Client secret from the same Reddit application. |
+| `BLUESKY_IDENTIFIER` | No | Bluesky handle for authenticated search. Leave empty for public search. |
+| `BLUESKY_APP_PASSWORD` | No | Bluesky app password. Must be set with `BLUESKY_IDENTIFIER`. |
+| `PUBLIC_DISCUSSION_FEED_URLS` | For blogs | Comma-separated HTTPS RSS or Atom feed allowlist. |
+| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset. Defaults to `bluesky,mastodon`. |
+| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source. Defaults to `10` and is capped at `25`. |
+| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value. Defaults to `ASX`. |
 | `GROQ_API_KEY` | Yes | From console.groq.com — used for ticker categorisation and Reddit summarisation |
 | `GROQ_MODEL` | No | Defaults to `openai/gpt-oss-120b` |
 | `GEMINI_API_KEY` | No | Legacy setting; ticker sentiment does not use Gemini |
@@ -91,18 +95,26 @@ First boot takes a few minutes — FinBERT (~500MB) and Playwright downloads on 
 ### Reddit (PRAW)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/reddit/scrape` | Queue a background Reddit scrape and store posts as artifacts. Params: `subreddit` (default: ASX), `limit` (default: 10) |
+| POST | `/reddit/scrape` | Admin-only bounded Reddit collection. Params: `subreddit` (default: ASX), `limit` (default: 10) |
 | GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Read stored Reddit posts mentioning a ticker, summarise with Groq/LLaMA, return dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
 
 ### Bluesky (public API)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/bluesky/scrape` | Queue a public Bluesky search and store returned posts as artifacts. Params: `query` (default: ASX), `limit` (default: 25). No Bluesky API key is required |
+| POST | `/bluesky/scrape` | Admin-only public or authenticated Bluesky collection. Params: `query` (default: ASX), `limit` (default: 25) |
 
 ### Mastodon (public API)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/mastodon/scrape` | Queue an `aus.social` hashtag scrape and store returned posts as artifacts. Params: `tag` (default: ASX), `limit` (default: 25). No Mastodon API key is required |
+| POST | `/mastodon/scrape` | Admin-only `aus.social` hashtag collection. Params: `tag` (default: ASX), `limit` (default: 25) |
+
+### Blogs and public discussion status
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/blogs/scrape` | Admin-only RSS or Atom collection. `feed_url` must be in `PUBLIC_DISCUSSION_FEED_URLS` |
+| GET | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker |
+| POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
 ### Groq / legacy LLM route
 | Method | Path | Description |

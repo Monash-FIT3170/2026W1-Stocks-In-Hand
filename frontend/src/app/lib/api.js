@@ -112,3 +112,7 @@ export async function fetchTickerDeepDive(symbol) {
 export async function fetchTickerCategorySentiment(symbol) {
   return fetchJsonCoalesced(`/sentiment/${encodeURIComponent(symbol)}`)
 }
+
+export async function fetchTickerPublicDiscussionStatus(symbol) {
+  return fetchJsonCoalesced(`/public-discussion/ticker/${encodeURIComponent(symbol)}/status`)
+}

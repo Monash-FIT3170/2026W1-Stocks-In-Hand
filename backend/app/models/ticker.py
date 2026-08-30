@@ -1,5 +1,6 @@
 from sqlalchemy import Column, String, DateTime, Numeric
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
 from app.database.base import Base
@@ -16,3 +17,9 @@ class Ticker(Base):
     market_cap = Column(Numeric, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    artifact_mentions = relationship(
+        "ArtifactTickerMention",
+        back_populates="ticker",
+        cascade="all, delete-orphan",
+    )
