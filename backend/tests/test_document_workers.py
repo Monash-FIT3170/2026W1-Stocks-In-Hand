@@ -34,6 +34,7 @@ from parsing.analysis import (
     analyse_public_discussion_text,
     extract_pdf,
 )
+from parsing.classification import ClassificationInput, classify_document
 from pypdf import PdfWriter
 from scrapers.base import Announcement
 from scrapers.companies.csl import CSLScraper
@@ -634,8 +635,11 @@ def test_s3_event_reconciles_an_uploaded_object_before_downloader_commit(
 
     artifact = SimpleNamespace(
         source_adapter="csl",
+        source_type="asx_announcement",
         scrape_run_id=run_id,
         title="Results",
+        document_url="https://example.test/reports/csl-half-year-results.pdf?download=1",
+        artifact_metadata={},
         download_status="downloading",
         analysis_status="pending",
         s3_bucket=None,
@@ -666,6 +670,9 @@ def test_s3_event_reconciles_an_uploaded_object_before_downloader_commit(
     )
 
     assert state["run_id"] == run_id
+    assert state["source_type"] == "asx_announcement"
+    assert state["source_adapter"] == "csl"
+    assert state["filename"] == "csl-half-year-results.pdf"
     assert calls["stored"]["s3_key"] == key
     assert calls["stored"]["file_size_bytes"] == 512
 
@@ -675,12 +682,22 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     run_id = uuid4()
     checksum = "b" * 64
     key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
+    classification = classify_document(
+        ClassificationInput(
+            title="Half Year Results",
+            text="Half year report for the six months ended 31 December 2025.",
+            filename="report.pdf",
+            source_type="asx_announcement",
+            source_adapter="csl",
+        )
+    )
     parsed = ParsedDocument(
         raw_text="Revenue increased.",
         page_count=1,
         category="HalfYearResults",
         category_confidence=1.0,
         extracted_data={},
+        classification=classification,
     )
     output = AnalysisOutput(
         parsed=parsed,
@@ -743,6 +760,13 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
 
     assert calls["started"] is True
     assert calls["stored"]["raw_text"] == "Revenue increased."
+    assert calls["stored"]["metadata"]["classification"]["status"] == "classified"
+    assert (
+        calls["stored"]["metadata"]["classification"]["primary_category"]
+        == "half_year_results"
+    )
+    assert calls["stored"]["metadata"]["category"] == "HalfYearResults"
+    assert calls["stored"]["metadata"]["classification_method"] == "rules-v2"
     assert calls["stored"]["sentiment"]["sentiment_label"] == "positive"
     assert calls["completed"] is True
 

@@ -11,9 +11,6 @@ class ExecutiveTranscript(ReportCategory):
 
     name = "ExecutiveTranscript"
 
-    _TITLE_KEYWORDS = ["transcript", "interview", "bluenotes"]
-    _TEXT_KEYWORDS = ["transcript", "interview"]
-
     @classmethod
     def extract(cls, title: str, text: str, client=None) -> dict:
         return {}

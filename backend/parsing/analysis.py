@@ -16,7 +16,12 @@ from lambdas.download_validation import DocumentFormat
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
-from parsing.classifier import classify
+from parsing.classification import (
+    ClassificationInput,
+    ClassificationResult,
+    classify_document,
+)
+from parsing.extractors import extractor_for
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,7 @@ class ParsedDocument:
     category: str
     category_confidence: float
     extracted_data: dict[str, Any]
+    classification: ClassificationResult | None = None
 
 
 @dataclass(frozen=True)
@@ -314,15 +320,36 @@ def extract_document(
     )
 
 
-def apply_rules(parsed: ParsedDocument, *, title: str) -> ParsedDocument:
-    category, confidence, _ = classify(title, parsed.raw_text)
-    extracted_data = category.extract(title, parsed.raw_text) if category else {}
+def apply_rules(
+    parsed: ParsedDocument,
+    *,
+    title: str,
+    filename: str | None = None,
+    source_type: str | None = None,
+    source_adapter: str | None = None,
+) -> ParsedDocument:
+    classification = classify_document(
+        ClassificationInput(
+            title=title,
+            text=parsed.raw_text,
+            filename=filename,
+            source_type=source_type,
+            source_adapter=source_adapter,
+        )
+    )
+    extractor = (
+        extractor_for(classification.primary_category)
+        if classification.status == "classified"
+        else None
+    )
+    extracted_data = extractor.extract(title, parsed.raw_text) if extractor else {}
     return ParsedDocument(
         raw_text=parsed.raw_text,
         page_count=parsed.page_count,
-        category=category.__name__ if category else "UNKNOWN",
-        category_confidence=confidence,
+        category=classification.compatibility_category,
+        category_confidence=classification.score,
         extracted_data=extracted_data,
+        classification=classification,
     )
 
 
@@ -333,6 +360,9 @@ def analyse_document(
     max_pages: int,
     document_format: DocumentFormat = "pdf",
     max_ocr_pages: int | None = None,
+    filename: str | None = None,
+    source_type: str | None = None,
+    source_adapter: str | None = None,
 ) -> AnalysisOutput:
     parsed = apply_rules(
         extract_document(
@@ -344,6 +374,9 @@ def analyse_document(
             else int(os.getenv("MAX_OCR_PAGES", "5")),
         ),
         title=title,
+        filename=filename,
+        source_type=source_type,
+        source_adapter=source_adapter,
     )
 
     # Sentiment is based on deterministic source text. A Groq response must not

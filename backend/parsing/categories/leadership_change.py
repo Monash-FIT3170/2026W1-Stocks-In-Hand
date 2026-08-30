@@ -26,9 +26,6 @@ class LeadershipChange(ReportCategory):
 
     name = "LeadershipChange"
 
-    _TITLE_KEYWORDS = ["leadership", "appointment", "resign", "management change"]
-    _TEXT_KEYWORDS = ["appointed", "resigned", "effective", "leadership"]
-
     @classmethod
     def extract(cls, title: str, text: str, client=None) -> dict:
         result: dict = {}
