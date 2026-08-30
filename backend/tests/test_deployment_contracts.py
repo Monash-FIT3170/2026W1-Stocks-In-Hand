@@ -80,7 +80,7 @@ def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None
     )[0]
 
     assert 'Default: "false"' in parameter
-    assert "ReservedConcurrentExecutions: 1" in function
+    assert "ReservedConcurrentExecutions" not in function
     assert "PublicDiscussionPerSourceLimit" in function
     assert "MaximumRetryAttempts: 2" in template
     assert "lambdas/public_discussion_schedule.py" in dockerfile

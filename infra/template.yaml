@@ -594,7 +594,6 @@ Resources:
         - x86_64
       MemorySize: 1024
       Timeout: 180
-      ReservedConcurrentExecutions: 1
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
