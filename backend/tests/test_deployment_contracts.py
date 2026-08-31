@@ -417,6 +417,52 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
 
 
+def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
+    ).read_text(encoding="utf-8")
+    oidc = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
+        encoding="utf-8"
+    )
+    api_function = template.split("  ApiFunction:", 1)[1].split(
+        "  DiscoveryFunction:", 1
+    )[0]
+    scheduler_function = template.split("  SchedulerFunction:", 1)[1].split(
+        "  PublicDiscussionSchedulerFunction:", 1
+    )[0]
+
+    marketaux_parameter = template.split("  MarketauxEnabled:", 1)[1].split(
+        "  AnalysisEnabled:", 1
+    )[0]
+    assert 'Default: "false"' in marketaux_parameter
+    assert "MarketauxPerTickerLimit" in marketaux_parameter
+    assert "MaxValue: 25" in marketaux_parameter
+
+    for function in (api_function, scheduler_function):
+        assert "MARKETAUX_API_TOKEN_PARAMETER: !If" in function
+        assert "${ParameterPathPrefix}/marketaux-api-token" in function
+    assert "MARKETAUX_ENABLED: !Ref MarketauxEnabled" in scheduler_function
+    assert "MARKETAUX_PER_TICKER_LIMIT: !Ref MarketauxPerTickerLimit" in scheduler_function
+
+    assert "enable_marketaux:" in workflow
+    assert "AUTO_DEPLOY_ENABLE_MARKETAUX" in workflow
+    assert '"MarketauxEnabled=$ENABLE_MARKETAUX"' in workflow
+    assert '"MarketauxPerTickerLimit=$MARKETAUX_PER_TICKER_LIMIT"' in workflow
+    preflight = workflow.split(
+        "      - name: Validate Marketaux prerequisites", 1
+    )[1].split("      - name:", 1)[0]
+    assert "if: env.ENABLE_MARKETAUX == 'true'" in preflight
+    assert '"$PARAMETER_PATH_PREFIX/marketaux-api-token"' in preflight
+    assert "aws ssm get-parameter" in preflight
+    assert '"$PARAMETER_TYPE" != "SecureString"' in preflight
+
+    assert "Sid: ReadMarketauxParameterMetadata" in oidc
+    assert "parameter/stocks-in-hand/staging/marketaux-api-token" in oidc
+
+
 def test_infra_queue_workflow_keeps_backend_on_python_import_path() -> None:
     workflow = (
         REPOSITORY_ROOT

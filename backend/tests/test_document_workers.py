@@ -79,6 +79,31 @@ def test_runtime_configuration_loads_public_discussion_parameters(
     )
 
 
+def test_runtime_configuration_loads_marketaux_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
+    monkeypatch.delenv("MARKETAUX_API_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "MARKETAUX_API_TOKEN_PARAMETER",
+        "/test/marketaux-api-token",
+    )
+    ssm = MagicMock()
+    ssm.get_parameter.return_value = {
+        "Parameter": {"Value": "marketaux-test-token"}
+    }
+    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
+    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
+
+    common.load_runtime_configuration()
+
+    assert common.os.environ["MARKETAUX_API_TOKEN"] == "marketaux-test-token"
+    ssm.get_parameter.assert_called_once_with(
+        Name="/test/marketaux-api-token",
+        WithDecryption=True,
+    )
+
+
 def test_missing_optional_public_discussion_parameters_disable_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

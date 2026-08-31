@@ -223,7 +223,13 @@ def _get_or_create_platform(db: Session):
     )
 
 
-def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]:
+def fetch_and_store_news(
+    symbol: str,
+    limit: int,
+    db: Session,
+    *,
+    summarise: bool = True,
+) -> dict[str, Any]:
     """Fetch Marketaux articles and persist new ones as news artifacts."""
     articles = fetch_news(symbol, limit)
     ticker = _get_or_create_ticker(db, symbol)
@@ -244,7 +250,10 @@ def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]
             existing = artifact_crud.get_artifact_by_hash(db, content_hash)
             if existing:
                 result["skipped_duplicates"] += 1
-                if not news_summary.has_news_summary_metadata(existing):
+                if (
+                    summarise
+                    and not news_summary.has_news_summary_metadata(existing)
+                ):
                     try:
                         news_summary.summarise_news_artifact(db, existing)
                         result["summarised"] += 1
@@ -285,17 +294,18 @@ def fetch_and_store_news(symbol: str, limit: int, db: Session) -> dict[str, Any]
                 ),
             )
             result["created"] += 1
-            try:
-                news_summary.summarise_news_artifact(db, artifact)
-                result["summarised"] += 1
-            except Exception as exc:  # noqa: BLE001
-                db.rollback()
-                result["errors"] += 1
-                result["error_details"].append({
-                    "url": article.url,
-                    "stage": "summarise",
-                    "message": str(exc),
-                })
+            if summarise:
+                try:
+                    news_summary.summarise_news_artifact(db, artifact)
+                    result["summarised"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    db.rollback()
+                    result["errors"] += 1
+                    result["error_details"].append({
+                        "url": article.url,
+                        "stage": "summarise",
+                        "message": str(exc),
+                    })
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             result["errors"] += 1
