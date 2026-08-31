@@ -21,6 +21,7 @@ REDDIT_DIGEST_PROMPT_VERSION = "llm-reddit-digest-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
 SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)
+SUMMARY_REPAIR_ATTEMPTS = 2
 _UNQUOTED_SUMMARY_KEY = re.compile(
     rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
 )
@@ -159,14 +160,24 @@ def _parse_summary_with_repair(
     try:
         return parse_summary_response(text, include_clarity=include_clarity)
     except ValueError:
+        malformed = text
+
+    for attempt in range(SUMMARY_REPAIR_ATTEMPTS):
         repaired = _call_llm(
             _build_summary_repair_prompt(
-                text,
+                malformed,
                 include_clarity=include_clarity,
             ),
             temperature=0,
         )
-        return parse_summary_response(repaired, include_clarity=include_clarity)
+        try:
+            return parse_summary_response(repaired, include_clarity=include_clarity)
+        except ValueError:
+            if attempt == SUMMARY_REPAIR_ATTEMPTS - 1:
+                raise
+            malformed = repaired
+
+    raise AssertionError("summary repair loop exhausted without returning")
 
 
 def parse_reddit_digest_response(text: str) -> dict[str, object]:

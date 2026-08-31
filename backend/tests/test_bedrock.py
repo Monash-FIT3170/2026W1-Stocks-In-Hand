@@ -184,6 +184,40 @@ def test_announcement_summary_repairs_malformed_model_json_once() -> None:
     assert invoke.call_args_list[1].kwargs == {"temperature": 0}
 
 
+def test_announcement_summary_retries_a_malformed_repair_once() -> None:
+    """A truncated repair response gets one bounded deterministic retry."""
+    malformed = '{"summary": "An update"'
+    truncated_repair = '{\n  "summary": "The company announced an update.'
+    repaired = json.dumps(
+        {
+            "summary": "The company announced an update.",
+            "about": "The filing describes the update.",
+            "changed": "The update was confirmed.",
+            "matters": "Investors can assess the confirmed change.",
+            "confirmed_facts": ["The company confirmed the update."],
+            "speculation": [],
+        }
+    )
+
+    with patch.object(
+        llm,
+        "_call_llm",
+        side_effect=[malformed, truncated_repair, repaired],
+    ) as invoke:
+        result = llm.summarise_announcement(
+            title="Company update",
+            category="organisational",
+            extracted_data={},
+            raw_text="The company confirmed an update.",
+        )
+
+    assert result["summary"] == "The company announced an update."
+    assert invoke.call_count == 3
+    final_repair_prompt = invoke.call_args_list[2].args[0]
+    assert json.dumps(truncated_repair, ensure_ascii=False) in final_repair_prompt
+    assert invoke.call_args_list[2].kwargs == {"temperature": 0}
+
+
 def test_summary_parser_quotes_only_known_unquoted_keys() -> None:
     """GPT-OSS's known key-quoting defect is repaired without weakening the schema."""
     result = llm.parse_summary_response(
