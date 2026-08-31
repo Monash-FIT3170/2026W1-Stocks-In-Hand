@@ -305,7 +305,10 @@ jobs:
               "PublicDiscussionPerSourceLimit=${{ inputs.public_discussion_per_source_limit }}" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA" \
+              "SiteDomainName=${{ vars.SITE_DOMAIN_NAME }}" \
+              "SiteCertificateArn=${{ vars.SITE_CERTIFICATE_ARN }}" \
+              "SiteHostedZoneId=${{ vars.SITE_HOSTED_ZONE_ID }}"
 
       - name: Export the change set for Person 1 review
         id: change_set
