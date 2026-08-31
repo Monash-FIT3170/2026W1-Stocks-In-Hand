@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 
 from ..base import BaseScraper, Announcement
+from ..browser import chromium_launch_options
 
 
 class WESScraper(BaseScraper):
@@ -20,14 +21,7 @@ class WESScraper(BaseScraper):
         announcements = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 accept_downloads=True,

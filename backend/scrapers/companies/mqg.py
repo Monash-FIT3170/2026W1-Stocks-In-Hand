@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright, BrowserContext
 
 from ..base import BaseScraper, Announcement
+from ..browser import chromium_launch_options
 
 
 class MQGScraper(BaseScraper):
@@ -52,15 +53,7 @@ class MQGScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(

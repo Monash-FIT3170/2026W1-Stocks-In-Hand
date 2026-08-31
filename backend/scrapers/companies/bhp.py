@@ -7,6 +7,7 @@ from playwright.async_api import Error as PlaywrightError, async_playwright
 
 from app.services.title_normalization import normalise_title
 from ..base import BaseScraper, Announcement
+from ..browser import chromium_launch_options
 
 
 def clean_bhp_title(raw_title: str, article_url: str) -> str:
@@ -29,14 +30,7 @@ class BHPScraper(BaseScraper):
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-http2",
-                    "--headless=new",
-                ],
+                **chromium_launch_options(extra_args=("--disable-http2",))
             )
 
             context = await browser.new_context(

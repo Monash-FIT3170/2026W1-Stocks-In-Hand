@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from playwright.async_api import BrowserContext, async_playwright
 
 from ..base import Announcement, BaseScraper
+from ..browser import chromium_launch_options
 
 
 class TLSScraper(BaseScraper):
@@ -22,15 +23,7 @@ class TLSScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(

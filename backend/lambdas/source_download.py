@@ -27,6 +27,7 @@ from lambdas.download_validation import (
     validate_document_content,
     validate_download_url,
 )
+from scrapers.browser import chromium_launch_options
 
 _ADAPTER_HOSTS: dict[SourceAdapter, frozenset[str]] = {
     "anz": frozenset(
@@ -407,13 +408,7 @@ async def resolve_session_download(
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-http2",
-                "--headless=new",
-            ],
+            **chromium_launch_options(extra_args=("--disable-http2",))
         )
         context = await browser.new_context(
             accept_downloads=True,
