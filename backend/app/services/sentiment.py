@@ -53,11 +53,13 @@ def get_finbert_components():
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(
+        # The directory is copied into an immutable image at build time; these
+        # calls cannot resolve a Hub model because local_files_only is enforced.
+        tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
             settings.FINBERT_MODEL,
             local_files_only=True,
         )
-        model = AutoModelForSequenceClassification.from_pretrained(
+        model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
             settings.FINBERT_MODEL,
             local_files_only=True,
         )
