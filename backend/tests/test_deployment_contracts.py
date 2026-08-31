@@ -33,6 +33,12 @@ def test_all_canonical_tickers_are_deployable_but_schedule_stays_conservative() 
     for ticker in SOURCES:
         assert f'"{ticker}"' in deployed_list
 
+    cloudfront_ticker_pattern = template.split("var tickerRoute = ", 1)[1].split(
+        ";", 1
+    )[0]
+    for ticker in SOURCES:
+        assert ticker in cloudfront_ticker_pattern
+
 
 def test_local_backend_installs_cognito_jwt_dependency() -> None:
     requirements = (

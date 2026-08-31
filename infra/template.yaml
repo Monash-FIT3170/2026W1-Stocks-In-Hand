@@ -990,7 +990,7 @@ Resources:
             '/terms': true,
             '/watchlist': true
           };
-          var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|CSL|WES)(\/(news|deep-dive))?$/;
+          var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)(\/(news|deep-dive))?$/;
 
           if (!staticRoutes[route] && !tickerRoute.test(route)) {
             request.uri = '/404.html';
