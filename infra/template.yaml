@@ -103,6 +103,7 @@ Parameters:
   SiteCertificateArn:
     Type: String
     Default: ""
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$'
     Description: >-
       ARN of an ACM certificate in us-east-1 covering SiteDomainName. Created
       by infra/domain.yaml.
