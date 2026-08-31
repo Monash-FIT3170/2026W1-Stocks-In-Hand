@@ -22,6 +22,7 @@ from app.services.summary_metadata import (
 from parsing.analysis import (
     AnalysisOutput,
     analyse_document,
+    analyse_news_text,
     analyse_public_discussion_text,
 )
 from pydantic import ValidationError
@@ -549,6 +550,7 @@ def _mark_public_discussion_failed(artifact_id: UUID, error: str) -> None:
 
 
 def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
+    """Load a stored-text artifact for the legacy inline-analysis queue contract."""
     with database_session() as db:
         from app.crud.artifact import get_artifact
         from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
@@ -560,24 +562,36 @@ def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
                 code="artifact_not_found",
             )
         source_type = str(artifact.source_type or "").lower()
-        if source_type not in PUBLIC_DISCUSSION_SOURCE_TYPES:
+        supported_source_types = PUBLIC_DISCUSSION_SOURCE_TYPES | {"news"}
+        if source_type not in supported_source_types:
             raise PermanentDocumentError(
-                "Artifact is not a supported public discussion source",
+                "Artifact is not a supported stored-text source",
                 code="artifact_identity_mismatch",
             )
         title = (artifact.title or "").strip()
         raw_text = (artifact.raw_text or "").strip()
         if not title and not raw_text:
             raise PermanentDocumentError(
-                "Public discussion artifact has no stored text",
+                "Stored-text artifact has no text",
                 code="no_extractable_text",
             )
+        metadata = (
+            artifact.artifact_metadata
+            if isinstance(artifact.artifact_metadata, dict)
+            else {}
+        )
+        source_name = metadata.get("source_name") or metadata.get("provider")
         return {
             "completed": artifact.analysis_status == "completed",
             "run_id": artifact.scrape_run_id,
-            "title": title or "Untitled public discussion",
+            "title": title or (
+                "Untitled news article"
+                if source_type == "news"
+                else "Untitled public discussion"
+            ),
             "raw_text": raw_text,
             "source_type": source_type,
+            "source_name": source_name if isinstance(source_name, str) else None,
         }
 
 
@@ -606,11 +620,21 @@ def _analyse_public_discussion_artifact(
 
         mark_inline_artifact_analysis_started(db, artifact_id)
 
-    output = analyse_public_discussion_text(
-        title=state["title"],
-        raw_text=state["raw_text"],
-        source_type=state["source_type"],
-    )
+    is_news = state["source_type"] == "news"
+    if is_news:
+        output = analyse_news_text(
+            title=state["title"],
+            raw_text=state["raw_text"],
+            source_name=state.get("source_name"),
+        )
+    else:
+        output = analyse_public_discussion_text(
+            title=state["title"],
+            raw_text=state["raw_text"],
+            source_type=state["source_type"],
+        )
+
+    category = "news_article" if is_news else "user_discussion"
 
     with database_session() as db:
         from app.crud.artifact import store_artifact_analysis
@@ -620,7 +644,7 @@ def _analyse_public_discussion_artifact(
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
             metadata={
-                "category": "user_discussion",
+                "category": category,
                 "category_confidence": 1.0,
             },
             summary=_summary_values(output),
@@ -640,7 +664,7 @@ def _analyse_public_discussion_artifact(
         run_id=state["run_id"],
         artifact_id=artifact_id,
         attempt=attempt,
-        category="USER_DISCUSSION",
+        category=category.upper(),
         source_type=state["source_type"],
     )
 

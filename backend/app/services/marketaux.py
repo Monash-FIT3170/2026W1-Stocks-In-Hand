@@ -29,6 +29,24 @@ class MarketauxError(RuntimeError):
     """Raised when Marketaux cannot provide a usable response."""
 
 
+def _queue_news_artifact_analysis(db: Session, artifact) -> bool:
+    """Queue one unsummarised news artifact for the analysis worker."""
+    if (
+        news_summary.has_news_summary_metadata(artifact)
+        or artifact.analysis_status in {"queued", "analyzing", "completed"}
+        or not settings.ANALYSIS_QUEUE_URL
+        or not ((artifact.raw_text or "").strip() or (artifact.title or "").strip())
+    ):
+        return False
+
+    from app.crud import scrape_run as scrape_run_crud
+    from app.services import analysis_queue
+
+    analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
+    scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
+    return True
+
+
 @dataclass(frozen=True)
 class NewsArticle:
     """Provider-independent representation of one collected news article."""
@@ -229,6 +247,7 @@ def fetch_and_store_news(
     db: Session,
     *,
     summarise: bool = True,
+    enqueue_analysis: bool = False,
 ) -> dict[str, Any]:
     """Fetch Marketaux articles and persist new ones as news artifacts."""
     articles = fetch_news(symbol, limit)
@@ -239,6 +258,7 @@ def fetch_and_store_news(
         "found": len(articles),
         "created": 0,
         "summarised": 0,
+        "analysis_queued": 0,
         "skipped_duplicates": 0,
         "errors": 0,
         "error_details": [],
@@ -263,6 +283,19 @@ def fetch_and_store_news(
                         result["error_details"].append({
                             "url": article.url,
                             "stage": "summarise",
+                            "message": str(exc),
+                        })
+                elif enqueue_analysis:
+                    try:
+                        result["analysis_queued"] += int(
+                            _queue_news_artifact_analysis(db, existing)
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        db.rollback()
+                        result["errors"] += 1
+                        result["error_details"].append({
+                            "url": article.url,
+                            "stage": "queue_analysis",
                             "message": str(exc),
                         })
                 continue
@@ -304,6 +337,19 @@ def fetch_and_store_news(
                     result["error_details"].append({
                         "url": article.url,
                         "stage": "summarise",
+                        "message": str(exc),
+                    })
+            elif enqueue_analysis:
+                try:
+                    result["analysis_queued"] += int(
+                        _queue_news_artifact_analysis(db, artifact)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    db.rollback()
+                    result["errors"] += 1
+                    result["error_details"].append({
+                        "url": article.url,
+                        "stage": "queue_analysis",
                         "message": str(exc),
                     })
         except Exception as exc:  # noqa: BLE001

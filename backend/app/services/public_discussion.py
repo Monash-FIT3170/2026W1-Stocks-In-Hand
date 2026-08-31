@@ -222,19 +222,22 @@ def link_artifact_to_tickers(
 def queue_artifact_analysis(
     db: Session,
     artifact: Artifact,
-    matches: Sequence[TickerMentionMatch],
+    _matches: Sequence[TickerMentionMatch],
 ) -> bool:
-    """Queue matched, unfinished discussion text when analysis is configured."""
+    """Queue unfinished discussion text when analysis is configured.
+
+    Ticker matches still control ticker links, but a broad ASX discussion can be
+    useful in the announcements feed even when it does not name a supported ticker.
+    """
     if (
-        not matches
-        or artifact.analysis_status in {"queued", "analyzing", "completed"}
+        artifact.analysis_status in {"queued", "analyzing", "completed"}
         or not settings.ANALYSIS_QUEUE_URL
     ):
         return False
     from app.crud import scrape_run as scrape_run_crud
     from app.services import analysis_queue
 
-    analysis_queue.enqueue_public_discussion_analysis(artifact.id)
+    analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
     scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
     return True
 
@@ -416,7 +419,7 @@ def requeue_pending_analysis(
     errors = []
     for artifact in artifacts:
         try:
-            analysis_queue.enqueue_public_discussion_analysis(artifact.id)
+            analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
             scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
             queued_ids.append(artifact.id)
         except Exception as exc:  # noqa: BLE001

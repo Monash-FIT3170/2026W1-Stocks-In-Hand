@@ -237,6 +237,118 @@ def test_scheduled_collection_can_store_without_llm_summary() -> None:
     summarise_artifact.assert_not_called()
 
 
+def test_scheduled_collection_queues_new_news_for_analysis() -> None:
+    db = MagicMock()
+    ticker = MagicMock(id=uuid.uuid4(), symbol="BHP")
+    platform = MagicMock(id=uuid.uuid4())
+    artifact = MagicMock(
+        id=uuid.uuid4(),
+        artifact_metadata={},
+        analysis_status="pending",
+        raw_text="BHP reported stronger copper production.",
+        title="BHP production update",
+    )
+
+    with patch.object(
+        marketaux,
+        "fetch_news",
+        return_value=[_article()],
+    ), patch.object(
+        marketaux,
+        "_get_or_create_ticker",
+        return_value=ticker,
+    ), patch.object(
+        marketaux,
+        "_get_or_create_platform",
+        return_value=platform,
+    ), patch.object(
+        marketaux.artifact_crud,
+        "get_artifact_by_hash",
+        return_value=None,
+    ), patch.object(
+        marketaux.artifact_crud,
+        "create_artifact",
+        return_value=artifact,
+    ), patch.object(
+        marketaux.settings,
+        "ANALYSIS_QUEUE_URL",
+        "queue-url",
+    ), patch(
+        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
+        return_value="message-id",
+    ) as enqueue, patch(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
+    ) as mark_queued:
+        result = marketaux.fetch_and_store_news(
+            "BHP",
+            10,
+            db,
+            summarise=False,
+            enqueue_analysis=True,
+        )
+
+    assert result["created"] == 1
+    assert result["summarised"] == 0
+    assert result["analysis_queued"] == 1
+    assert result["errors"] == 0
+    enqueue.assert_called_once_with(artifact.id)
+    mark_queued.assert_called_once_with(db, artifact.id)
+
+
+def test_scheduled_collection_requeues_existing_unsummarised_news() -> None:
+    db = MagicMock()
+    ticker = MagicMock(id=uuid.uuid4(), symbol="BHP")
+    platform = MagicMock(id=uuid.uuid4())
+    existing = MagicMock(
+        id=uuid.uuid4(),
+        artifact_metadata={},
+        analysis_status="pending",
+        raw_text="BHP reported stronger copper production.",
+        title="BHP production update",
+    )
+
+    with patch.object(
+        marketaux,
+        "fetch_news",
+        return_value=[_article()],
+    ), patch.object(
+        marketaux,
+        "_get_or_create_ticker",
+        return_value=ticker,
+    ), patch.object(
+        marketaux,
+        "_get_or_create_platform",
+        return_value=platform,
+    ), patch.object(
+        marketaux.artifact_crud,
+        "get_artifact_by_hash",
+        return_value=existing,
+    ), patch.object(
+        marketaux.settings,
+        "ANALYSIS_QUEUE_URL",
+        "queue-url",
+    ), patch(
+        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
+        return_value="message-id",
+    ) as enqueue, patch(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
+    ) as mark_queued:
+        result = marketaux.fetch_and_store_news(
+            "BHP",
+            10,
+            db,
+            summarise=False,
+            enqueue_analysis=True,
+        )
+
+    assert result["created"] == 0
+    assert result["skipped_duplicates"] == 1
+    assert result["analysis_queued"] == 1
+    assert result["errors"] == 0
+    enqueue.assert_called_once_with(existing.id)
+    mark_queued.assert_called_once_with(db, existing.id)
+
+
 def test_news_fetch_route_response_shape() -> None:
     expected = {
         "symbol": "BHP",

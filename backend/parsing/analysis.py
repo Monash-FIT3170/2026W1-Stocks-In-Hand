@@ -466,3 +466,55 @@ def analyse_public_discussion_text(
         summary_prompt_version=summary_prompt_version,
         sentiment=sentiment,
     )
+
+
+def analyse_news_text(
+    *,
+    title: str,
+    raw_text: str,
+    source_name: str | None = None,
+) -> AnalysisOutput:
+    """Analyse stored publisher text with the news-specific summary prompt."""
+    parsed = _text_document(raw_text or title)
+    from app.services import sentiment as sentiment_service
+
+    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
+    sentiment = sentiment_service.analyse_text(
+        f"{title}\n\n{parsed.raw_text}"[:max_chars]
+    )
+
+    from app.services import llm as llm_service
+
+    summary: dict[str, str] | None = None
+    summary_model: str | None = None
+    summary_prompt_version: str | None = None
+    try:
+        response = llm_service.summarise_news_article(
+            title=title,
+            source_name=source_name,
+            raw_text=parsed.raw_text,
+        )
+        summary = {
+            key: value
+            for key in ("summary", "about", "changed", "matters")
+            if isinstance((value := response.get(key)), str)
+        }
+        summary_model = llm_service.active_model_name()
+        summary_prompt_version = llm_service.NEWS_SUMMARY_PROMPT_VERSION
+    except RuntimeError as exc:
+        if "not configured" not in str(exc).lower():
+            raise
+
+    return AnalysisOutput(
+        parsed=ParsedDocument(
+            raw_text=parsed.raw_text,
+            page_count=1,
+            category="NEWS_ARTICLE",
+            category_confidence=1.0,
+            extracted_data={},
+        ),
+        summary=summary,
+        summary_model=summary_model,
+        summary_prompt_version=summary_prompt_version,
+        sentiment=sentiment,
+    )

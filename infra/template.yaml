@@ -770,6 +770,7 @@ Resources:
           MARKETAUX_ENABLED: !Ref MarketauxEnabled
           MARKETAUX_PER_TICKER_LIMIT: !Ref MarketauxPerTickerLimit
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
+          ANALYSIS_QUEUE_URL: !Ref AnalysisQueue
           SCHEDULED_TICKERS: !Ref ScheduledTickers
       Policies:
         - Statement:
@@ -792,6 +793,10 @@ Resources:
               Effect: Allow
               Action: sqs:SendMessage
               Resource: !GetAtt DiscoveryQueue.Arn
+            - Sid: EnqueueStoredArtifactAnalysis
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt AnalysisQueue.Arn
 
   PublicDiscussionSchedulerFunction:
     Type: AWS::Serverless::Function

@@ -33,6 +33,7 @@ def test_schedule_enqueues_each_enabled_ticker_once(monkeypatch) -> None:
             return_value={
                 "marketaux_tickers": 0,
                 "marketaux_created": 0,
+                "marketaux_analysis_queued": 0,
                 "marketaux_errors": 0,
             },
         ),
@@ -51,6 +52,7 @@ def test_schedule_enqueues_each_enabled_ticker_once(monkeypatch) -> None:
         "event_id": "scheduled-event-1",
         "marketaux_tickers": 0,
         "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
         "marketaux_errors": 0,
     }
     assert sqs.send_message.call_count == 2
@@ -95,7 +97,7 @@ def test_marketaux_schedule_is_bounded(monkeypatch) -> None:
         patch.object(
             marketaux,
             "fetch_and_store_news",
-            return_value={"created": 1, "errors": 0},
+            return_value={"created": 1, "analysis_queued": 1, "errors": 0},
         ) as collect,
     ):
         result = schedule._collect_marketaux_news(tickers)
@@ -103,11 +105,15 @@ def test_marketaux_schedule_is_bounded(monkeypatch) -> None:
     assert result == {
         "marketaux_tickers": 5,
         "marketaux_created": 5,
+        "marketaux_analysis_queued": 5,
         "marketaux_errors": 0,
     }
     assert [call.args[0] for call in collect.call_args_list] == tickers[:5]
     assert all(call.args[1] == 25 for call in collect.call_args_list)
-    assert all(call.kwargs == {"summarise": False} for call in collect.call_args_list)
+    assert all(
+        call.kwargs == {"summarise": False, "enqueue_analysis": True}
+        for call in collect.call_args_list
+    )
 
 
 def test_marketaux_schedule_skips_collection_when_disabled(monkeypatch) -> None:
@@ -119,6 +125,7 @@ def test_marketaux_schedule_skips_collection_when_disabled(monkeypatch) -> None:
     assert result == {
         "marketaux_tickers": 0,
         "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
         "marketaux_errors": 0,
     }
     collect.assert_not_called()
@@ -138,6 +145,7 @@ def test_schedule_raises_when_marketaux_collection_fails(monkeypatch) -> None:
             return_value={
                 "marketaux_tickers": 1,
                 "marketaux_created": 0,
+                "marketaux_analysis_queued": 0,
                 "marketaux_errors": 1,
             },
         ),

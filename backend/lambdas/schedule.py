@@ -58,6 +58,7 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
     result = {
         "marketaux_tickers": 0,
         "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
         "marketaux_errors": 0,
     }
     if os.getenv("MARKETAUX_ENABLED", "false").lower() != "true":
@@ -75,6 +76,7 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
                     _marketaux_limit(),
                     db,
                     summarise=False,
+                    enqueue_analysis=True,
                 )
         except Exception as exc:  # noqa: BLE001
             result["marketaux_errors"] += 1
@@ -88,6 +90,9 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
             continue
 
         result["marketaux_created"] += int(collected.get("created", 0))
+        result["marketaux_analysis_queued"] += int(
+            collected.get("analysis_queued", 0)
+        )
         provider_errors = int(collected.get("errors", 0))
         result["marketaux_errors"] += provider_errors
         if provider_errors:
@@ -161,6 +166,7 @@ def handler(event: dict, _context) -> dict:
     marketaux_result = {
         "marketaux_tickers": 0,
         "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
         "marketaux_errors": 0,
     }
 
