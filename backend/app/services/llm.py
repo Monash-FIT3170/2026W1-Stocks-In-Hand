@@ -182,7 +182,8 @@ speculation: an array of concise forward-looking claims, including forecasts, ta
 
 Classify claims by what they say, not who said them. A forecast made in an official
 announcement is still speculation. Do not repeat a claim in both arrays. Use an empty
-array when the supplied text does not support a category.
+array when the supplied text does not support a category. Limit confirmed_facts to five
+items and speculation to three items. Keep every string under 40 words.
 
 Title:
 {title}

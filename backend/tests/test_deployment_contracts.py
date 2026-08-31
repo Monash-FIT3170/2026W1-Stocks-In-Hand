@@ -176,7 +176,6 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
         assert "BEDROCK_ENABLED: !Ref BedrockEnabled" in function
         assert "BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0" in function
         assert 'BEDROCK_MAX_PROMPT_CHARS: "30000"' in function
-        assert 'BEDROCK_MAX_OUTPUT_TOKENS: "1024"' in function
         assert "- IsBedrockEnabled" in function
         assert "Action: bedrock:InvokeModel" in function
         assert (
@@ -188,6 +187,8 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
 
     assert "BEDROCK_SERVICE_TIER: default" in api_function
     assert "BEDROCK_SERVICE_TIER: flex" in analysis_function
+    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "1024"' in api_function
+    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "4096"' in analysis_function
 
     runtime_requirements = (
         REPOSITORY_ROOT / "backend" / "requirements-api.txt"

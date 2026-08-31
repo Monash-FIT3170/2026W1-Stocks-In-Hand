@@ -603,7 +603,7 @@ Resources:
           BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
           BEDROCK_SERVICE_TIER: flex
           BEDROCK_MAX_PROMPT_CHARS: "30000"
-          BEDROCK_MAX_OUTPUT_TOKENS: "1024"
+          BEDROCK_MAX_OUTPUT_TOKENS: "4096"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters

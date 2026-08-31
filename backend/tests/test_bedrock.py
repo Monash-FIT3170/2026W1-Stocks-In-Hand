@@ -77,6 +77,7 @@ def test_invoke_text_uses_bounded_gpt_oss_request() -> None:
         "messages": [{"role": "user", "content": "Summarise this filing."}],
         "max_completion_tokens": 1024,
         "temperature": 0.2,
+        "response_format": {"type": "json_object"},
         "service_tier": "flex",
         "stream": False,
     }

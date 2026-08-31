@@ -82,6 +82,7 @@ def invoke_text(prompt: str, *, temperature: float = 0.2) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "max_completion_tokens": settings.BEDROCK_MAX_OUTPUT_TOKENS,
         "temperature": temperature,
+        "response_format": {"type": "json_object"},
         "service_tier": settings.BEDROCK_SERVICE_TIER,
         "stream": False,
     }
