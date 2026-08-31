@@ -1,14 +1,13 @@
-import { BadgeIcon, SparkIcon } from "../icons"
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 import { CitationLinks } from "./CitationLinks"
 
 function ClaimList({ emptyMessage, items }) {
   if (items.length === 0) {
-    return <p className={styles.clarityEmpty}>{emptyMessage}</p>
+    return <p className={styles.claimEmpty}>{emptyMessage}</p>
   }
 
   return (
-    <ul className={styles.clarityClaims}>
+    <ul className={styles.claimList}>
       {items.map((item) => <li key={item}>{item}</li>)}
     </ul>
   )
@@ -20,15 +19,15 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
 
   if (!clarity.is_classified) {
     return (
-      <section className={styles.clarityCard} aria-label="Fact and speculation clarity">
-        <div className={styles.clarityHeader}>
+      <section className={styles.clarityPanel} aria-label="Fact and speculation clarity">
+        <div className={styles.sectionHeader}>
           <div>
-            <span>Clarity layer</span>
-            <h2>Fact check pending</h2>
+            <h2>Verification status</h2>
+            <p>The latest summary has not yet been separated into supported facts and forward-looking interpretation.</p>
           </div>
-          <strong className={styles.clarityPending}>Not classified</strong>
+          <strong className={`${styles.statusLabel} ${styles.statusPending}`}>Not classified</strong>
         </div>
-        <p className={styles.clarityNotice}>
+        <p className={styles.notice}>
           This announcement has not been classified into confirmed facts and
           speculation yet. Treat the summary as AI-generated analysis.
         </p>
@@ -37,29 +36,17 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
   }
 
   return (
-    <section className={styles.clarityCard} aria-label="Fact and speculation clarity">
-      <div className={styles.clarityHeader}>
+    <section className={styles.clarityPanel} aria-label="Fact and speculation clarity">
+      <div className={styles.sectionHeader}>
         <div>
-          <span>Clarity layer</span>
-          <h2>What&apos;s verified?</h2>
+          <h2>Verification map</h2>
+          <p>Claims are separated by whether they describe supported facts or forward-looking interpretation.</p>
         </div>
-        <strong className={styles.clarityReady}>Classified</strong>
+        <strong className={`${styles.statusLabel} ${styles.statusReady}`}>Classified</strong>
       </div>
-
-      <p className={styles.clarityIntro}>
-        Claims are separated by whether they describe supported facts or
-        forward-looking interpretation.
-      </p>
-
       <div className={styles.clarityGrid}>
-        <section className={`${styles.clarityGroup} ${styles.clarityConfirmed}`}>
-          <div className={styles.clarityGroupTitle}>
-            <BadgeIcon />
-            <div>
-              <h3>Confirmed facts</h3>
-              <p>Directly supported by the official announcement.</p>
-            </div>
-          </div>
+        <section className={styles.clarityGroup}>
+          <h3>Confirmed facts</h3>
           <ClaimList
             emptyMessage="No confirmed factual claims were identified."
             items={confirmedFacts}
@@ -67,14 +54,8 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
           <CitationLinks sources={sources} />
         </section>
 
-        <section className={`${styles.clarityGroup} ${styles.claritySpeculation}`}>
-          <div className={styles.clarityGroupTitle}>
-            <SparkIcon />
-            <div>
-              <h3>Speculation</h3>
-              <p>Forecasts, expectations, opinions, and possible impacts.</p>
-            </div>
-          </div>
+        <section className={styles.clarityGroup}>
+          <h3>Forward-looking interpretation</h3>
           <ClaimList
             emptyMessage="No speculative or forward-looking claims were identified."
             items={speculation}

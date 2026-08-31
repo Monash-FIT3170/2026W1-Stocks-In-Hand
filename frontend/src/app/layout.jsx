@@ -8,7 +8,7 @@ export const metadata = {
 export default function Layout({ children }) {
   return (
     <html lang="en-AU">
-      <body style={{ fontFamily: "system-ui", background: "#f8f9fb", color: "#191c1e", margin: 0 }}>
+      <body style={{ background: "#fbfcfc", color: "#101214", margin: 0 }}>
         <AppFrame>{children}</AppFrame>
       </body>
     </html>

@@ -1,14 +1,14 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { SparkIcon } from "../../components/icons"
 import { CategorySentiment } from "../../components/ticker/CategorySentiment"
 import { CitationLinks } from "../../components/ticker/CitationLinks"
 import { ClarityLayer } from "../../components/ticker/ClarityLayer"
 import { PublicDiscussionStatus } from "../../components/ticker/PublicDiscussionStatus"
 import { useTickerBrief } from "../../components/ticker/TickerBriefShell"
 import { fetchTickerCategorySentiment, fetchTickerPublicDiscussionStatus } from "../../lib/api"
-import styles from "../../page.module.css"
+import pageStyles from "../../page.module.css"
+import styles from "../../components/research/ResearchSurface.module.css"
 
 // Ticker brief summary tab for "/ticker/[symbol]".
 // This route renders only DB-backed ticker overview data so missing data is visible
@@ -56,7 +56,7 @@ export default function TickerSummaryRoute() {
   if (isBriefLoading) {
     return (
       <div className={styles.briefContent} aria-live="polite">
-        <div className={styles.contentSkeleton}>Loading the latest {symbol} brief…</div>
+        <div className={pageStyles.contentSkeleton}>Loading the latest {symbol} brief…</div>
       </div>
     )
   }
@@ -64,7 +64,7 @@ export default function TickerSummaryRoute() {
   if (!data) {
     return (
       <div className={styles.briefContent}>
-        <div className={styles.emptyCard}>
+        <div className={styles.statePanel}>
           <h2>Company summary unavailable</h2>
           <p>{briefError || "No saved company summary is available."}</p>
         </div>
@@ -80,40 +80,38 @@ export default function TickerSummaryRoute() {
 
   return (
     <div className={styles.briefContent}>
-      <article className={styles.storyCard}>
+      <article className={styles.storyLead}>
         <div className={styles.storyHeading}>
-          <h2><SparkIcon /> What&apos;s the story?</h2>
-          <span>Latest filing</span>
+          <h2>Latest research brief</h2>
+          <span>Built from the latest stored filing</span>
         </div>
-        <p>{data.story}</p>
-        <strong>{sourceCopy}</strong>
-        <CitationLinks sources={data.sources} />
+        <div className={styles.storyCopy}>
+          <p>{data.story}</p>
+          <strong>{sourceCopy}</strong>
+          <CitationLinks sources={data.sources} />
+        </div>
       </article>
       <ClarityLayer clarity={data.clarity} sources={data.sources} />
-      <article className={styles.sentimentCard}>
-        <h2>{data.sentiment_label}</h2>
-        {data.sentiment_status === "available" ? (
-          <>
-            <p>The latest analysed filing is classified as {data.sentiment_label.toLowerCase()}.</p>
-            <div className={styles.sentimentBar}>
-              <span>Latest filing model confidence</span>
-              <strong>{data.latest_signal_confidence_pct}</strong>
-            </div>
-          </>
-        ) : (
-          <p>No analysed filing sentiment is available yet.</p>
-        )}
-      </article>
+      <section className={styles.signalPanel} aria-label="Latest filing sentiment">
+        <div>
+          <h2>{data.sentiment_label}</h2>
+          <p>{data.sentiment_status === "available" ? `The latest analysed filing is classified as ${data.sentiment_label.toLowerCase()}.` : "No analysed filing sentiment is available yet."}</p>
+        </div>
+        <div className={styles.confidence}>
+          <span>Latest model confidence</span>
+          <strong>{data.latest_signal_confidence_pct || "N/A"}</strong>
+        </div>
+      </section>
       {!state.isLoading ? (
         <PublicDiscussionStatus error={state.discussionError} status={state.discussionStatus} />
       ) : null}
       {state.categoryError ? (
-        <div className={styles.inlineError} role="alert">
+        <div className={styles.statePanel} role="alert">
           <p>Category signals could not be loaded. {state.categoryError}</p>
           <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
         </div>
       ) : state.isLoading ? (
-        <div className={styles.contentSkeleton} aria-live="polite">Loading saved category signals…</div>
+        <div className={pageStyles.contentSkeleton} aria-live="polite">Loading saved category signals…</div>
       ) : (
         <CategorySentiment sentiment={state.categorySentiment} />
       )}

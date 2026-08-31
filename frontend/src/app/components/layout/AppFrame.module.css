@@ -1,278 +1,99 @@
-/*
-  Shared design tokens for the prototype shell.
-  AppFrame wraps every route, so these CSS custom properties are available to the
-  page CSS module through the appShell ancestor. If the team wants to adjust the
-  overall palette, shadows, or typography colors, start here before editing pages.
-*/
 .appShell {
-  --bg: #f8f9fb;
-  --panel: #f1f3f5;
-  --surface: #ffffff;
-  --soft: #eceeef;
-  --text: #191c1e;
-  --muted: #3e4943;
-  --subtle: #52615a;
-  --faint: #56625c;
-  --green: #006445;
-  --green2: #047857;
-  --mint: #99f5c8;
-  --orange: #f59e0b;
-  --red: #b04747;
-  --line: rgba(226, 232, 240, 0.82);
-  --shadow: 0 16px 30px rgba(25, 28, 30, 0.06);
-  background: var(--bg);
-  color: var(--text);
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
+  --canvas: #fbfcfc; --canvas-subtle: #f4f6f8; --surface: #fff; --surface-raised: #f8fafc;
+  --surface-tint: #edf2ff; --ink: #101214; --ink-secondary: #4e5965; --ink-tertiary: #707b87;
+  --line: #dfe4e8; --line-strong: #c8d0d7; --brand: #2f5bea; --brand-hover: #2448c7;
+  --brand-soft: #e9eeff; --positive: #13795b; --positive-soft: #e5f5ef; --warning: #9a6700;
+  --warning-soft: #fff3d6; --negative: #b4233b; --negative-soft: #fdecef; --focus: #315fea;
+  --overlay: rgba(16,18,20,.48); --ease-out: cubic-bezier(.22,1,.36,1); --ease-standard: cubic-bezier(.4,0,.2,1);
+  --shadow-soft: 0 18px 48px rgba(16,18,20,.08);
+  --bg: var(--canvas); --panel: var(--canvas-subtle); --soft: var(--canvas-subtle); --text: var(--ink);
+  --muted: var(--ink-secondary); --subtle: var(--ink-secondary); --faint: var(--ink-tertiary);
+  --green: var(--brand); --green2: var(--brand-hover); --mint: var(--brand-soft);
+  --orange: var(--warning); --red: var(--negative); --shadow: var(--shadow-soft);
+  background: var(--canvas); color: var(--ink); display: flex; flex-direction: column;
+  font-family: "Segoe UI Variable", "Segoe UI", "Helvetica Neue", Arial, sans-serif; min-height: 100vh;
 }
-
-.appShell ::selection {
-  background: var(--mint);
-  color: #043d2b;
+.appShell *, .appShell *::before, .appShell *::after { box-sizing: border-box; }
+.appShell ::selection { background: var(--brand); color: #fff; }
+.appShell button, .appShell input, .appShell select, .appShell textarea { font: inherit; }
+.appShell button { cursor: pointer; }
+.appShell :is(a,button,input,select,textarea):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.skipLink { background: var(--ink); border-radius: 0 0 8px 0; color: #fff; font-size: 14px; font-weight: 600; left: 0; padding: 13px 16px; position: fixed; top: 0; transform: translateY(-120%); transition: transform 180ms var(--ease-out); z-index: 100; }
+.skipLink:focus { transform: translateY(0); }
+.topNav { background: rgba(251,252,252,.9); border-bottom: 1px solid transparent; min-height: 64px; position: sticky; top: 0; transition: background-color 260ms var(--ease-standard); z-index: 50; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.topNav::after { background: linear-gradient(90deg,transparent,var(--line) 12%,var(--line) 88%,transparent); bottom: 0; content: ""; height: 1px; left: 0; opacity: 1; position: absolute; right: 0; transition: opacity 220ms var(--ease-standard); }
+.navInner { align-items: center; border: 1px solid transparent; border-radius: 0; display: grid; gap: 24px; grid-template-columns: minmax(210px,1fr) auto minmax(210px,1fr); margin: 0 auto; max-width: 1320px; min-height: 64px; padding: 8px 32px; position: relative; transition: background-color 320ms var(--ease-out),border-color 320ms var(--ease-out),border-radius 320ms var(--ease-out),box-shadow 320ms var(--ease-out),transform 420ms var(--ease-out); }
+.brandButton, .navLink, .activeNavLink, .settingsLink, .signInButton { text-decoration: none; }
+.brandButton { align-items: center; color: var(--ink); display: inline-flex; font-size: 15px; font-weight: 650; gap: 10px; justify-self: start; letter-spacing: -.02em; min-height: 44px; white-space: nowrap; }
+.brandButton > span:last-child { max-width: 130px; opacity: 1; overflow: hidden; transform: translateX(0); transition: opacity 180ms var(--ease-standard),transform 260ms var(--ease-out); }
+.brandMark { align-items: flex-end; display: inline-flex; gap: 2px; height: 20px; width: 20px; }
+.brandMark i { background: var(--ink); border-radius: 2px 2px 0 0; display: block; width: 4px; }
+.brandMark i:nth-child(1) { height: 8px; } .brandMark i:nth-child(2) { height: 14px; } .brandMark i:nth-child(3) { background: var(--brand); height: 20px; }
+.navLinks { align-items: center; display: flex; gap: 8px; justify-content: center; }
+.navLink, .activeNavLink { align-items: center; background: transparent; border: 0; border-radius: 8px; color: var(--ink-secondary); display: inline-flex; font-size: 14px; gap: 7px; min-height: 44px; padding: 0 12px; transition: background-color 180ms var(--ease-standard),color 180ms var(--ease-standard); }
+.navLink:hover, .activeNavLink, .openNavLink { background: var(--canvas-subtle); color: var(--ink); }
+.activeNavLink { font-weight: 600; }
+.navToggle { display: inline-block; font-size: 17px; font-weight: 400; line-height: 1; transition: transform 300ms var(--ease-out); }
+.openNavLink .navToggle { transform: rotate(45deg); }
+.navActions { align-items: center; display: flex; gap: 4px; justify-self: end; }
+.settingsLink { align-items: center; color: var(--ink-secondary); display: inline-flex; font-size: 13px; min-height: 44px; padding: 0 9px; }
+.settingsLink:hover { color: var(--ink); }
+.signInButton { align-items: center; background: var(--ink); border: 1px solid var(--ink); border-radius: 8px; color: #fff; display: inline-flex; font-size: 14px; font-weight: 600; gap: 9px; justify-content: center; min-height: 42px; padding: 0 15px; transition: background-color 180ms ease,transform 180ms ease; }
+.signInButton:hover { background: #25282b; transform: translateY(-1px); } .signInButton:active { transform: translateY(1px) scale(.99); }
+.megaMenuWrap { left: 50%; max-width: 1240px; opacity: 0; padding: 0 32px; pointer-events: none; position: absolute; top: 64px; transform: translate(-50%,-8px) scale(.99); transform-origin: top center; transition: opacity 220ms var(--ease-out),transform 320ms var(--ease-out),visibility 0s linear 320ms; visibility: hidden; width: 100%; }
+.megaMenuWrapCompact { max-width: 780px; }
+.megaMenuWrapOpen { opacity: 1; pointer-events: auto; transform: translate(-50%,8px) scale(1); transition-delay: 0s; visibility: visible; }
+.megaMenu { background: rgba(251,252,252,.98); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-soft); display: grid; gap: 40px; grid-template-columns: minmax(190px,.55fr) minmax(0,1.8fr); padding: 28px; }
+.megaMenuCompact { gap: 28px; grid-template-columns: minmax(190px,.8fr) minmax(260px,1.2fr); padding: 22px; }
+.megaMenuIntro { border-right: 1px solid var(--line); padding: 8px 32px 8px 4px; }
+.megaMenuIntro span { color: var(--brand); display: block; font-size: 12px; font-weight: 650; letter-spacing: .08em; margin-bottom: 14px; text-transform: uppercase; }
+.megaMenuIntro p { color: var(--ink-secondary); font-size: 16px; line-height: 1.5; margin: 0; max-width: 220px; }
+.megaMenuGrid { display: grid; gap: 4px 28px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.megaMenuGridSingle { grid-template-columns: 1fr; }
+.megaMenuGrid a { border-radius: 8px; color: var(--ink); display: grid; gap: 5px; padding: 12px 14px; text-decoration: none; transition: background-color 180ms ease,transform 220ms var(--ease-out); }
+.megaMenuGrid a:hover { background: var(--surface-tint); transform: translateX(2px); }
+.megaMenuGrid strong { font-size: 15px; font-weight: 600; letter-spacing: -.015em; }
+.megaMenuGrid span { color: var(--ink-secondary); font-size: 13px; line-height: 1.4; }
+.mobileMenuButton, .mobilePanel { display: none; }
+.routeAnnouncer { clip: rect(0,0,0,0); clip-path: inset(50%); height: 1px; margin: -1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+.mainContent { flex: 1; min-width: 0; overflow: clip; }
+.mainContent [data-reveal="true"] { opacity: 0; transform: translateY(18px); transition: opacity 520ms var(--ease-out) var(--reveal-delay,0ms),transform 620ms var(--ease-out) var(--reveal-delay,0ms); }
+.mainContent [data-reveal="true"][data-revealed="true"] { opacity: 1; transform: translateY(0); }
+.footer { border-top: 1px solid var(--line); display: grid; gap: 64px 40px; grid-template-columns: minmax(260px,1.4fr) minmax(360px,1fr); margin: 0 auto; max-width: 1240px; padding: 72px 32px 36px; width: 100%; }
+.footerBrand strong { display: block; font-size: clamp(28px,3vw,40px); font-weight: 550; letter-spacing: -.045em; margin-bottom: 18px; }
+.footerBrand p { color: var(--ink-secondary); font-size: 16px; line-height: 1.55; margin: 0; max-width: 440px; }
+.footerDirectory { display: grid; gap: 32px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+.footerDirectory nav { align-items: flex-start; display: flex; flex-direction: column; gap: 12px; }
+.footerDirectory nav>span { color: var(--ink-tertiary); font-size: 12px; font-weight: 650; letter-spacing: .08em; margin-bottom: 4px; text-transform: uppercase; }
+.footerDirectory a { color: var(--ink); font-size: 14px; text-decoration: none; } .footerDirectory a:hover { color: var(--brand); }
+.footerLegal { border-top: 1px solid var(--line); color: var(--ink-tertiary); font-size: 12px; grid-column: 1/-1; margin: 0; padding-top: 24px; }
+@media (min-width:768px) {
+  .topNavCompact { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .topNavCompact::after { opacity: 0; }
+  .topNavCompact .navInner { background: rgba(251,252,252,.94); border-color: rgba(200,208,215,.78); border-radius: 14px; box-shadow: 0 14px 36px rgba(16,18,20,.11); gap: 8px; grid-template-columns: auto auto auto; max-width: 850px; min-height: 54px; padding: 4px 8px 4px 12px; transform: translateY(8px); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .topNavCompact .brandButton { gap: 0; padding-inline: 7px; }
+  .topNavCompact .brandButton > span:last-child { max-width: 0; opacity: 0; transform: translateX(-6px); }
+  .topNavCompact .navLinks { gap: 2px; }
+  .topNavCompact .navLink,
+  .topNavCompact .activeNavLink { min-height: 42px; padding-inline: 10px; }
+  .topNavCompact .signInButton { min-height: 40px; }
+  .topNavCompact .megaMenuWrap { max-width: 760px; padding-inline: 24px; top: 62px; }
 }
-
-.appShell *,
-.appShell *::before,
-.appShell *::after {
-  box-sizing: border-box;
+@media (max-width:980px) { .navInner { grid-template-columns: auto 1fr auto; padding-inline: 24px; } .navLinks { justify-content: flex-end; } .settingsLink { display:none; } .footer { grid-template-columns:1fr 1fr; padding-inline:24px; } }
+@media (max-width:767px) {
+  .topNav { background: rgba(251,252,252,.96); } .navInner { grid-template-columns:1fr auto; min-height:60px; padding:8px 16px; }
+  .navLinks,.navActions { display:none; } .brandButton { font-size:14px; }
+  .mobileMenuButton { align-items:center; background:var(--ink); border:0; border-radius:8px; display:flex; flex-direction:column; gap:5px; height:42px; justify-content:center; padding:0; width:42px; }
+  .mobileMenuButton span { background:#fff; display:block; height:1px; transition:transform 260ms var(--ease-out); width:17px; }
+  .mobileMenuButton[aria-expanded="true"] span:first-child { transform:translateY(3px) rotate(45deg); } .mobileMenuButton[aria-expanded="true"] span:last-child { transform:translateY(-3px) rotate(-45deg); }
+  .megaMenuWrap { display:none; }
+  .mobilePanel { background:var(--canvas); display:flex; flex-direction:column; height:calc(100dvh - 60px); inset:60px 0 auto; justify-content:space-between; opacity:0; overflow-y:auto; padding:28px 16px 24px; pointer-events:none; position:fixed; transform:translateY(-12px); transition:opacity 220ms var(--ease-out),transform 320ms var(--ease-out),visibility 0s linear 320ms; visibility:hidden; }
+  .mobilePanelOpen { opacity:1; pointer-events:auto; transform:translateY(0); transition-delay:0s; visibility:visible; }
+  .mobilePanel nav { display:grid; } .mobilePanel nav a { align-items:center; border-bottom:1px solid var(--line); color:var(--ink); display:flex; font-size:clamp(20px,6vw,27px); font-weight:550; justify-content:space-between; letter-spacing:-.035em; min-height:58px; padding:9px 4px; text-decoration:none; }
+  .mobileSectionLabel { color:var(--brand); font-size:12px; font-weight:650; letter-spacing:.08em; margin-top:26px; padding:0 4px 8px; text-transform:uppercase; }
+  .mobileSectionLabel:first-child { margin-top:0; }
+  .mobilePanelFooter { align-items:center; display:flex; flex-wrap:wrap; gap:12px 20px; padding-top:32px; }
+  .mobilePanelFooter a { color:var(--ink-secondary); font-size:14px; text-decoration:none; } .mobileAccountAction { background:var(--ink); border-radius:8px; color:#fff!important; margin-left:auto; padding:12px 16px; }
+  .footer { gap:44px; grid-template-columns:1fr; padding:56px 16px 28px; } .footerDirectory { gap:24px; }
 }
-
-.appShell button,
-.appShell input {
-  font: inherit;
-}
-
-.appShell button {
-  cursor: pointer;
-}
-
-.appShell :is(a, button, input, select, textarea):focus-visible {
-  outline: 3px solid #0b7a5a;
-  outline-offset: 3px;
-}
-
-.skipLink {
-  align-items: center;
-  background: var(--surface);
-  border-radius: 0 0 10px 0;
-  color: var(--green);
-  display: flex;
-  font-weight: 800;
-  left: 0;
-  min-height: 44px;
-  padding: 12px 16px;
-  position: fixed;
-  top: 0;
-  transform: translateY(-120%);
-  z-index: 100;
-}
-
-.skipLink:focus {
-  transform: translateY(0);
-}
-
-.mainContent {
-  flex: 1;
-  min-width: 0;
-}
-
-.routeAnnouncer {
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  padding: 0;
-  position: absolute;
-  width: 1px;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-
-.appShell svg {
-  display: block;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-}
-
-/*
-  Sticky top navigation.
-  AppFrame.jsx owns which links render; this section only controls layout, active
-  underline treatment, and the sign-in/logout pill. Keep it shared so page teams do
-  not each create slightly different nav bars.
-*/
-.topNav {
-  background: rgba(255, 255, 255, 0.88);
-  border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-
-.navInner {
-  align-items: center;
-  display: grid;
-  gap: 24px;
-  grid-template-columns: minmax(170px, 1fr) auto minmax(130px, 1fr);
-  margin: 0 auto;
-  max-width: 1280px;
-  min-height: 72px;
-  padding: 14px 26px;
-}
-
-.brandButton,
-.navLink,
-.activeNavLink,
-.signInButton {
-  border: 0;
-  background: transparent;
-  text-decoration: none;
-}
-
-.brandButton {
-  color: var(--green);
-  font-size: 20px;
-  font-weight: 850;
-  justify-self: start;
-  align-items: center;
-  display: inline-flex;
-  min-height: 44px;
-  padding: 0 4px;
-}
-
-.navLinks {
-  align-items: center;
-  display: flex;
-  gap: 32px;
-  justify-content: center;
-}
-
-.navLink,
-.activeNavLink {
-  align-items: center;
-  color: #334155;
-  display: inline-flex;
-  font-size: 16px;
-  min-height: 44px;
-  padding: 0 4px;
-}
-
-.activeNavLink {
-  border-bottom: 2px solid var(--green2);
-  color: var(--green);
-  font-weight: 800;
-}
-
-.signInButton {
-  align-items: center;
-  background: var(--green);
-  border-radius: 999px;
-  color: white;
-  display: inline-flex;
-  font-weight: 850;
-  justify-content: center;
-  justify-self: end;
-  min-height: 44px;
-  min-width: 112px;
-  padding: 10px 24px;
-}
-
-/*
-  Shared footer.
-  Footer content is static placeholder copy for now. When real About/Terms/Data
-  Sources pages exist, update the hrefs in AppFrame.jsx and keep this styling shared.
-*/
-.footer {
-  align-items: flex-end;
-  border-top: 1px solid var(--line);
-  display: flex;
-  justify-content: space-between;
-  margin: 0 auto;
-  max-width: 1232px;
-  padding: 40px 0 64px;
-  width: calc(100% - 52px);
-}
-
-.footer strong {
-  color: var(--green);
-  display: block;
-  font-size: 18px;
-  margin-bottom: 10px;
-}
-
-.footer p,
-.footer a {
-  color: var(--subtle);
-  font-size: 14px;
-  margin: 0;
-  text-decoration: none;
-}
-
-.footer a {
-  align-items: center;
-  display: inline-flex;
-  min-height: 44px;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 4px;
-}
-
-.footer a:hover {
-  color: var(--green);
-  text-decoration-color: currentColor;
-}
-
-.footer nav {
-  display: flex;
-  gap: 32px;
-}
-
-/*
-  Shell responsiveness.
-  The nav becomes two rows on narrower screens and the footer stacks on mobile.
-  Page-specific responsive rules belong in page.module.css, not here.
-*/
-@media (max-width: 980px) {
-  .navInner {
-    grid-template-columns: 1fr auto;
-  }
-
-  .navLinks {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-content: flex-start;
-    justify-self: stretch;
-    width: 100%;
-  }
-}
-
-@media (max-width: 680px) {
-  .navInner {
-    gap: 10px 16px;
-    min-height: 64px;
-    padding: 10px 16px;
-  }
-
-  .navLinks {
-    gap: 12px;
-    overflow-x: auto;
-  }
-
-  .signInButton {
-    padding-inline: 18px;
-  }
-
-  .footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 24px;
-    width: calc(100% - 32px);
-  }
-
-  .footer nav {
-    flex-wrap: wrap;
-    gap: 8px 24px;
-  }
-}
+@media (prefers-reduced-motion:reduce) { .appShell *, .appShell *::before, .appShell *::after { animation-duration:.01ms!important; scroll-behavior:auto!important; transition-duration:.01ms!important; } }

@@ -1,4 +1,4 @@
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 
 const CATEGORY_ORDER = [
   ["revenue", "Revenue"],
@@ -21,7 +21,7 @@ function percent(value) {
   if (!Number.isFinite(number)) {
     return null
   }
-  return `${Math.round(number * 100)}%`
+  return Math.max(0, Math.min(100, Math.round(number * 100)))
 }
 
 function categoryRows(sentiment) {
@@ -60,49 +60,43 @@ export function CategorySentiment({ sentiment }) {
   const isUnavailable = status === "unavailable"
 
   return (
-    <article className={styles.categorySentimentCard}>
-      <div className={styles.categorySentimentHeader}>
-        <h2>Sentiment by signal</h2>
-        <strong>{status === "available" ? "Stored analysis" : status === "partial" ? "Partial coverage" : "Unavailable"}</strong>
+    <section className={styles.categoryPanel}>
+      <div className={styles.sectionHeader}>
+        <div><h2>Signal register</h2><p>Saved analysis grouped by the company topics researchers scan most often.</p></div>
+        <strong className={`${styles.statusLabel} ${status === "available" ? styles.statusReady : styles.statusPending}`}>{status === "available" ? "Stored analysis" : status === "partial" ? "Partial coverage" : "Unavailable"}</strong>
       </div>
       {isUnavailable ? (
-        <p className={styles.categorySentimentNotice}>
+        <p className={styles.notice}>
           No analysed category signals have been stored for this ticker yet. They will appear after the document analysis pipeline completes.
         </p>
       ) : status === "partial" ? (
-        <p className={styles.categorySentimentNotice}>
+        <p className={styles.notice}>
           Some categories do not yet have analysed source material. Missing signals are shown as unavailable.
         </p>
       ) : null}
-      <div className={styles.categorySentimentGrid}>
+      <div className={styles.categoryGrid}>
         {rows.map(({ key, label, result }) => {
           const available = Boolean(result?.available)
           const sentimentLabel = available ? result.sentiment_label : null
           const confidence = available ? percent(result.confidence_score) : null
           return (
-            <section className={styles.categorySentimentItem} key={key}>
-              <div className={styles.categorySentimentTop}>
-                <h3>{label}</h3>
-                <span className={`${styles.sentimentPill} ${styles[`sentimentPill_${sentimentLabel || "unavailable"}`] || ""}`}>
-                  {formatLabel(sentimentLabel)}
-                </span>
-              </div>
-              <div
-                aria-label={`${label} average model confidence`}
-                aria-valuemax="100"
-                aria-valuemin="0"
-                aria-valuenow={available ? Math.round(Number(result.confidence_score) * 100) : undefined}
-                className={styles.categorySentimentMeter}
-                role={available ? "progressbar" : undefined}
-              >
-                <span style={{ width: confidence || "0%" }} />
-              </div>
+            <section className={styles.categoryRow} key={key}>
+              <h3>{label}</h3>
+              <span className={`${styles.sentimentLabel} ${styles[`sentimentLabel_${sentimentLabel || "unavailable"}`] || ""}`}>{formatLabel(sentimentLabel)}</span>
               <p>{summaryText({ key, label, result })}</p>
-              <strong>{available ? `${confidence} average model confidence` : "No analysed signal"}</strong>
+              <div className={styles.signalScore}>
+                <div className={styles.signalScoreLabel}>
+                  <strong>{available ? `${confidence}%` : "—"}</strong>
+                  <span>{available ? "confidence" : "No signal"}</span>
+                </div>
+                <div aria-hidden="true" className={styles.signalTrack}>
+                  <span className={styles[`signalFill_${sentimentLabel || "unavailable"}`] || ""} style={{ "--signal-width": `${confidence || 0}%` }} />
+                </div>
+              </div>
             </section>
           )
         })}
       </div>
-    </article>
+    </section>
   )
 }

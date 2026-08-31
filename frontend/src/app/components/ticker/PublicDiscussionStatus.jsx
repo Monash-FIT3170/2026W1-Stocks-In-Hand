@@ -1,4 +1,4 @@
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 
 const STATUS_LABELS = {
   available: "Analysis ready",
@@ -21,18 +21,18 @@ function sourceSummary(sources) {
 export function PublicDiscussionStatus({ error, status }) {
   if (error) {
     return (
-      <article className={styles.discussionStatusCard} role="status">
-        <div className={styles.discussionStatusHeader}>
+      <section className={styles.discussionPanel} role="status">
+        <div className={styles.sectionHeader}>
           <div>
-            <span>Collection and analysis</span>
             <h2>Public discussion pipeline</h2>
+            <p>Collection and analysis status across supported public sources.</p>
           </div>
-          <strong className={`${styles.discussionStatusPill} ${styles.discussionStatusPill_failed}`}>
+          <strong className={`${styles.statusLabel} ${styles.statusPending}`}>
             Status unavailable
           </strong>
         </div>
-        <p className={styles.discussionStatusNotice}>{error}</p>
-      </article>
+        <p className={styles.notice}>{error}</p>
+      </section>
     )
   }
 
@@ -47,25 +47,24 @@ export function PublicDiscussionStatus({ error, status }) {
   ]
 
   return (
-    <article className={styles.discussionStatusCard}>
-      <div className={styles.discussionStatusHeader}>
+    <section className={styles.discussionPanel}>
+      <div className={styles.sectionHeader}>
         <div>
-          <span>Collection and analysis</span>
           <h2>Public discussion pipeline</h2>
+          <p>{sourceSummary(status?.sources)}</p>
         </div>
-        <strong className={`${styles.discussionStatusPill} ${styles[`discussionStatusPill_${pipelineStatus}`] || ""}`}>
+        <strong className={`${styles.statusLabel} ${pipelineStatus === "available" ? styles.statusReady : styles.statusPending}`}>
           {STATUS_LABELS[pipelineStatus] || "Status unknown"}
         </strong>
       </div>
-      <div className={styles.discussionStatusGrid}>
+      <div className={styles.discussionMetrics}>
         {metrics.map(([label, value]) => (
-          <div className={styles.discussionStatusMetric} key={label}>
+          <div className={styles.discussionMetric} key={label}>
             <strong>{value}</strong>
             <span>{label}</span>
           </div>
         ))}
       </div>
-      <p className={styles.discussionStatusSources}>{sourceSummary(status?.sources)}</p>
-    </article>
+    </section>
   )
 }

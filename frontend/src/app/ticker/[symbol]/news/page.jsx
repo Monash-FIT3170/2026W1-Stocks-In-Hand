@@ -4,7 +4,8 @@ import { useEffect, useState } from "react"
 import { AnnouncementCard } from "../../../components/announcements/AnnouncementCard"
 import { useTickerBrief } from "../../../components/ticker/TickerBriefShell"
 import { fetchTickerNews } from "../../../lib/api"
-import styles from "../../../page.module.css"
+import pageStyles from "../../../page.module.css"
+import styles from "../../../components/research/ResearchSurface.module.css"
 
 // Ticker brief news tab for "/ticker/[symbol]/news".
 // This reuses AnnouncementCard and renders only DB-backed ticker announcements.
@@ -41,13 +42,13 @@ export default function TickerNewsRoute() {
 
   if (state.isLoading) {
     return (
-      <div className={styles.contentSkeleton} aria-live="polite">Loading {symbol} news…</div>
+      <div className={pageStyles.contentSkeleton} aria-live="polite">Loading {symbol} source records…</div>
     )
   }
 
   if (state.error) {
     return (
-      <div className={styles.emptyCard} role="alert">
+      <div className={styles.statePanel} role="alert">
         <h2>News could not be loaded</h2>
         <p>{state.error}</p>
         <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
@@ -59,10 +60,14 @@ export default function TickerNewsRoute() {
 
   return (
     <div className={styles.briefContent}>
-      {news.length > 0 ? news.map((item) => (
+      <header className={styles.newsHeader}>
+        <h2>Source records</h2>
+        <p>{news.length} {news.length === 1 ? "record" : "records"}</p>
+      </header>
+      {news.length > 0 ? <div className={styles.feedList}>{news.map((item) => (
         <AnnouncementCard item={item} key={item.id} />
-      )) : (
-        <div className={styles.emptyCard}>
+      ))}</div> : (
+        <div className={styles.statePanel}>
           <h2>No news available for {symbol}</h2>
           <p>The pipeline has not stored any announcements or publisher articles for this ticker yet.</p>
         </div>

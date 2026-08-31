@@ -81,6 +81,7 @@ export default function Home() {
           <form className={styles.heroSearch} onSubmit={handleSearch}>
             <SearchIcon />
             <input aria-label="Search a company or ticker" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a company or ticker - e.g. BHP, CSL, CBA" />
+            <button className={styles.searchSubmit} type="submit">Search</button>
           </form>
           <div className={styles.popularRow}>
             <span>Popular:</span>

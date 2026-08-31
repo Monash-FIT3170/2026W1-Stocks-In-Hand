@@ -1,4 +1,4 @@
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 import { EmergingThemes } from "./EmergingThemes"
 import { KeyNumbers } from "./KeyNumbers"
 

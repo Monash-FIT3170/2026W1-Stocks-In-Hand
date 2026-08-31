@@ -6,6 +6,19 @@
   padding: 72px 20px 96px;
 }
 
+/* Replacement research-product styling. */
+.page { background: var(--canvas-subtle); min-height: 680px; padding: 88px 20px 104px; }
+.card { border-radius: 12px; box-shadow: none; max-width: 580px; padding: 46px; }
+.mailIcon { background: var(--brand-soft); border-radius: 10px; height: 64px; width: 64px; }
+.mailIcon::before { border-color: var(--brand); border-radius: 4px; }
+.mailIcon span { border-color: var(--brand); }
+.eyebrow { color: var(--brand); font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+.card h1 { font-size: clamp(36px,6vw,48px); font-weight: 550; letter-spacing: -.05em; line-height: 1; }
+.card p:not(.eyebrow) { color: var(--ink-secondary); font-size: 16px; }
+.primaryLink { background: var(--ink); border-radius: 8px; font-size: 14px; font-weight: 600; }
+.spinner { border-color: var(--line-strong); border-top-color: var(--brand); }
+
+@layer legacy {
 .card {
   align-items: center;
   background: var(--surface);
@@ -120,4 +133,5 @@
   .card {
     padding: 34px 22px;
   }
+}
 }

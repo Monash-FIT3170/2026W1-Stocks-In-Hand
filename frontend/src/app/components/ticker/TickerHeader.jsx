@@ -1,4 +1,4 @@
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 import { MetricCard } from "../ui/MetricCard"
 
 // Shared header for ticker brief pages.
@@ -8,21 +8,27 @@ export function TickerHeader({ data }) {
   if (!data) return null;
 
   return (
-    <div className={styles.tickerHeader}>
-      <div>
-        <div className={styles.tickerLine}>
-          <span className={styles.tickerPill}>{data.symbol}</span>
-          <span>{data.sector}</span>
+    <header className={styles.tickerHero}>
+      <div className={styles.tickerIdentity}>
+        <div>
+          <div className={styles.tickerCodeLine}>
+            <strong>{data.symbol}</strong>
+            <span>ASX</span>
+            <span>{data.sector || "Sector unavailable"}</span>
+          </div>
+          <h1>{data.company_name}</h1>
         </div>
-        <h1>{data.company_name}</h1>
-        <p>
-          <span className={styles.statusDot} /> {data.sentiment_label} <b /> Last updated: {data.last_updated}
-        </p>
+        <div className={styles.tickerStatus}>
+          <span className={styles.statusDot} aria-hidden="true" />
+          <span>{data.sentiment_label || "Analysis pending"}</span>
+          <span>·</span>
+          <span>Updated {data.last_updated || "date unavailable"}</span>
+        </div>
       </div>
-      <div className={styles.priceCards}>
+      <div className={styles.tickerMetrics}>
         <MetricCard label="Current price" value={data.current_price} />
         <MetricCard label="Day change" value={data.day_change} />
       </div>
-    </div>
+    </header>
   )
 }

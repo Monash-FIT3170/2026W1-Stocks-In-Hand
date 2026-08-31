@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { CitationLinks } from "./CitationLinks"
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 
 export function DeepDiveTimeline({ timeline }) {
   const [activeFilter, setActiveFilter] = useState("All")
@@ -17,7 +17,8 @@ export function DeepDiveTimeline({ timeline }) {
       <div className={styles.filterTabs}>
         {tags.map((label) => (
           <button
-            className={label === activeFilter ? styles.selectedChip : ""}
+            aria-pressed={label === activeFilter}
+            className={label === activeFilter ? styles.selectedChip : styles.filterChip}
             key={label}
             onClick={() => setActiveFilter(label)}
             type="button"
@@ -28,20 +29,16 @@ export function DeepDiveTimeline({ timeline }) {
       </div>
       <div className={styles.timeline}>
         {filtered.length === 0 ? (
-          <p className={styles.emptyCard}>No announcements match this filter.</p>
+          <p className={styles.statePanel}>No announcements match this filter.</p>
         ) : null}
         {filtered.map((item) => (
           <article className={styles.timelineItem} key={`${item.title}-${item.date}`}>
-            <span className={`${styles.timelineDot} ${styles[item.tone]}`} />
-            <div className={styles.timelineMonth}>{item.month}</div>
-            <div className={styles.timelineCard}>
-              <div className={styles.timelineTop}>
-                <span className={styles.softPill}>{item.tag}</span>
-                <strong>{item.date}</strong>
-              </div>
+            <div className={styles.timelineDate}><strong>{item.month}</strong><br />{item.date}</div>
+            <div className={styles.timelineContent}>
+              <span className={styles.timelineTag}>{item.tag}</span>
               <h2>{item.title}</h2>
               {item.metrics && item.metrics.length > 0 && (
-                <div className={styles.metricGrid}>
+                <div className={styles.metricList}>
                   {item.metrics.map((metric) => <span key={metric}>{metric}</span>)}
                 </div>
               )}
