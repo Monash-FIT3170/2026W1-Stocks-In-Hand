@@ -132,3 +132,83 @@ jobs:
             echo "$failures stack output(s) failed reconciliation" >&2
             exit 1
           fi
+
+      - name: Confirm deployed queue settings match the pipeline contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stack_output() {
+            aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+              --output text
+          }
+
+          queue_checks=(
+            "DiscoveryQueueUrl:DiscoveryDeadLetterQueueUrl:1800"
+            "DownloadQueueUrl:DownloadDeadLetterQueueUrl:1800"
+            "AnalysisQueueUrl:AnalysisDeadLetterQueueUrl:4320"
+          )
+
+          {
+            echo ""
+            echo "### Deployed queue settings"
+            echo ""
+            echo "| Queue output | Visibility timeout | Retention | Redrive |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failures=0
+          for check in "${queue_checks[@]}"; do
+            IFS=: read -r queue_output dlq_output expected_visibility <<< "$check"
+            queue_url="$(stack_output "$queue_output")"
+            dlq_url="$(stack_output "$dlq_output")"
+            queue_arn="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names QueueArn \
+              --query 'Attributes.QueueArn' \
+              --output text)"
+            dlq_arn="$(aws sqs get-queue-attributes \
+              --queue-url "$dlq_url" \
+              --attribute-names QueueArn \
+              --query 'Attributes.QueueArn' \
+              --output text)"
+            visibility="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names VisibilityTimeout \
+              --query 'Attributes.VisibilityTimeout' \
+              --output text)"
+            retention="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names MessageRetentionPeriod \
+              --query 'Attributes.MessageRetentionPeriod' \
+              --output text)"
+            redrive="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names RedrivePolicy \
+              --query 'Attributes.RedrivePolicy' \
+              --output text)"
+            dlq_retention="$(aws sqs get-queue-attributes \
+              --queue-url "$dlq_url" \
+              --attribute-names MessageRetentionPeriod \
+              --query 'Attributes.MessageRetentionPeriod' \
+              --output text)"
+
+            if [ "$visibility" != "$expected_visibility" ] \
+              || [ "$retention" != "345600" ] \
+              || [ "$dlq_retention" != "1209600" ] \
+              || [[ "$redrive" != *"$dlq_arn"* ]] \
+              || [[ "$redrive" != *'"maxReceiveCount":"5"'* ]]; then
+              echo "::error::$queue_output does not match its expected queue settings" >&2
+              failures=$((failures + 1))
+            fi
+
+            echo "| $queue_output ($queue_arn) | ${visibility}s | ${retention}s | $redrive |" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures queue setting check(s) failed" >&2
+            exit 1
+          fi
