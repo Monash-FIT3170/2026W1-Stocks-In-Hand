@@ -103,6 +103,7 @@ Parameters:
   SiteCertificateArn:
     Type: String
     Default: ""
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$'
     Description: >-
       ARN of an ACM certificate in us-east-1 covering SiteDomainName. Created
       by infra/domain.yaml.
@@ -119,6 +120,13 @@ Rules:
     Assertions:
       - Assert: !Not [!Equals [!Ref AlertSenderEmail, ""]]
         AssertDescription: AlertSenderEmail is required when notifications are enabled.
+  CustomDomainValuesRequiredTogether:
+    RuleCondition: !Not [!Equals [!Ref SiteDomainName, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SiteCertificateArn, ""]]
+        AssertDescription: SiteCertificateArn is required when SiteDomainName is set.
+      - Assert: !Not [!Equals [!Ref SiteHostedZoneId, ""]]
+        AssertDescription: SiteHostedZoneId is required when SiteDomainName is set.
 
 Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
@@ -1046,6 +1054,13 @@ Resources:
 
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
+    Metadata:
+      cfn-lint:
+        config:
+          # The rule above guarantees this optional Ref is a real ARN whenever
+          # the custom-domain branch of ViewerCertificate is selected.
+          ignore_checks:
+            - W1030
     Properties:
       DistributionConfig:
         Comment: !Sub Stocks In Hand ${Environment}
