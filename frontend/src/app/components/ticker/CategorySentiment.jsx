@@ -40,18 +40,18 @@ function emptyCategoryMessage(label) {
   return `No ${label.toLowerCase()} evidence in the stored ASX announcements.`
 }
 
-function summaryText({ key, label, result }) {
+function summaryText({ label, result }) {
   const summary = result?.summary?.trim()
+
   if (!summary) {
     return emptyCategoryMessage(label)
   }
-  if (summary.length <= 220) {
+
+  if (summary.length <= 300) {
     return summary
   }
-  if (key === "user_discussion") {
-    return `${summary.slice(0, 220).trim()}...`
-  }
-  return "Evidence found in stored ASX announcements."
+
+  return `${summary.slice(0, 300).trim()}...`
 }
 
 export function CategorySentiment({ sentiment }) {
@@ -79,6 +79,7 @@ export function CategorySentiment({ sentiment }) {
           const available = Boolean(result?.available)
           const sentimentLabel = available ? result.sentiment_label : null
           const confidence = available ? percent(result.confidence_score) : null
+          const isRisk = key === "risk"
           return (
             <section className={styles.categorySentimentItem} key={key}>
               <div className={styles.categorySentimentTop}>
@@ -97,8 +98,18 @@ export function CategorySentiment({ sentiment }) {
               >
                 <span style={{ width: confidence || "0%" }} />
               </div>
-              <p>{summaryText({ key, label, result })}</p>
-              <strong>{available ? `${confidence} average model confidence` : "No analysed signal"}</strong>
+              <p>
+                {isRisk && available
+                  ? `Risk outlook: ${summaryText({ label, result })}`
+                  : summaryText({ label, result })}
+              </p>
+              <strong>
+              {available
+                ? isRisk
+                  ? `${confidence} confidence in identified risk signal`
+                  : `${confidence} average model confidence`
+                : "No analysed signal"}
+            </strong>
             </section>
           )
         })}
