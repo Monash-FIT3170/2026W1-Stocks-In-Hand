@@ -41,6 +41,18 @@ Parameters:
       - "true"
       - "false"
     Description: Enable bounded weekday public discussion collection.
+  MarketauxEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable Marketaux API access and bounded weekly news collection.
+  MarketauxPerTickerLimit:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 25
   AnalysisEnabled:
     Type: String
     Default: "true"
@@ -131,6 +143,7 @@ Rules:
 Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
   IsPublicDiscussionScheduleEnabled: !Equals [!Ref PublicDiscussionScheduleEnabled, "true"]
+  IsMarketauxEnabled: !Equals [!Ref MarketauxEnabled, "true"]
   IsAnalysisEnabled: !Equals [!Ref AnalysisEnabled, "true"]
   IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]
   IsBedrockEnabled: !Equals [!Ref BedrockEnabled, "true"]
@@ -439,6 +452,11 @@ Resources:
           REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
           REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
           PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
+          MARKETAUX_API_TOKEN_PARAMETER: !If
+            - IsMarketauxEnabled
+            - !Sub ${ParameterPathPrefix}/marketaux-api-token
+            - ""
+          NEWS_FETCH_LIMIT: !Ref MarketauxPerTickerLimit
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
           ANALYSIS_QUEUE_URL: !Ref AnalysisQueue
           NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
@@ -741,19 +759,28 @@ Resources:
       Architectures:
         - x86_64
       MemorySize: 512
-      Timeout: 60
+      Timeout: 300
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          MARKETAUX_API_TOKEN_PARAMETER: !If
+            - IsMarketauxEnabled
+            - !Sub ${ParameterPathPrefix}/marketaux-api-token
+            - ""
+          MARKETAUX_ENABLED: !Ref MarketauxEnabled
+          MARKETAUX_PER_TICKER_LIMIT: !Ref MarketauxPerTickerLimit
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
           SCHEDULED_TICKERS: !Ref ScheduledTickers
       Policies:
         - Statement:
-            - Sid: ReadDatabaseParameter
+            - Sid: ReadSchedulerParameters
               Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub >-
-                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+              Resource:
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/marketaux-api-token
             - Sid: DecryptDatabaseParameter
               Effect: Allow
               Action: kms:Decrypt

@@ -504,6 +504,11 @@ Resources:
                 Action: ssm:GetParameter
                 Resource: !Sub >-
                   arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/stocks-in-hand/staging/brevo-api-key
+              - Sid: ReadMarketauxParameterMetadata
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/stocks-in-hand/staging/marketaux-api-token
               - Sid: UseCloudFormationExecutionRole
                 Effect: Allow
                 Action: iam:PassRole

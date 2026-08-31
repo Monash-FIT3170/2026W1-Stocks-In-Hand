@@ -112,6 +112,8 @@ jobs:
               "AuthProvider=legacy" \
               "ScheduleEnabled=false" \
               "PublicDiscussionScheduleEnabled=false" \
+              "MarketauxEnabled=false" \
+              "MarketauxPerTickerLimit=10" \
               "AnalysisEnabled=true" \
               "BedrockEnabled=false" \
               "ScheduledTickers=ANZ,BHP,CBA,CSL,WES" \
