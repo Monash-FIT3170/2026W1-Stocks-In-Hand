@@ -13,7 +13,7 @@ _CHROMIUM_ARGS = (
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
-    "--disable-software-rasterizer",
+    "--no-zygote",
 )
 # Lambda container images expose /tmp as their only writable filesystem path.
 _LAMBDA_TMP = "/tmp"  # nosec B108
@@ -28,7 +28,9 @@ def chromium_launch_options(
     Lambda container images have a read-only root filesystem. Chromium also
     tries to initialise GPU and user cache processes before the first page is
     created. Give those processes writable locations and disable the unusable
-    GPU path so a browser cannot launch successfully and then immediately die.
+    GPU hardware path and unsupported zygote credential sandbox so a browser
+    cannot launch successfully and then immediately die. Chromium's software
+    renderer remains enabled because headless mode needs it in Lambda.
     """
     options: dict[str, Any] = {
         "headless": True,

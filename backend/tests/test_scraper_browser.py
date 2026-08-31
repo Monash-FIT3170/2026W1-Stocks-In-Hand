@@ -18,7 +18,8 @@ def test_lambda_chromium_uses_writable_paths_and_disables_gpu(monkeypatch) -> No
     assert options["env"]["XDG_CACHE_HOME"] == "/tmp/.cache"
     assert options["env"]["XDG_CONFIG_HOME"] == "/tmp/.config"
     assert "--disable-gpu" in options["args"]
-    assert "--disable-software-rasterizer" in options["args"]
+    assert "--no-zygote" in options["args"]
+    assert "--disable-software-rasterizer" not in options["args"]
     assert "--disable-http2" in options["args"]
     assert "--single-process" not in options["args"]
 
