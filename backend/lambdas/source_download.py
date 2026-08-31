@@ -336,7 +336,10 @@ def _request_referer(
     metadata: Mapping[str, object],
 ) -> str:
     """Choose one scraper-produced, adapter-scoped page to seed the session."""
-    for key in ("feed_url", "article_url", "listing_url"):
+    # Prefer an HTML listing over an article URL. Some adapters (notably WDS)
+    # represent direct PDF links as their article URL; navigating a page to
+    # those links raises Playwright's expected "Download is starting" signal.
+    for key in ("feed_url", "listing_url", "article_url"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return _validated_url(adapter, value)

@@ -376,6 +376,24 @@ def test_session_resolver_rejects_untrusted_url_before_browser_launch() -> None:
     assert error.value.code == "invalid_document_url"
 
 
+def test_wds_download_seeds_session_from_html_listing() -> None:
+    document_url = (
+        "https://www.woodside.com/docs/default-source/investor-documents/"
+        "half-year-2026-report.pdf?sfvrsn=test"
+    )
+
+    referer = source_download._request_referer(
+        "wds",
+        document_url,
+        {
+            "article_url": document_url,
+            "listing_url": SOURCES["WDS"].source_url,
+        },
+    )
+
+    assert referer == SOURCES["WDS"].source_url
+
+
 def test_anz_resolver_downloads_directly_without_browser(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
