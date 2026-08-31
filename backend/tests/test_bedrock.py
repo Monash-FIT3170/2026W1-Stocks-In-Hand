@@ -153,7 +153,7 @@ def test_provider_routes_structured_category_request_to_bedrock() -> None:
 
 def test_announcement_summary_repairs_malformed_model_json_once() -> None:
     """A formatting defect must not discard otherwise recoverable analysis."""
-    malformed = '{\nsummary: "An update"\n}'
+    malformed = '{"summary": "An update"'
     repaired = json.dumps(
         {
             "summary": "The company announced an update.",
@@ -182,6 +182,33 @@ def test_announcement_summary_repairs_malformed_model_json_once() -> None:
     repair_prompt = invoke.call_args_list[1].args[0]
     assert json.dumps(malformed, ensure_ascii=False) in repair_prompt
     assert invoke.call_args_list[1].kwargs == {"temperature": 0}
+
+
+def test_summary_parser_quotes_only_known_unquoted_keys() -> None:
+    """GPT-OSS's known key-quoting defect is repaired without weakening the schema."""
+    result = llm.parse_summary_response(
+        """
+        {
+          summary: "The company announced an update.",
+          about: "The filing describes the update.",
+          changed: "The update was confirmed.",
+          matters: "Investors can assess the confirmed change.",
+          confirmed_facts: ["The company confirmed the update."],
+          speculation: []
+        }
+        """
+    )
+
+    assert result["summary"] == "The company announced an update."
+
+    with pytest.raises(json.JSONDecodeError):
+        llm.parse_summary_response(
+            """
+            {
+              arbitrary_key: "This key is not allowed."
+            }
+            """
+        )
 
 
 def test_announcement_summary_does_not_repair_valid_json() -> None:

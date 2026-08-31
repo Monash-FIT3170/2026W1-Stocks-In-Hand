@@ -21,6 +21,9 @@ REDDIT_DIGEST_PROMPT_VERSION = "llm-reddit-digest-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
 SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)
+_UNQUOTED_SUMMARY_KEY = re.compile(
+    rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
+)
 REDDIT_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral"}
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
@@ -84,7 +87,14 @@ def parse_summary_response(
     include_clarity: bool = True,
 ) -> dict[str, object]:
     """Parse a strict summary response from the active LLM."""
-    data = json.loads(_extract_json_text(text))
+    cleaned = _extract_json_text(text)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        quoted_known_keys = _UNQUOTED_SUMMARY_KEY.sub(r'\1"\2":', cleaned)
+        if quoted_known_keys == cleaned:
+            raise
+        data = json.loads(quoted_known_keys)
     if not isinstance(data, dict):
         raise ValueError("LLM summary response must be a JSON object")
 
