@@ -172,7 +172,14 @@ def get_announcements(
             )
         )
 
-    artifacts = query.order_by(date_value.desc()).offset(offset).limit(limit).all()
+    # UUID provides deterministic ordering when several records share the same
+    # publication timestamp. Stable ordering reduces overlap between offset pages.
+    artifacts = (
+        query.order_by(date_value.desc(), Artifact.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return [_announcement_from_artifact(artifact) for artifact in artifacts]
 
 

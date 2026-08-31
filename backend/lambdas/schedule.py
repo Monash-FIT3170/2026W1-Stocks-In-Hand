@@ -1,4 +1,4 @@
-"""Disabled-by-default EventBridge producer for the five ASX sources."""
+"""Disabled-by-default EventBridge producer for configured ASX sources."""
 
 from __future__ import annotations
 

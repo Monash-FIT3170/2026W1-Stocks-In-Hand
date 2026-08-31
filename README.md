@@ -178,7 +178,7 @@ signed email link, so they do not need to be added to Brevo first. See the
 ### Scraping
 | Method | Path | Description |
 |---|---|---|
-| POST | `/scrape/{ticker}` | Trigger background ASX announcement scrape for a ticker. Available tickers: BHP, CBA, ANZ, CSL, WES |
+| POST | `/scrape/{ticker}` | Trigger a background ASX announcement scrape for any supported ticker. Automatic schedules remain separately controlled by `SCHEDULED_TICKERS`. |
 | GET | `/headlines` | Scrape live Yahoo Finance headlines via Playwright (default ticker BHP.AX) |
 
 ### Storage (direct DB access)
@@ -203,6 +203,27 @@ signed email link, so they do not need to be added to Brevo first. See the
 ```bash
 docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
+```
+
+## Automatic local announcement bootstrap
+
+`docker-compose-dev.yml` includes a one-shot `content-bootstrap` service. After
+the backend is healthy it checks the official company sources for the supported
+tickers, processes at most three announcements per ticker from the last year,
+and exits. Existing documents and complete summaries are retained, so the job
+is safe to run again on later Docker starts.
+
+Local Docker uses the Groq fallback by default. Add `GROQ_API_KEY` to the
+untracked `backend/.env` to generate structured summaries. Without a key, the
+website still starts and collected announcements remain available, but summary
+generation is skipped. The bootstrap is development-only and is not used by
+the AWS deployment.
+
+To start the application without running collection, name only the long-running
+services:
+
+```bash
+docker compose -f docker-compose-dev.yml up --build db backend frontend
 ```
 
 ## Setup

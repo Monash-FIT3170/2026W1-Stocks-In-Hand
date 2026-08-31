@@ -25,6 +25,7 @@ _UNQUOTED_SUMMARY_KEY = re.compile(
     rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
 )
 REDDIT_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral"}
+GROQ_RETRY_PROMPT_CHARS = 6000
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
 __all__ = (
@@ -352,22 +353,34 @@ key_themes: an array of short recurring themes.
 def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
+    active_prompt = prompt
     payload = {
         "model": settings.GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
+    reduced_for_payload_limit = False
     for attempt in range(5):
         try:
             response = httpx.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-                json=payload,
+                json={
+                    **payload,
+                    "messages": [{"role": "user", "content": active_prompt}],
+                },
                 timeout=60,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if (
+                exc.response.status_code == 413
+                and not reduced_for_payload_limit
+                and len(active_prompt) > GROQ_RETRY_PROMPT_CHARS
+            ):
+                active_prompt = active_prompt[:GROQ_RETRY_PROMPT_CHARS]
+                reduced_for_payload_limit = True
+                continue
             if exc.response.status_code != 429:
                 raise RuntimeError("Groq model invocation failed") from exc
             response = exc.response

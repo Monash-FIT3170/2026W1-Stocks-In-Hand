@@ -104,11 +104,6 @@ class COHScraper(BaseScraper):
                     },
                 )
 
-                try:
-                    ann.local_path = await self._download_via_browser(context, ann)
-                except Exception as e:
-                    print(f"[COH] Failed to download '{ann.title}': {e}")
-
                 announcements.append(ann)
 
             await browser.close()
@@ -258,14 +253,3 @@ class COHScraper(BaseScraper):
 
         print(f"[COH] Saved: {dest}")
         return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "COH downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

@@ -6,6 +6,7 @@ import ast
 import asyncio
 import hashlib
 import inspect
+import json
 import textwrap
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,14 +20,22 @@ from pydantic import ValidationError
 import main
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
-from lambdas import discovery, source_download
+from lambdas import analysis, discovery, download, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument
 from scrapers.base import Announcement
 from scrapers.companies.anz import ANZScraper
 from scrapers.companies.bhp import BHPScraper
 from scrapers.companies.cba import CBAScraper
+from scrapers.companies.coh import COHScraper
+from scrapers.companies.col import COLScraper
 from scrapers.companies.csl import CSLScraper
+from scrapers.companies.mqg import MQGScraper
+from scrapers.companies.org import ORGScraper
+from scrapers.companies.rio import RIOScraper
+from scrapers.companies.tcl import TCLScraper
+from scrapers.companies.tls import TLSScraper
+from scrapers.companies.wds import WDSScraper
 from scrapers.companies.wes import WESScraper
 from scrapers.registry import discover
 
@@ -35,7 +44,15 @@ SCRAPERS = {
     "ANZ": ANZScraper,
     "BHP": BHPScraper,
     "CBA": CBAScraper,
+    "COH": COHScraper,
+    "COL": COLScraper,
     "CSL": CSLScraper,
+    "MQG": MQGScraper,
+    "ORG": ORGScraper,
+    "RIO": RIOScraper,
+    "TCL": TCLScraper,
+    "TLS": TLSScraper,
+    "WDS": WDSScraper,
     "WES": WESScraper,
 }
 
@@ -69,6 +86,71 @@ def test_queue_contract_rejects_mismatched_ticker_and_adapter() -> None:
             source_url=SOURCES["ANZ"].source_url,
             source_adapter="csl",
         )
+
+
+@pytest.mark.parametrize(("ticker", "source"), SOURCES.items())
+def test_download_worker_accepts_each_canonical_pair(ticker, source) -> None:
+    message = QueueBMessage(
+        scrape_run_id=uuid4(),
+        artifact_id=uuid4(),
+        ticker=ticker,
+        source_url=source.source_url,
+        document_url=source.source_url,
+        canonical_url=source.source_url,
+        source_adapter=source.adapter,
+    )
+
+    parsed = download._parse_message(_sqs_record(message.model_dump_json()))
+
+    assert parsed.ticker == ticker
+    assert parsed.source_adapter == source.adapter
+
+
+@pytest.mark.parametrize(("_ticker", "source"), SOURCES.items())
+def test_each_canonical_source_has_an_adapter_scoped_host(_ticker, source) -> None:
+    assert source.adapter in source_download._ADAPTER_HOSTS
+    assert source_download._validated_url(source.adapter, source.source_url) == (
+        source.source_url
+    )
+
+
+def test_rio_adapter_accepts_its_euroland_document_cdn() -> None:
+    document_url = (
+        "https://ne-cdn.eurolandir.com/press-releases-attachments./"
+        "4163612/results.pdf"
+    )
+
+    assert source_download._validated_url("rio", document_url) == document_url
+
+
+@pytest.mark.parametrize("ticker", SOURCES)
+def test_analysis_accepts_each_canonical_ticker_object_key(ticker: str) -> None:
+    artifact_id = uuid4()
+    checksum = "a" * 64
+    record = {
+        "body": json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "raw-documents"},
+                            "object": {
+                                "key": (
+                                    f"raw/{ticker}/{artifact_id}/{checksum}.pdf"
+                                )
+                            },
+                        },
+                    }
+                ]
+            }
+        )
+    }
+
+    parsed = analysis.parse_s3_notifications(record)
+
+    assert parsed[0][2] == ticker
+    assert parsed[0][3] == artifact_id
 
 
 def test_anz_feed_preserves_yourir_document_identity() -> None:
