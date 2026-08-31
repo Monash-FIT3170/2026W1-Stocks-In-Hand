@@ -195,6 +195,48 @@ def test_correct_news_artifact_is_created() -> None:
     summarise_artifact.assert_called_once()
 
 
+def test_scheduled_collection_can_store_without_llm_summary() -> None:
+    db = MagicMock()
+    ticker = MagicMock(id=uuid.uuid4(), symbol="BHP")
+    platform = MagicMock(id=uuid.uuid4())
+
+    with patch.object(
+        marketaux,
+        "fetch_news",
+        return_value=[_article()],
+    ), patch.object(
+        marketaux,
+        "_get_or_create_ticker",
+        return_value=ticker,
+    ), patch.object(
+        marketaux,
+        "_get_or_create_platform",
+        return_value=platform,
+    ), patch.object(
+        marketaux.artifact_crud,
+        "get_artifact_by_hash",
+        return_value=None,
+    ), patch.object(
+        marketaux.artifact_crud,
+        "create_artifact",
+        return_value=MagicMock(id=uuid.uuid4(), artifact_metadata={}),
+    ), patch.object(
+        marketaux.news_summary,
+        "summarise_news_artifact",
+    ) as summarise_artifact:
+        result = marketaux.fetch_and_store_news(
+            "BHP",
+            10,
+            db,
+            summarise=False,
+        )
+
+    assert result["created"] == 1
+    assert result["summarised"] == 0
+    assert result["errors"] == 0
+    summarise_artifact.assert_not_called()
+
+
 def test_news_fetch_route_response_shape() -> None:
     expected = {
         "symbol": "BHP",

@@ -31,6 +31,14 @@ on:
         options:
           - "false"
           - "true"
+      enable_marketaux:
+        description: Enable Marketaux API access and weekly news collection
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       enable_analysis:
         description: Allow Queue C to start analysis work
         required: true
@@ -67,6 +75,11 @@ on:
         type: string
       public_discussion_per_source_limit:
         description: Maximum items collected from each public source
+        required: true
+        default: "10"
+        type: string
+      marketaux_per_ticker_limit:
+        description: Maximum Marketaux articles collected for each ticker
         required: true
         default: "10"
         type: string
@@ -173,21 +186,25 @@ jobs:
           AUTO_AUTH_PROVIDER: ${{ vars.AUTO_DEPLOY_AUTH_PROVIDER }}
           AUTO_ENABLE_SCHEDULE: ${{ vars.AUTO_DEPLOY_ENABLE_SCHEDULE }}
           AUTO_ENABLE_PUBLIC_DISCUSSION_SCHEDULE: ${{ vars.AUTO_DEPLOY_ENABLE_PUBLIC_DISCUSSION_SCHEDULE }}
+          AUTO_ENABLE_MARKETAUX: ${{ vars.AUTO_DEPLOY_ENABLE_MARKETAUX }}
           AUTO_ENABLE_ANALYSIS: ${{ vars.AUTO_DEPLOY_ENABLE_ANALYSIS }}
           AUTO_ENABLE_NOTIFICATIONS: ${{ vars.AUTO_DEPLOY_ENABLE_NOTIFICATIONS }}
           AUTO_ENABLE_BEDROCK: ${{ vars.AUTO_DEPLOY_ENABLE_BEDROCK }}
           AUTO_SCHEDULED_TICKERS: ${{ vars.AUTO_DEPLOY_SCHEDULED_TICKERS }}
           AUTO_SCHEDULED_PUBLIC_DISCUSSION_SOURCES: ${{ vars.AUTO_DEPLOY_SCHEDULED_PUBLIC_DISCUSSION_SOURCES }}
           AUTO_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: ${{ vars.AUTO_DEPLOY_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT }}
+          AUTO_MARKETAUX_PER_TICKER_LIMIT: ${{ vars.AUTO_DEPLOY_MARKETAUX_PER_TICKER_LIMIT }}
           MANUAL_AUTH_PROVIDER: ${{ inputs.auth_provider }}
           MANUAL_ENABLE_SCHEDULE: ${{ inputs.enable_schedule }}
           MANUAL_ENABLE_PUBLIC_DISCUSSION_SCHEDULE: ${{ inputs.enable_public_discussion_schedule }}
+          MANUAL_ENABLE_MARKETAUX: ${{ inputs.enable_marketaux }}
           MANUAL_ENABLE_ANALYSIS: ${{ inputs.enable_analysis }}
           MANUAL_ENABLE_NOTIFICATIONS: ${{ inputs.enable_notifications }}
           MANUAL_ENABLE_BEDROCK: ${{ inputs.enable_bedrock }}
           MANUAL_SCHEDULED_TICKERS: ${{ inputs.scheduled_tickers }}
           MANUAL_SCHEDULED_PUBLIC_DISCUSSION_SOURCES: ${{ inputs.scheduled_public_discussion_sources }}
           MANUAL_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: ${{ inputs.public_discussion_per_source_limit }}
+          MANUAL_MARKETAUX_PER_TICKER_LIMIT: ${{ inputs.marketaux_per_ticker_limit }}
         run: |
           read_stack_parameter() {
             local parameter_name="$1"
@@ -217,22 +234,26 @@ jobs:
             AUTH_PROVIDER="$MANUAL_AUTH_PROVIDER"
             ENABLE_SCHEDULE="$MANUAL_ENABLE_SCHEDULE"
             ENABLE_PUBLIC_DISCUSSION_SCHEDULE="$MANUAL_ENABLE_PUBLIC_DISCUSSION_SCHEDULE"
+            ENABLE_MARKETAUX="$MANUAL_ENABLE_MARKETAUX"
             ENABLE_ANALYSIS="$MANUAL_ENABLE_ANALYSIS"
             ENABLE_NOTIFICATIONS="$MANUAL_ENABLE_NOTIFICATIONS"
             ENABLE_BEDROCK="$MANUAL_ENABLE_BEDROCK"
             SCHEDULED_TICKERS="$MANUAL_SCHEDULED_TICKERS"
             SCHEDULED_PUBLIC_DISCUSSION_SOURCES="$MANUAL_SCHEDULED_PUBLIC_DISCUSSION_SOURCES"
             PUBLIC_DISCUSSION_PER_SOURCE_LIMIT="$MANUAL_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT"
+            MARKETAUX_PER_TICKER_LIMIT="$MANUAL_MARKETAUX_PER_TICKER_LIMIT"
           else
             AUTH_PROVIDER="$(resolve_automatic_value "$AUTO_AUTH_PROVIDER" AuthProvider legacy)"
             ENABLE_SCHEDULE="$(resolve_automatic_value "$AUTO_ENABLE_SCHEDULE" ScheduleEnabled false)"
             ENABLE_PUBLIC_DISCUSSION_SCHEDULE="$(resolve_automatic_value "$AUTO_ENABLE_PUBLIC_DISCUSSION_SCHEDULE" PublicDiscussionScheduleEnabled false)"
+            ENABLE_MARKETAUX="$(resolve_automatic_value "$AUTO_ENABLE_MARKETAUX" MarketauxEnabled false)"
             ENABLE_ANALYSIS="$(resolve_automatic_value "$AUTO_ENABLE_ANALYSIS" AnalysisEnabled true)"
             ENABLE_NOTIFICATIONS="$(resolve_automatic_value "$AUTO_ENABLE_NOTIFICATIONS" NotificationsEnabled false)"
             ENABLE_BEDROCK="$(resolve_automatic_value "$AUTO_ENABLE_BEDROCK" BedrockEnabled false)"
             SCHEDULED_TICKERS="$(resolve_automatic_value "$AUTO_SCHEDULED_TICKERS" ScheduledTickers ANZ,BHP,CBA,CSL,WES)"
             SCHEDULED_PUBLIC_DISCUSSION_SOURCES="$(resolve_automatic_value "$AUTO_SCHEDULED_PUBLIC_DISCUSSION_SOURCES" ScheduledPublicDiscussionSources bluesky,mastodon)"
             PUBLIC_DISCUSSION_PER_SOURCE_LIMIT="$(resolve_automatic_value "$AUTO_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" PublicDiscussionPerSourceLimit 10)"
+            MARKETAUX_PER_TICKER_LIMIT="$(resolve_automatic_value "$AUTO_MARKETAUX_PER_TICKER_LIMIT" MarketauxPerTickerLimit 10)"
           fi
 
           case "$AUTH_PROVIDER" in
@@ -242,6 +263,7 @@ jobs:
           for setting_name in \
             ENABLE_SCHEDULE \
             ENABLE_PUBLIC_DISCUSSION_SCHEDULE \
+            ENABLE_MARKETAUX \
             ENABLE_ANALYSIS \
             ENABLE_NOTIFICATIONS \
             ENABLE_BEDROCK; do
@@ -256,12 +278,14 @@ jobs:
             echo "AUTH_PROVIDER=$AUTH_PROVIDER"
             echo "ENABLE_SCHEDULE=$ENABLE_SCHEDULE"
             echo "ENABLE_PUBLIC_DISCUSSION_SCHEDULE=$ENABLE_PUBLIC_DISCUSSION_SCHEDULE"
+            echo "ENABLE_MARKETAUX=$ENABLE_MARKETAUX"
             echo "ENABLE_ANALYSIS=$ENABLE_ANALYSIS"
             echo "ENABLE_NOTIFICATIONS=$ENABLE_NOTIFICATIONS"
             echo "ENABLE_BEDROCK=$ENABLE_BEDROCK"
             echo "SCHEDULED_TICKERS=$SCHEDULED_TICKERS"
             echo "SCHEDULED_PUBLIC_DISCUSSION_SOURCES=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES"
             echo "PUBLIC_DISCUSSION_PER_SOURCE_LIMIT=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT"
+            echo "MARKETAUX_PER_TICKER_LIMIT=$MARKETAUX_PER_TICKER_LIMIT"
           } >> "$GITHUB_ENV"
 
       - name: Validate Brevo notification prerequisites
@@ -288,6 +312,24 @@ jobs:
             exit 1
           fi
           echo "Brevo notification prerequisites are present"
+
+      - name: Validate Marketaux prerequisites
+        if: env.ENABLE_MARKETAUX == 'true'
+        shell: bash
+        run: |
+          PARAMETER_NAME="$PARAMETER_PATH_PREFIX/marketaux-api-token"
+          if ! PARAMETER_TYPE="$(aws ssm get-parameter \
+            --name "$PARAMETER_NAME" \
+            --query 'Parameter.Type' \
+            --output text 2>/dev/null)"; then
+            echo "::error::The Marketaux API token parameter is missing or unreadable"
+            exit 1
+          fi
+          if [ "$PARAMETER_TYPE" != "SecureString" ]; then
+            echo "::error::The Marketaux API token parameter must be a SecureString"
+            exit 1
+          fi
+          echo "Marketaux prerequisites are present"
 
       - name: Resolve immutable release values
         id: values
@@ -448,6 +490,8 @@ jobs:
               "AuthProvider=$AUTH_PROVIDER" \
               "ScheduleEnabled=$ENABLE_SCHEDULE" \
               "PublicDiscussionScheduleEnabled=$ENABLE_PUBLIC_DISCUSSION_SCHEDULE" \
+              "MarketauxEnabled=$ENABLE_MARKETAUX" \
+              "MarketauxPerTickerLimit=$MARKETAUX_PER_TICKER_LIMIT" \
               "AnalysisEnabled=$ENABLE_ANALYSIS" \
               "NotificationsEnabled=$ENABLE_NOTIFICATIONS" \
               "AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}" \
