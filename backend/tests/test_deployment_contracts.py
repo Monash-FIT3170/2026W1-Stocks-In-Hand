@@ -353,6 +353,22 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
 
 
+def test_infra_queue_workflow_keeps_backend_on_python_import_path() -> None:
+    workflow = (
+        REPOSITORY_ROOT
+        / ".github"
+        / "workflows"
+        / "ci-infra-queue-wiring.yml"
+    ).read_text(encoding="utf-8")
+    command = " ".join(workflow.split())
+
+    assert (
+        "python -m pytest tests/test_queue_wiring.py "
+        "tests/test_deployment_contracts.py -v"
+        in command
+    )
+
+
 def test_staging_validation_workflow_cannot_deploy() -> None:
     validation = (
         REPOSITORY_ROOT
