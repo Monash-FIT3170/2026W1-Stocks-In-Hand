@@ -19,7 +19,7 @@ from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.services import groq as groq_service
+from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
@@ -131,7 +131,7 @@ def _summarise_and_store_artifact(
         return
 
     try:
-        summary = groq_service.summarise_announcement(
+        summary = llm_service.summarise_announcement(
             title=artifact.title or "Untitled ASX announcement",
             category=category_name,
             extracted_data=extracted_data,
@@ -159,7 +159,7 @@ def _summarise_and_store_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=groq_service.active_model_name(),
+        model_used=llm_service.active_model_name(),
     ))
     db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")

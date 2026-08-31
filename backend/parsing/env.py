@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 # Just loads files from .env
-# Used for loading API key for groq
+# Used for loading local development configuration.
 def load_env(path=None):
     env_path = Path(path) if path else Path(__file__).parent.parent / ".env"
     if not env_path.exists():

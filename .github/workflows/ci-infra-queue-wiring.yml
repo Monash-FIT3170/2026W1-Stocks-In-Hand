@@ -1,0 +1,92 @@
+name: Infra and queue wiring CI
+
+# Commit/CI checks for the SQS pipeline (Discovery -> Download -> Analysis)
+# and the SAM template that declares it. Runs on every push/PR that touches
+# the template or the queue-pipeline code, entirely offline: no AWS
+# credentials are requested and nothing in AWS is read, written, or
+# otherwise touched by this workflow.
+#
+# This is deliberately scoped to infra/queue wiring only. General backend
+# lint/type/test and frontend build CI live in their own workflow.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "infra/template.yaml"
+      - "infra/samconfig.toml"
+      - "backend/app/messages.py"
+      - "backend/app/services/scrape_queue.py"
+      - "backend/lambdas/**"
+      - "backend/tests/test_queue_wiring.py"
+      - "backend/tests/test_deployment_contracts.py"
+      - ".github/workflows/ci-infra-queue-wiring.yml"
+  pull_request:
+    paths:
+      - "infra/template.yaml"
+      - "infra/samconfig.toml"
+      - "backend/app/messages.py"
+      - "backend/app/services/scrape_queue.py"
+      - "backend/lambdas/**"
+      - "backend/tests/test_queue_wiring.py"
+      - "backend/tests/test_deployment_contracts.py"
+      - ".github/workflows/ci-infra-queue-wiring.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stocks-in-hand-infra-queue-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  template-validation:
+    name: Validate SAM/CloudFormation template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up AWS SAM
+        uses: aws-actions/setup-sam@v2
+
+      - name: sam validate --lint
+        shell: bash
+        run: sam validate --lint --template-file infra/template.yaml
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cfn-lint
+        shell: bash
+        run: pip install --disable-pip-version-check "cfn-lint>=1,<2"
+
+      - name: cfn-lint
+        shell: bash
+        run: cfn-lint infra/template.yaml
+
+  queue-wiring-tests:
+    name: Queue wiring regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        shell: bash
+        run: pip install --disable-pip-version-check pytest==9.0.3
+
+      - name: Run queue wiring and deployment contract tests
+        shell: bash
+        working-directory: backend
+        run: >
+          python -m pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
+          -v

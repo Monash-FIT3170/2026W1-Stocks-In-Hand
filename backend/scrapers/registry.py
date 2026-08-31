@@ -49,22 +49,6 @@ async def discover(ticker: str) -> list[Announcement]:
     return await get_scraper(ticker).fetch_announcements()
 
 
-def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
-    symbol = ticker.strip().upper()
-    scraper_type = REGISTRY.get(symbol)
-    if scraper_type is None:
-        raise ValueError(
-            f"No scraper implemented for '{symbol}'. "
-            f"Available: {list(REGISTRY.keys())}"
-        )
-    return scraper_type(output_dir=output_dir)
-
-
-async def discover(ticker: str) -> list[Announcement]:
-    """Discover announcement metadata without downloading or writing files."""
-    return await get_scraper(ticker).fetch_announcements()
-
-
 async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
     """
     Public entrypoint for the entire ASX scraper module.

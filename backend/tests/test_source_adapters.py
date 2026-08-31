@@ -6,6 +6,7 @@ import ast
 import asyncio
 import hashlib
 import inspect
+import json
 import textwrap
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,14 +20,22 @@ from pydantic import ValidationError
 import main
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
-from lambdas import discovery, source_download
+from lambdas import analysis, discovery, download, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument
 from scrapers.base import Announcement
 from scrapers.companies.anz import ANZScraper
 from scrapers.companies.bhp import BHPScraper
 from scrapers.companies.cba import CBAScraper
+from scrapers.companies.coh import COHScraper
+from scrapers.companies.col import COLScraper
 from scrapers.companies.csl import CSLScraper
+from scrapers.companies.mqg import MQGScraper
+from scrapers.companies.org import ORGScraper
+from scrapers.companies.rio import RIOScraper
+from scrapers.companies.tcl import TCLScraper
+from scrapers.companies.tls import TLSScraper
+from scrapers.companies.wds import WDSScraper
 from scrapers.companies.wes import WESScraper
 from scrapers.registry import discover
 
@@ -35,7 +44,15 @@ SCRAPERS = {
     "ANZ": ANZScraper,
     "BHP": BHPScraper,
     "CBA": CBAScraper,
+    "COH": COHScraper,
+    "COL": COLScraper,
     "CSL": CSLScraper,
+    "MQG": MQGScraper,
+    "ORG": ORGScraper,
+    "RIO": RIOScraper,
+    "TCL": TCLScraper,
+    "TLS": TLSScraper,
+    "WDS": WDSScraper,
     "WES": WESScraper,
 }
 
@@ -69,6 +86,101 @@ def test_queue_contract_rejects_mismatched_ticker_and_adapter() -> None:
             source_url=SOURCES["ANZ"].source_url,
             source_adapter="csl",
         )
+
+
+@pytest.mark.parametrize(("ticker", "source"), SOURCES.items())
+def test_download_worker_accepts_each_canonical_pair(ticker, source) -> None:
+    message = QueueBMessage(
+        scrape_run_id=uuid4(),
+        artifact_id=uuid4(),
+        ticker=ticker,
+        source_url=source.source_url,
+        document_url=source.source_url,
+        canonical_url=source.source_url,
+        source_adapter=source.adapter,
+    )
+
+    parsed = download._parse_message(_sqs_record(message.model_dump_json()))
+
+    assert parsed.ticker == ticker
+    assert parsed.source_adapter == source.adapter
+
+
+@pytest.mark.parametrize(("_ticker", "source"), SOURCES.items())
+def test_each_canonical_source_has_an_adapter_scoped_host(_ticker, source) -> None:
+    assert source.adapter in source_download._ADAPTER_HOSTS
+    assert source_download._validated_url(source.adapter, source.source_url) == (
+        source.source_url
+    )
+
+
+def test_rio_adapter_accepts_its_euroland_document_cdn() -> None:
+    document_url = (
+        "https://ne-cdn.eurolandir.com/press-releases-attachments./"
+        "4163612/results.pdf"
+    )
+
+    assert source_download._validated_url("rio", document_url) == document_url
+
+
+@pytest.mark.parametrize("ticker", SOURCES)
+def test_analysis_accepts_each_canonical_ticker_object_key(ticker: str) -> None:
+    artifact_id = uuid4()
+    checksum = "a" * 64
+    record = {
+        "body": json.dumps(
+            {
+                "Records": [
+                    {
+                        "eventName": "ObjectCreated:Put",
+                        "s3": {
+                            "bucket": {"name": "raw-documents"},
+                            "object": {
+                                "key": (
+                                    f"raw/{ticker}/{artifact_id}/{checksum}.pdf"
+                                )
+                            },
+                        },
+                    }
+                ]
+            }
+        )
+    }
+
+    parsed = analysis.parse_s3_notifications(record)
+
+    assert parsed[0][2] == ticker
+    assert parsed[0][3] == artifact_id
+
+
+def test_anz_feed_preserves_yourir_document_identity() -> None:
+    announcements = ANZScraper()._parse_feed(
+        {
+            "items": {
+                "heading": ["2026 Third Quarter Trading Update"],
+                "time": ["2026-08-13 07:30:09"],
+                "fileID": ["3A698699"],
+            }
+        }
+    )
+
+    assert len(announcements) == 1
+    announcement = announcements[0]
+    assert announcement.ticker == "ANZ"
+    assert announcement.date == datetime(2026, 8, 13)
+    assert announcement.metadata == {
+        "yourir_id": "3A698699",
+        "source_id": "3A698699",
+    }
+    assert str(announcement.pdf_url) == (
+        "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx/"
+        "3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
+    )
+
+
+def test_anz_feed_rejects_missing_parallel_item_arrays() -> None:
+    with pytest.raises(ValueError, match="invalid item schema"):
+        ANZScraper()._parse_feed({"items": {"heading": ["Results"]}})
 
 
 @pytest.mark.parametrize("scraper_type", SCRAPERS.values())
@@ -262,3 +374,63 @@ def test_session_resolver_rejects_untrusted_url_before_browser_launch() -> None:
         )
 
     assert error.value.code == "invalid_document_url"
+
+
+def test_wds_download_seeds_session_from_html_listing() -> None:
+    document_url = (
+        "https://www.woodside.com/docs/default-source/investor-documents/"
+        "half-year-2026-report.pdf?sfvrsn=test"
+    )
+
+    referer = source_download._request_referer(
+        "wds",
+        document_url,
+        {
+            "article_url": document_url,
+            "listing_url": SOURCES["WDS"].source_url,
+        },
+    )
+
+    assert referer == SOURCES["WDS"].source_url
+
+
+def test_anz_resolver_downloads_directly_without_browser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_url = (
+        "https://yourir.info/resources/4d216b570d08af30/announcements/"
+        "anz.asx/3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
+    )
+    expected = DownloadedDocument(
+        content=b"%PDF-1.7\ncontent",
+        checksum="checksum",
+        final_url=document_url,
+        content_type="application/pdf",
+        document_format="pdf",
+    )
+    direct_download = MagicMock(return_value=expected)
+    monkeypatch.setattr(source_download, "download_document", direct_download)
+
+    def forbidden_playwright():
+        raise AssertionError("ANZ download launched Playwright")
+
+    monkeypatch.setattr(source_download, "async_playwright", forbidden_playwright)
+
+    result = asyncio.run(
+        source_download.resolve_session_download(
+            source_adapter="anz",
+            source_url=SOURCES["ANZ"].source_url,
+            document_url=document_url,
+            title="2026 Third Quarter Trading Update",
+            metadata={"yourir_id": "3A698699"},
+            max_bytes=1024,
+        )
+    )
+
+    assert result is expected
+    direct_download.assert_called_once_with(
+        document_url,
+        hosts=source_download._ADAPTER_HOSTS["anz"],
+        referer=SOURCES["ANZ"].source_url,
+        max_bytes=1024,
+    )

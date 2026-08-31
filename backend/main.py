@@ -3,6 +3,14 @@
 from pathlib import Path
 from uuid import uuid4
 
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
 from app.api.deps import require_admin_investor
 from app.api.routes import (
     announcement,
@@ -18,6 +26,7 @@ from app.api.routes import (
     investor,
     mastodon,
     news,
+    notification_preferences,
     public_discussion,
     reddit,
     scrape_run,
@@ -33,11 +42,6 @@ from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
 from app.services import scrape_queue
 from app.sources import source_for_ticker
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 app = FastAPI(title="StonksInHand API")
 app.add_middleware(
@@ -70,6 +74,7 @@ for route_module in (
     gemini,
     category_sentiment,
     announcement,
+    notification_preferences,
 ):
     app.include_router(route_module.router)
 
@@ -90,9 +95,33 @@ def root():
 
 
 @app.get("/health")
-def health() -> dict:
-    """Return the health status of the API process."""
+def health(db: Session = Depends(get_db)) -> dict:
+    """Return whether the API process can reach its database."""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": "database unreachable"},
+        )
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness(db: Session = Depends(get_db)) -> dict:
+    """Verify that the API can query the schema required by deployed routes."""
+    try:
+        db.execute(text("SELECT is_duplicate FROM artifacts LIMIT 0"))
+        db.execute(text("SELECT prompt_version FROM artifact_summaries LIMIT 0"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database schema is not ready",
+        ) from exc
+    return {
+        "status": "ready",
+        "checks": {"database": "ok", "artifact_schema": "ok"},
+    }
 
 
 @app.get("/viewer", response_class=HTMLResponse)

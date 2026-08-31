@@ -6,12 +6,19 @@ import logging
 import os
 import re
 import time
+from functools import lru_cache
 from pathlib import PurePosixPath
+from typing import Any
 from urllib.parse import unquote_plus, urlparse
 from uuid import UUID
 
 import boto3
 from app.messages import PublicDiscussionAnalysisMessage
+from app.services.summary_metadata import (
+    combine_summary_text,
+    has_complete_summary_metadata,
+    normalise_summary_metadata,
+)
 from parsing.analysis import (
     AnalysisOutput,
     analyse_document,
@@ -19,6 +26,7 @@ from parsing.analysis import (
 )
 from pydantic import ValidationError
 
+from app.messages import NotificationMessage
 from lambdas.common import (
     PermanentDocumentError,
     correlation_id,
@@ -34,7 +42,23 @@ from lambdas.download_validation import (
 from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
-SUPPORTED_TICKERS = frozenset({"ANZ", "BHP", "CBA", "CSL", "WES"})
+SUPPORTED_TICKERS = frozenset(
+    {
+        "ANZ",
+        "BHP",
+        "CBA",
+        "COH",
+        "COL",
+        "CSL",
+        "MQG",
+        "ORG",
+        "RIO",
+        "TCL",
+        "TLS",
+        "WDS",
+        "WES",
+    }
+)
 FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "pdf": "pdf",
     "txt": "txt",
@@ -42,28 +66,12 @@ FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "docx": "docx",
 }
 OBJECT_KEY = re.compile(
-    r"^raw/(?P<ticker>ANZ|BHP|CBA|CSL|WES)/"
+    r"^raw/(?P<ticker>ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)/"
     r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
     r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
     re.IGNORECASE,
 )
-
-
-def _artifact_filename(artifact) -> str | None:
-    metadata = getattr(artifact, "artifact_metadata", None)
-    if isinstance(metadata, dict):
-        filename = metadata.get("filename")
-        if isinstance(filename, str) and filename.strip():
-            return filename.strip()
-    for attribute in ("document_url", "url"):
-        value = getattr(artifact, attribute, None)
-        if isinstance(value, str) and value:
-            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
-            if filename:
-                return filename
-    return None
-
 
 def parse_public_discussion_message(
     record: dict,
@@ -83,6 +91,21 @@ def parse_public_discussion_message(
             "Public discussion analysis message does not match schema version 1",
             code="invalid_message",
         ) from exc
+
+
+def _artifact_filename(artifact) -> str | None:
+    metadata = getattr(artifact, "artifact_metadata", None)
+    if isinstance(metadata, dict):
+        filename = metadata.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+    for attribute in ("document_url", "url"):
+        value = getattr(artifact, attribute, None)
+        if isinstance(value, str) and value:
+            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
+            if filename:
+                return filename
+    return None
 
 
 def parse_s3_notifications(
@@ -297,18 +320,124 @@ def _read_s3_document(
 def _summary_values(output: AnalysisOutput) -> dict | None:
     if output.summary is None:
         return None
-    text = "\n\n".join(
-        value.strip()
-        for key in ("summary", "about", "changed", "matters")
-        if isinstance((value := output.summary.get(key)), str) and value.strip()
-    )
+    fields = normalise_summary_metadata(output.summary)
+    text = combine_summary_text(fields)
     if not text:
         return None
     return {
         "summary_text": text,
         "model_used": output.summary_model,
         "prompt_version": output.summary_prompt_version,
+        **fields,
     }
+
+
+def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
+    """Find completed ASX artifacts missing display or clarity summary fields."""
+    with database_session() as db:
+        from app.models.artifact import Artifact
+        from app.models.artifact_summary import ArtifactSummary
+
+        rows = (
+            db.query(Artifact.id, Artifact.artifact_metadata)
+            .join(ArtifactSummary, ArtifactSummary.artifact_id == Artifact.id)
+            .filter(Artifact.source_type == "asx_announcement")
+            .filter(Artifact.analysis_status == "completed")
+            .order_by(Artifact.created_at.asc(), Artifact.id.asc())
+            .all()
+        )
+    missing = [
+        artifact_id
+        for artifact_id, metadata in rows
+        if not has_complete_summary_metadata(metadata)
+    ]
+    return missing[:limit], len(missing)
+
+
+def _summary_input(artifact_id: UUID) -> dict:
+    with database_session() as db:
+        from app.crud.artifact import get_artifact
+
+        artifact = get_artifact(db, artifact_id)
+        if artifact is None or artifact.analysis_status != "completed":
+            raise RuntimeError("Completed artifact is no longer available")
+        metadata = (
+            artifact.artifact_metadata
+            if isinstance(artifact.artifact_metadata, dict)
+            else {}
+        )
+        return {
+            "title": artifact.title or "Untitled ASX announcement",
+            "category": str(
+                metadata.get("category") or artifact.artifact_type or "UNKNOWN"
+            ),
+            "extracted_data": metadata.get("extracted_data")
+            if isinstance(metadata.get("extracted_data"), dict)
+            else {},
+            "raw_text": artifact.raw_text or "",
+        }
+
+
+def _resummarise_missing_fields(  # pylint: disable=too-many-locals
+    *,
+    apply: bool,
+    limit: int,
+) -> dict:
+    """Boundedly regenerate missing structured fields through the active LLM."""
+    capped_limit = max(min(limit, 20), 1)
+    artifact_ids, total_missing = _missing_summary_artifact_ids(capped_limit)
+    result: dict[str, object] = {
+        "apply": apply,
+        "selected": len(artifact_ids),
+        "missing_before": total_missing,
+        "updated": 0,
+        "failed": [],
+    }
+    if not apply:
+        result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
+        return result
+
+    from app.services import llm as llm_service
+    from app.crud.artifact import store_artifact_analysis
+
+    model_used = llm_service.active_model_name()
+    if not model_used.startswith("bedrock:"):
+        raise RuntimeError("Structured summary repair requires Amazon Bedrock")
+
+    for artifact_id in artifact_ids:
+        try:
+            summary_input = _summary_input(artifact_id)
+            summary = llm_service.summarise_announcement(**summary_input)
+            fields = normalise_summary_metadata(summary)
+            if not has_complete_summary_metadata(fields):
+                raise RuntimeError("Bedrock response omitted structured summary fields")
+            summary_values = {
+                "summary_text": combine_summary_text(fields),
+                "model_used": model_used,
+                "prompt_version": llm_service.SUMMARY_PROMPT_VERSION,
+                **fields,
+            }
+            with database_session() as db:
+                store_artifact_analysis(
+                    db,
+                    artifact_id=artifact_id,
+                    raw_text=summary_input["raw_text"],
+                    metadata=fields,
+                    summary=summary_values,
+                )
+            result["updated"] = int(result["updated"]) + 1
+        # Continue so one malformed model response cannot block the batch.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            result["failed"].append(
+                {
+                    "artifact_id": str(artifact_id),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    _remaining_ids, remaining = _missing_summary_artifact_ids(1)
+    result["missing_after"] = remaining
+    return result
 
 
 def _sentiment_values(output: AnalysisOutput) -> dict:
@@ -318,6 +447,70 @@ def _sentiment_values(output: AnalysisOutput) -> dict:
         "confidence_score": output.sentiment.get("confidence_score"),
         "model_used": output.sentiment.get("model_used"),
     }
+
+
+@lru_cache(maxsize=1)
+def _notification_sqs_client() -> Any:
+    """Reuse the notification queue client within one warm Lambda process."""
+    return boto3.client("sqs")
+
+
+def _publish_notification(
+    *,
+    artifact_id: UUID,
+    ticker: str,
+    scrape_run_id: UUID,
+    sentiment: dict,
+) -> None:
+    """Publish one validated notification message to the configured queue."""
+    queue_url = os.getenv("NOTIFICATION_QUEUE_URL", "").strip()
+    if not queue_url:
+        raise RuntimeError("Notification queue URL is not configured")
+    message = NotificationMessage(
+        artifact_id=artifact_id,
+        ticker=ticker,
+        scrape_run_id=scrape_run_id,
+        sentiment_label=sentiment["sentiment_label"],
+        confidence_score=sentiment["confidence_score"],
+    )
+    _notification_sqs_client().send_message(
+        QueueUrl=queue_url,
+        MessageBody=message.model_dump_json(),
+    )
+
+
+def _try_publish_notification(  # pylint: disable=too-many-arguments
+    *,
+    artifact_id: UUID,
+    ticker: str,
+    scrape_run_id: UUID,
+    sentiment: dict,
+    correlation: str,
+    attempt: int,
+) -> None:
+    """Publish an eligible result without risking the analysis pipeline."""
+    if os.getenv("NOTIFICATIONS_ENABLED", "false").lower() != "true":
+        return
+    if sentiment.get("sentiment_label") not in {"negative", "positive"}:
+        return
+    try:
+        _publish_notification(
+            artifact_id=artifact_id,
+            ticker=ticker,
+            scrape_run_id=scrape_run_id,
+            sentiment=sentiment,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        log_event(
+            stage=STAGE,
+            event="notification_publish_failed",
+            level=logging.ERROR,
+            correlation_id=correlation,
+            run_id=scrape_run_id,
+            artifact_id=artifact_id,
+            attempt=attempt,
+            error_code=type(exc).__name__,
+        )
 
 
 def _mark_failed(artifact_id: UUID, error: str) -> None:
@@ -520,6 +713,7 @@ def _analyse_object(
             "document_format": document_format,
         }
     )
+    sentiment = _sentiment_values(output)
 
     with database_session() as db:
         from app.crud.artifact import store_artifact_analysis
@@ -530,13 +724,22 @@ def _analyse_object(
             raw_text=output.parsed.raw_text,
             metadata=analysis_metadata,
             summary=_summary_values(output),
-            sentiment=_sentiment_values(output),
+            sentiment=sentiment,
         )
 
     with database_session() as db:
         from app.crud.scrape_run import mark_artifact_analysis_completed
 
         mark_artifact_analysis_completed(db, artifact_id)
+
+    _try_publish_notification(
+        artifact_id=artifact_id,
+        ticker=ticker,
+        scrape_run_id=state["run_id"],
+        sentiment=sentiment,
+        correlation=correlation,
+        attempt=attempt,
+    )
 
     log_event(
         stage=STAGE,
@@ -636,6 +839,14 @@ def _handle_record(record: dict) -> None:
 
 
 def handler(event: dict, _context) -> dict:
+    if event.get("operation") == "resummarise_missing_fields":
+        apply = event.get("apply") is True
+        if apply and event.get("confirmation") != "RESUMMARISE_MISSING_FIELDS":
+            raise ValueError("Summary repair apply mode requires confirmation")
+        return _resummarise_missing_fields(
+            apply=apply,
+            limit=int(event.get("limit", 10)),
+        )
     for record in event.get("Records", []):
         _handle_record(record)
     return {"processed": len(event.get("Records", []))}

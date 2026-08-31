@@ -15,6 +15,19 @@ Parameters:
   OperationsEmail:
     Type: String
     AllowedPattern: ^[^@\s]+@[^@\s]+\.[^@\s]+$
+  FrontendBaseUrl:
+    Type: String
+    Default: https://example.invalid
+    AllowedPattern: ^https://[^\s/]+/?$
+    Description: Existing public frontend origin used in notification links.
+  AuthProvider:
+    Type: String
+    Default: legacy
+    AllowedValues:
+      - legacy
+      - dual
+      - cognito
+    Description: Selects legacy, short-lived dual cutover, or Cognito authentication.
   ScheduleEnabled:
     Type: String
     Default: "false"
@@ -35,13 +48,33 @@ Parameters:
       - "true"
       - "false"
     Description: Set false to stop Queue C from starting new analysis work.
+  NotificationsEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Master switch for user-facing Brevo watchlist alerts.
+  AlertSenderEmail:
+    Type: String
+    Default: ""
+    AllowedPattern: ^$|^[^@\s]+@[^@\s]+\.[^@\s]+$
+    Description: Sender address verified in the Brevo account.
+  AlertDailyBudget:
+    Type: String
+    Default: "180"
+    AllowedPattern: ^[0-9]+$
+  AlertMaxPerInvestorPerRun:
+    Type: String
+    Default: "5"
+    AllowedPattern: ^[1-9][0-9]*$
   BedrockEnabled:
     Type: String
     Default: "false"
     AllowedValues:
       - "true"
       - "false"
-    Description: Grants the analysis Lambda access to the approved Bedrock model.
+    Description: Grants the API and analysis Lambdas access to the approved Bedrock model.
   ScheduledTickers:
     Type: String
     Default: ANZ,BHP,CBA,CSL,WES
@@ -60,12 +93,48 @@ Parameters:
     Type: String
   AnalysisImageUri:
     Type: String
+  SiteDomainName:
+    Type: String
+    Default: ""
+    Description: >-
+      Custom hostname for the frontend (e.g. app.example.com). Leave blank to
+      keep using the default CloudFront domain. Must match the domain name
+      the certificate in SiteCertificateArn was issued for.
+  SiteCertificateArn:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:acm:us-east-1:[0-9]{12}:certificate/.+$'
+    Description: >-
+      ARN of an ACM certificate in us-east-1 covering SiteDomainName. Created
+      by infra/domain.yaml.
+  SiteHostedZoneId:
+    Type: String
+    Default: ""
+    Description: >-
+      Route 53 hosted zone ID that owns SiteDomainName. Created by
+      infra/domain.yaml.
+
+Rules:
+  AlertSenderRequiredWhenNotificationsEnabled:
+    RuleCondition: !Equals [!Ref NotificationsEnabled, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AlertSenderEmail, ""]]
+        AssertDescription: AlertSenderEmail is required when notifications are enabled.
+  CustomDomainValuesRequiredTogether:
+    RuleCondition: !Not [!Equals [!Ref SiteDomainName, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref SiteCertificateArn, ""]]
+        AssertDescription: SiteCertificateArn is required when SiteDomainName is set.
+      - Assert: !Not [!Equals [!Ref SiteHostedZoneId, ""]]
+        AssertDescription: SiteHostedZoneId is required when SiteDomainName is set.
 
 Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
   IsPublicDiscussionScheduleEnabled: !Equals [!Ref PublicDiscussionScheduleEnabled, "true"]
   IsAnalysisEnabled: !Equals [!Ref AnalysisEnabled, "true"]
+  IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]
   IsBedrockEnabled: !Equals [!Ref BedrockEnabled, "true"]
+  HasCustomDomain: !Not [!Equals [!Ref SiteDomainName, ""]]
 
 Resources:
   AlarmTopic:
@@ -94,6 +163,13 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub stocks-in-hand-${Environment}-analysis-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  NotificationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-notification-dlq
       MessageRetentionPeriod: 1209600
       SqsManagedSseEnabled: true
 
@@ -128,6 +204,17 @@ Resources:
       VisibilityTimeout: 4320
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt AnalysisDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub stocks-in-hand-${Environment}-notification
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 1800
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn
         maxReceiveCount: 5
 
   AnalysisQueuePolicy:
@@ -311,6 +398,17 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: $default
+      Auth:
+        Authorizers:
+          # FastAPI enforces authentication while legacy and Cognito coexist.
+          # This authorizer is available for explicit route bindings after the
+          # legacy rollback window closes.
+          CognitoJwtAuthorizer:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              audience:
+                - !Ref CognitoUserPoolClient
+              issuer: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
       DefaultRouteSettings:
         ThrottlingBurstLimit: 20
         ThrottlingRateLimit: 10
@@ -332,15 +430,32 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
-          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
+          LLM_PROVIDER: bedrock
+          BEDROCK_ENABLED: !Ref BedrockEnabled
+          BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
+          BEDROCK_SERVICE_TIER: default
+          BEDROCK_MAX_PROMPT_CHARS: "30000"
+          BEDROCK_MAX_OUTPUT_TOKENS: "1024"
           REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
           REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
           PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
           ANALYSIS_QUEUE_URL: !Ref AnalysisQueue
-          SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
+          FRONTEND_BASE_URL: !Ref FrontendBaseUrl
+          SUPPORTED_TICKERS: ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
+          AUTH_PROVIDER: !Ref AuthProvider
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_APP_CLIENT_ID: !Ref CognitoUserPoolClient
+          COGNITO_ISSUER: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
+          COGNITO_LINK_EXISTING_BY_EMAIL: "false"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters
@@ -365,6 +480,15 @@ Resources:
               Effect: Allow
               Action: sqs:SendMessage
               Resource: !GetAtt AnalysisQueue.Arn
+        - !If
+          - IsBedrockEnabled
+          - Statement:
+              - Sid: InvokeApprovedBedrockModel
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/openai.gpt-oss-120b-1:0
+          - !Ref AWS::NoValue
       Events:
         ApiRoot:
           Type: HttpApi
@@ -443,7 +567,7 @@ Resources:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
           RAW_DOCUMENT_BUCKET: !Ref RawDocumentBucket
-          MAX_DOCUMENT_BYTES: "10485760"
+          MAX_DOCUMENT_BYTES: "26214400"
           MAX_DOCX_UNCOMPRESSED_BYTES: "20971520"
       Policies:
         - Statement:
@@ -494,17 +618,20 @@ Resources:
       Environment:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
-          GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
           RAW_DOCUMENT_BUCKET: !Ref RawDocumentBucket
-          MAX_DOCUMENT_BYTES: "10485760"
-          MAX_PDF_PAGES: "100"
+          MAX_DOCUMENT_BYTES: "26214400"
+          MAX_PDF_PAGES: "500"
           MAX_OCR_PAGES: "5"
           MAX_OCR_PIXELS_PER_PAGE: "8000000"
           MAX_ANALYSIS_CHARS: "50000"
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          NOTIFICATION_QUEUE_URL: !Ref NotificationQueue
+          LLM_PROVIDER: bedrock
           BEDROCK_ENABLED: !Ref BedrockEnabled
-          BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
-          BEDROCK_MAX_INPUT_TOKENS: "2000"
-          BEDROCK_MAX_OUTPUT_TOKENS: "64"
+          BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
+          BEDROCK_SERVICE_TIER: flex
+          BEDROCK_MAX_PROMPT_CHARS: "30000"
+          BEDROCK_MAX_OUTPUT_TOKENS: "4096"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters
@@ -524,15 +651,21 @@ Resources:
               Action: s3:GetObject
               Resource: !Sub ${RawDocumentBucket.Arn}/raw/*
         - !If
+          - IsNotificationsEnabled
+          - Statement:
+              - Sid: EnqueueNotifications
+                Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt NotificationQueue.Arn
+          - !Ref AWS::NoValue
+        - !If
           - IsBedrockEnabled
           - Statement:
               - Sid: InvokeApprovedBedrockModel
                 Effect: Allow
-                Action:
-                  - bedrock:CountTokens
-                  - bedrock:InvokeModel
+                Action: bedrock:InvokeModel
                 Resource: !Sub >-
-                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0
+                  arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/openai.gpt-oss-120b-1:0
           - !Ref AWS::NoValue
       Events:
         AnalysisMessages:
@@ -541,6 +674,59 @@ Resources:
             Queue: !GetAtt AnalysisQueue.Arn
             BatchSize: 1
             Enabled: !If [IsAnalysisEnabled, true, false]
+
+  NotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-notification
+      AutoPublishAlias: live
+      PackageType: Image
+      ImageUri: !Ref ApiImageUri
+      ImageConfig:
+        Command:
+          - lambdas.notify.handler
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 300
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled
+          ALERT_SENDER_EMAIL: !Ref AlertSenderEmail
+          BREVO_API_KEY_PARAMETER: !If
+            - IsNotificationsEnabled
+            - !Sub ${ParameterPathPrefix}/brevo-api-key
+            - ""
+          ALERT_DAILY_BUDGET: !Ref AlertDailyBudget
+          ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun
+          FRONTEND_BASE_URL: !Ref FrontendBaseUrl
+      Policies:
+        - Statement:
+            - Sid: ReadNotificationParameters
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/brevo-api-key
+            - Sid: DecryptNotificationParameters
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+      Events:
+        NotificationMessages:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            Enabled: !If [IsNotificationsEnabled, true, false]
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
 
   SchedulerFunction:
     Type: AWS::Serverless::Function
@@ -704,6 +890,12 @@ Resources:
       LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-analysis
       RetentionInDays: 7
 
+  NotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-notification
+      RetentionInDays: 7
+
   SchedulerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -773,6 +965,25 @@ Resources:
         - Name: QueueName
           Value: !GetAtt AnalysisDeadLetterQueue.QueueName
 
+  NotificationDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub stocks-in-hand-${Environment}-notification-dlq
+      AlarmDescription: Notification messages require operator review.
+      AlarmActions:
+        - !Ref AlarmTopic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Period: 300
+      Statistic: Maximum
+      Threshold: 1
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt NotificationDeadLetterQueue.QueueName
+
   FrontendOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -807,7 +1018,7 @@ Resources:
             '/terms': true,
             '/watchlist': true
           };
-          var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|CSL|WES)(\/(news|deep-dive))?$/;
+          var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)(\/(news|deep-dive))?$/;
 
           if (!staticRoutes[route] && !tickerRoute.test(route)) {
             request.uri = '/404.html';
@@ -843,6 +1054,13 @@ Resources:
 
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
+    Metadata:
+      cfn-lint:
+        config:
+          # The rule above guarantees this optional Ref is a real ARN whenever
+          # the custom-domain branch of ViewerCertificate is selected.
+          ignore_checks:
+            - W1030
     Properties:
       DistributionConfig:
         Comment: !Sub Stocks In Hand ${Environment}
@@ -882,6 +1100,10 @@ Resources:
             PathPattern: /api/*
             TargetOriginId: backend-api
             ViewerProtocolPolicy: https-only
+        Aliases: !If
+          - HasCustomDomain
+          - - !Ref SiteDomainName
+          - !Ref AWS::NoValue
         DefaultRootObject: index.html
         Enabled: true
         HttpVersion: http2and3
@@ -901,8 +1123,12 @@ Resources:
               ${ServerlessHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
             Id: backend-api
         PriceClass: PriceClass_100
-        ViewerCertificate:
-          CloudFrontDefaultCertificate: true
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref SiteCertificateArn
+            MinimumProtocolVersion: TLSv1.2_2021
+            SslSupportMethod: sni-only
+          - CloudFrontDefaultCertificate: true
 
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -932,6 +1158,25 @@ Resources:
               Bool:
                 aws:SecureTransport: "false"
 
+  SiteDnsRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref SiteHostedZoneId
+      RecordSets:
+        - Name: !Ref SiteDomainName
+          Type: A
+          AliasTarget:
+            DNSName: !GetAtt FrontendDistribution.DomainName
+            HostedZoneId: Z2FDTNDATAQYW2
+            EvaluateTargetHealth: false
+        - Name: !Ref SiteDomainName
+          Type: AAAA
+          AliasTarget:
+            DNSName: !GetAtt FrontendDistribution.DomainName
+            HostedZoneId: Z2FDTNDATAQYW2
+            EvaluateTargetHealth: false
+
 Outputs:
   FrontendBucketName:
     Value: !Ref FrontendBucket
@@ -941,10 +1186,17 @@ Outputs:
     Value: !Sub https://${FrontendDistribution.DomainName}
   ApiEndpoint:
     Value: !Sub https://${FrontendDistribution.DomainName}/api
+  AuthProvider:
+    Value: !Ref AuthProvider
+  SiteUrl:
+    Condition: HasCustomDomain
+    Value: !Sub https://${SiteDomainName}
   CognitoUserPoolId:
     Value: !Ref CognitoUserPool
   CognitoUserPoolClientId:
     Value: !Ref CognitoUserPoolClient
+  CognitoIssuer:
+    Value: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${CognitoUserPool}
   RawDocumentBucketName:
     Value: !Ref RawDocumentBucket
   DiscoveryQueueUrl:
@@ -953,12 +1205,16 @@ Outputs:
     Value: !Ref DownloadQueue
   AnalysisQueueUrl:
     Value: !Ref AnalysisQueue
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue
   DiscoveryDeadLetterQueueUrl:
     Value: !Ref DiscoveryDeadLetterQueue
   DownloadDeadLetterQueueUrl:
     Value: !Ref DownloadDeadLetterQueue
   AnalysisDeadLetterQueueUrl:
     Value: !Ref AnalysisDeadLetterQueue
+  NotificationDeadLetterQueueUrl:
+    Value: !Ref NotificationDeadLetterQueue
   WeeklyScheduleName:
     Value: !Ref WeeklyScrapeSchedule
   PublicDiscussionScheduleName:

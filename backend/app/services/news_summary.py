@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import gemini as summary_service
+from app.services import llm as summary_service
 
 SUMMARY_METADATA_KEYS = ("summary", "about", "changed", "matters")
 NEWS_SOURCE_TYPE = "news"

@@ -71,7 +71,7 @@ def test_summarise_news_artifact_stores_summary_metadata() -> None:
         "Higher output may affect revenue expectations."
     )
     assert summary_row.artifact_id == artifact.id
-    assert summary_row.prompt_version == "groq-news-summary-v1"
+    assert summary_row.prompt_version == "llm-news-summary-v2"
     assert "BHP reported stronger copper production." in summary_row.summary_text
     db.add.assert_called_once_with(summary_row)
     db.commit.assert_called_once()

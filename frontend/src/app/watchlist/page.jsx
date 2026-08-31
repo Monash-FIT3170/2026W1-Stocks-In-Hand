@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PlusIcon } from "../components/icons"
 import { apiFetch } from "../lib/api"
+import { buildWatchlistCreatePayload } from "../lib/watchlists"
 import styles from "../page.module.css"
 
 function getErrorMessage(data, fallback) {
@@ -298,10 +299,10 @@ export default function WatchlistRoute() {
       throw new Error("Could not identify the signed-in investor.")
     }
 
-    const watchlist = await fetchJson("/watchlists/", null, {
+    const watchlist = await fetchJson("/watchlists/", undefined, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "My Watchlist" }),
+      body: JSON.stringify(buildWatchlistCreatePayload(state.investorId)),
     })
     setState((current) => ({ ...current, watchlist }))
     return watchlist

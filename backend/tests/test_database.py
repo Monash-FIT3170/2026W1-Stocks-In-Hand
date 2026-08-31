@@ -10,7 +10,8 @@ backend used by Docker and production-like runs. If Postgres is not available th
 skip themselves, which keeps local test runs useful while still giving the Docker
 test environment a real database verification path.
 
-The schema these tests cover is the current migrated application schema.
+The schema these tests cover is the current migrated application schema,
+including watchlist alerts and public discussion ticker mentions.
 """
 
 import sys
@@ -25,7 +26,7 @@ import pytest
 from fastapi import Request
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 from starlette.responses import Response
 
@@ -37,13 +38,23 @@ from app.database.base import Base
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.models.alert_delivery import AlertDelivery
+from app.models.alert_rule import AlertRule
+from app.models.alert_subscription import AlertSubscription
 from app.models.artifact_ticker_mention import ArtifactTickerMention
+from app.models.information_platform import InformationPlatform
+from app.models.investor import Investor
+from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 
-# Every application table. Kept as an exact set so model and migration drift fails.
+# Every application table at the current Alembic head. Kept as an exact set so a
+# model that drifts from the migration in either direction fails this file.
 EXPECTED_TABLES = {
+    "alert_deliveries",
+    "alert_rules",
+    "alert_subscriptions",
     "artifacts",
     "artifact_sentiments",
     "artifact_summaries",
@@ -197,6 +208,158 @@ def test_models_and_migration_agree_on_columns() -> None:
             )
     finally:
         engine.dispose()
+
+
+def test_alert_models_register_required_uniqueness_guards() -> None:
+    """Alert metadata must carry both artifact and null-ticker deduplication."""
+    rule_indexes = {index.name: index for index in AlertRule.__table__.indexes}
+    delivery_constraints = {
+        constraint.name for constraint in Base.metadata.tables[
+            "alert_deliveries"
+        ].constraints
+    }
+    delivery_indexes = {
+        index.name: index
+        for index in Base.metadata.tables["alert_deliveries"].indexes
+    }
+
+    global_rule_index = rule_indexes["ux_alert_rules_global"]
+    rollup_index = delivery_indexes["ux_alert_deliveries_rollup"]
+
+    assert global_rule_index.unique is True
+    assert str(
+        global_rule_index.dialect_options["postgresql"]["where"]
+    ) == "ticker_id IS NULL"
+    assert "uq_alert_deliveries_investor_artifact" in delivery_constraints
+    assert "ck_alert_deliveries_artifact_or_scrape_run" in delivery_constraints
+    assert rollup_index.unique is True
+    assert str(
+        rollup_index.dialect_options["postgresql"]["where"]
+    ) == "artifact_id IS NULL"
+
+
+def test_alert_migration_applies_supabase_table_security() -> None:
+    """New investor email tables must retain the existing Data API boundary."""
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "86d4k9m2p_add_ses_alert_tables.py"
+    ).read_text(encoding="utf-8")
+
+    alert_tables = (
+        "alert_subscriptions",
+        "alert_rules",
+        "alert_deliveries",
+    )
+    for table_name in alert_tables:
+        assert f'"{table_name}"' in migration
+
+    assert "for table in ALERT_TABLES:" in migration
+    assert (
+        "op.execute(f'ALTER TABLE public.\"{table}\" "
+        "ENABLE ROW LEVEL SECURITY')"
+    ) in migration
+    assert "def _revoke_data_api_privileges()" in migration
+    assert "WHERE rolname = 'anon'" in migration
+    assert "WHERE rolname = 'authenticated'" in migration
+    assert migration.count("REVOKE ALL PRIVILEGES ON TABLE") == 2
+    assert "_revoke_data_api_privileges()" in migration
+    assert "FROM anon, authenticated" not in migration
+
+
+def test_alert_subscription_and_default_rule_persist(
+    db_session: Session,
+) -> None:
+    """The phase-one models should work against the migrated Postgres schema."""
+    investor = Investor(
+        email=f"alerts-{uuid.uuid4().hex}@example.com",
+        username="Alert Test",
+    )
+    db_session.add(investor)
+    db_session.flush()
+
+    subscription = AlertSubscription(
+        investor_id=investor.id,
+        email=investor.email,
+    )
+    rule = AlertRule(investor_id=investor.id)
+    db_session.add_all([subscription, rule])
+    db_session.commit()
+
+    saved_subscription = db_session.execute(
+        select(AlertSubscription).where(
+            AlertSubscription.investor_id == investor.id
+        )
+    ).scalar_one()
+    saved_rule = db_session.execute(
+        select(AlertRule).where(AlertRule.investor_id == investor.id)
+    ).scalar_one()
+
+    assert saved_subscription.enabled is False
+    assert saved_subscription.verification_status == "unverified"
+    assert saved_rule.sentiment_labels == ["negative"]
+    assert float(saved_rule.min_confidence) == pytest.approx(0.75)
+
+
+def test_alert_global_rule_partial_index_rejects_duplicates(
+    db_session: Session,
+) -> None:
+    """Only one null-ticker default rule may exist for each investor."""
+    investor = Investor(
+        email=f"rule-{uuid.uuid4().hex}@example.com",
+        username="Rule Guard Test",
+    )
+    db_session.add(investor)
+    db_session.flush()
+    db_session.add(AlertRule(investor_id=investor.id))
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.add(AlertRule(investor_id=investor.id))
+            db_session.flush()
+
+
+def test_alert_rollup_partial_index_rejects_duplicates(
+    db_session: Session,
+) -> None:
+    """Only one null-artifact rollup may exist for an investor and run."""
+    investor = Investor(
+        email=f"rollup-{uuid.uuid4().hex}@example.com",
+        username="Rollup Guard Test",
+    )
+    platform = InformationPlatform(
+        name=f"Rollup Test {uuid.uuid4().hex}",
+        platform_type="test",
+    )
+    db_session.add_all([investor, platform])
+    db_session.flush()
+    scrape_run = ScrapeRun(
+        platform_id=platform.id,
+        status="completed",
+    )
+    db_session.add(scrape_run)
+    db_session.flush()
+    db_session.add(
+        AlertDelivery(
+            investor_id=investor.id,
+            scrape_run_id=scrape_run.id,
+            status="rollup_sent",
+        )
+    )
+    db_session.flush()
+
+    with pytest.raises(IntegrityError):
+        with db_session.begin_nested():
+            db_session.add(
+                AlertDelivery(
+                    investor_id=investor.id,
+                    scrape_run_id=scrape_run.id,
+                    status="rollup_sent",
+                )
+            )
+            db_session.flush()
 
 
 def test_password_hashing_verifies_and_rejects_wrong_password() -> None:
@@ -652,10 +815,10 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
     )
 
 
-def test_announcements_feed_and_trending_only_count_asx_artifacts(
+def test_announcements_feed_and_trending_include_supported_content_sources(
     db_session: Session,
 ) -> None:
-    """Announcement APIs should count only ASX-sourced artifacts.
+    """The market feed should combine ASX, news, and Reddit artifacts.
 
     Duplicates are no longer filtered at read time: ``parsing/storage.py`` skips
     them at insert time by ``content_hash``, so an announcement never reaches the
@@ -689,15 +852,34 @@ def test_announcements_feed_and_trending_only_count_asx_artifacts(
         content_hash=f"visible-{uuid.uuid4()}",
     )
     reddit = Artifact(
-        ticker_id=ticker.id,
         source_type="reddit",
         artifact_type="reddit_post",
-        title="Non ASX source",
+        title="Retail investor discussion",
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
     )
-    db_session.add_all([announcement, reddit])
+    news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Publisher report",
+        raw_text="News article body",
+        published_at=published_at,
+        content_hash=f"news-{uuid.uuid4()}",
+        artifact_metadata={"source_name": "Example News"},
+    )
+    db_session.add_all([announcement, reddit, news])
+    db_session.flush()
+    db_session.add(
+        ArtifactTickerMention(
+            artifact_id=reddit.id,
+            ticker_id=ticker.id,
+            match_method="ticker_symbol",
+            match_confidence=0.85,
+            matched_text=symbol,
+        )
+    )
     db_session.commit()
 
     announcements = list_announcements(
@@ -708,12 +890,18 @@ def test_announcements_feed_and_trending_only_count_asx_artifacts(
     announcement_ids = {item.id for item in announcements}
 
     assert announcement.id in announcement_ids
-    assert reddit.id not in announcement_ids
+    assert reddit.id in announcement_ids
+    assert news.id in announcement_ids
+    items_by_id = {item.id: item for item in announcements}
+    assert items_by_id[announcement.id].source_type == "asx_announcement"
+    assert items_by_id[reddit.id].source_type == "reddit"
+    assert items_by_id[reddit.id].ticker == symbol
+    assert items_by_id[news.id].source_name == "Example News"
 
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
     trend = next(item for item in trending if item.symbol == symbol)
 
-    assert trend.count == 1
+    assert trend.count == 3
 
 
 def test_ticker_brief_aside_returns_empty_database_state(

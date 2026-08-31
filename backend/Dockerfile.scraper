@@ -39,9 +39,14 @@ RUN pip install --no-cache-dir -r requirements-scraper.txt
 COPY app ./app
 COPY lambdas ./lambdas
 COPY scrapers ./scrapers
+COPY scripts/smoke_scraper_browser.py /tmp/smoke_scraper_browser.py
 
 ENV PYTHONPATH=/var/task \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN AWS_LAMBDA_RUNTIME_API=build-smoke \
+    python /tmp/smoke_scraper_browser.py \
+    && rm /tmp/smoke_scraper_browser.py
 
 ENTRYPOINT ["/opt/venv/bin/python", "-m", "awslambdaric"]
 CMD ["lambdas.discovery.handler"]

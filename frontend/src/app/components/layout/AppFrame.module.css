@@ -166,12 +166,16 @@
 }
 
 .signInButton {
+  align-items: center;
   background: var(--green);
   border-radius: 999px;
   color: white;
+  display: inline-flex;
   font-weight: 850;
+  justify-content: center;
   justify-self: end;
   min-height: 44px;
+  min-width: 112px;
   padding: 10px 24px;
 }
 

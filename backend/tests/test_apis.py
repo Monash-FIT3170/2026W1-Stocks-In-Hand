@@ -1,4 +1,5 @@
 """PyTest tests for the APIs in main.py"""
+import json
 import sys
 from pathlib import Path
 
@@ -6,11 +7,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main
 from unittest.mock import patch, MagicMock
+from sqlalchemy.exc import OperationalError
 
 
-def test_health() -> None:
-    """Confirming that the health API returns the "ok" status as expected"""
-    assert main.health() == {"status": "ok"}
+def test_health_ok_when_database_reachable() -> None:
+    """The health endpoint reports ok once it can query the database."""
+    db = MagicMock()
+    assert main.health(db=db) == {"status": "ok"}
+    db.execute.assert_called_once()
+
+
+def test_health_reports_error_when_database_unreachable() -> None:
+    """The health endpoint reports a 503 when the database can't be reached."""
+    db = MagicMock()
+    db.execute.side_effect = OperationalError(
+        "SELECT 1", {}, Exception("connection refused")
+    )
+    response = main.health(db=db)
+    assert response.status_code == 503
+    assert json.loads(response.body) == {
+        "status": "error",
+        "detail": "database unreachable",
+    }
 
 
 def test_news_feed_does_not_use_raw_text_as_summary() -> None:
@@ -195,6 +213,61 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
     assert result["overview"]["latest_signal_confidence_pct"] == "91%"
     assert result["overview"]["sentiment_status"] == "available"
     assert result["aside"]["key_numbers"][0]["value"] == "$150.00"
+
+
+def test_deep_dive_initializes_default_ticker_before_returning_empty_timeline() -> None:
+    """A direct deep-dive request must work before another ticker endpoint runs."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    db = MagicMock()
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="BHP")
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        side_effect=[None, ticker_record],
+    ) as get_ticker, patch.object(
+        ticker,
+        "_ensure_default_tickers",
+    ) as ensure_defaults, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_deep_dive_timeline("bhp", db=db)
+
+    ensure_defaults.assert_called_once_with(db)
+    assert get_ticker.call_count == 2
+    assert result == []
+
+
+def test_deep_dive_does_not_reinitialize_an_existing_ticker() -> None:
+    """Normal timeline reads should not perform unnecessary database writes."""
+    import uuid
+
+    from app.api.routes import ticker
+
+    db = MagicMock()
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="ANZ")
+
+    with patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_ensure_default_tickers",
+    ) as ensure_defaults, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[],
+    ):
+        result = ticker.get_ticker_deep_dive_timeline("ANZ", db=db)
+
+    ensure_defaults.assert_not_called()
+    assert result == []
 
 
 # --- Reddit route tests ---
@@ -453,34 +526,19 @@ def test_public_discussion_summary_combines_all_sources() -> None:
     assert captured_posts[2]["score"] == 7
 
 
-def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
-    """Reddit summaries should use the configured Groq model, not a hardcoded ID."""
+def test_summarise_reddit_posts_uses_provider_routing() -> None:
+    """Reddit summaries should use the shared provider boundary."""
     from app.api.routes import reddit
 
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content=(
-                    '{"summary": "Retail investors are mixed on BHP.", '
-                    '"dominant_sentiment": "mixed", '
-                    '"key_themes": ["iron ore"]}'
-                )
-            )
-        )
-    ]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_response
-
     with patch.object(
-        reddit,
-        "_get_groq_client",
-        return_value=mock_client,
-    ), patch.object(
-        reddit.settings,
-        "GROQ_MODEL",
-        "openai/gpt-oss-120b",
-    ):
+        reddit.llm_service,
+        "summarise_reddit_digest",
+        return_value={
+            "summary": "Retail investors are mixed on BHP.",
+            "dominant_sentiment": "mixed",
+            "key_themes": ["iron ore"],
+        },
+    ) as summarise:
         result = reddit._summarise_reddit_posts(
             "BHP",
             [
@@ -493,11 +551,9 @@ def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
         )
 
     assert result["summary"] == "Retail investors are mixed on BHP."
-    mock_client.chat.completions.create.assert_called_once()
-    assert (
-        mock_client.chat.completions.create.call_args.kwargs["model"]
-        == "openai/gpt-oss-120b"
-    )
+    assert result["post_count"] == 1
+    summarise.assert_called_once()
+    assert summarise.call_args.kwargs["ticker_symbol"] == "BHP"
 
 
 def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
@@ -684,7 +740,7 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
         "get_artifact",
         return_value=artifact,
     ), patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_announcement",
         return_value={
             "summary": "The company confirmed its dividend timetable.",
@@ -741,7 +797,7 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         "get_artifact",
         return_value=artifact,
     ), patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_news_article",
         return_value={
             "summary": "BHP reported higher copper production.",
@@ -750,13 +806,13 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
             "matters": "The increase may affect revenue expectations.",
         },
     ) as summarise_news, patch.object(
-        gemini.gemini_service,
+        gemini.llm_service,
         "summarise_announcement",
     ) as summarise_announcement:
         result = gemini.summarise_artifact(artifact.id, db=db)
 
     assert result["about"] == "The story covers BHP's quarterly copper output."
-    assert result["prompt_version"] == "groq-news-summary-v1"
+    assert result["prompt_version"] == "llm-news-summary-v2"
     summarise_news.assert_called_once_with(
         title="BHP production story",
         source_name="Example News",

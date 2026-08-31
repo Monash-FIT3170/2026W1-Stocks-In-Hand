@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from playwright.async_api import BrowserContext, async_playwright
 
 from ..base import Announcement, BaseScraper
+from ..browser import chromium_launch_options
 
 
 class COHScraper(BaseScraper):
@@ -30,15 +31,7 @@ class COHScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(
@@ -104,11 +97,6 @@ class COHScraper(BaseScraper):
                     },
                 )
 
-                try:
-                    ann.local_path = await self._download_via_browser(context, ann)
-                except Exception as e:
-                    print(f"[COH] Failed to download '{ann.title}': {e}")
-
                 announcements.append(ann)
 
             await browser.close()
@@ -120,7 +108,7 @@ class COHScraper(BaseScraper):
             """() => {
                 return Array.from(document.querySelectorAll('a[id*="lnkbtnYear"], a'))
                     .map(a => (a.textContent || '').trim())
-                    .filter(t => /^\d{4}$/.test(t));
+                    .filter(t => /^\\d{4}$/.test(t));
             }"""
         )
 
@@ -258,14 +246,3 @@ class COHScraper(BaseScraper):
 
         print(f"[COH] Saved: {dest}")
         return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "COH downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

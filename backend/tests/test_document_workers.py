@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -12,12 +13,15 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError
+from pypdf import PdfWriter
+
 from app.messages import (
+    NotificationMessage,
     PublicDiscussionAnalysisMessage,
     QueueAMessage,
     QueueBMessage,
 )
-from botocore.exceptions import ClientError
 from lambdas import analysis, common, discovery, download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -35,7 +39,6 @@ from parsing.analysis import (
     extract_pdf,
 )
 from parsing.classification import ClassificationInput, classify_document
-from pypdf import PdfWriter
 from scrapers.base import Announcement
 from scrapers.companies.csl import CSLScraper
 
@@ -712,10 +715,31 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
         },
     )
     calls: dict[str, object] = {}
+    events: list[str] = []
 
     @contextmanager
     def fake_session():
-        yield object()
+        events.append("session_enter")
+        try:
+            yield object()
+        finally:
+            events.append("session_exit")
+
+    def fake_started(*_args, **_kwargs):
+        calls["started"] = True
+        events.append("started")
+
+    def fake_stored(*_args, **kwargs):
+        calls["stored"] = kwargs
+        events.append("stored")
+
+    def fake_completed(*_args, **_kwargs):
+        calls["completed"] = True
+        events.append("completed")
+
+    def fake_publish(**kwargs):
+        calls["published"] = kwargs
+        events.append("published")
 
     monkeypatch.setattr(
         analysis,
@@ -733,17 +757,19 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     )
     monkeypatch.setattr(analysis, "analyse_document", lambda *_args, **_kwargs: output)
     monkeypatch.setattr(analysis, "database_session", fake_session)
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+    monkeypatch.setattr(analysis, "_publish_notification", fake_publish)
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
+        fake_started,
     )
     monkeypatch.setattr(
         "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
+        fake_stored,
     )
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
+        fake_completed,
     )
 
     analysis._analyse_object(
@@ -769,6 +795,128 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     assert calls["stored"]["metadata"]["classification_method"] == "rules-v2"
     assert calls["stored"]["sentiment"]["sentiment_label"] == "positive"
     assert calls["completed"] is True
+    assert calls["published"] == {
+        "artifact_id": artifact_id,
+        "ticker": "CSL",
+        "scrape_run_id": run_id,
+        "sentiment": calls["stored"]["sentiment"],
+    }
+    assert events == [
+        "session_enter",
+        "started",
+        "session_exit",
+        "session_enter",
+        "stored",
+        "session_exit",
+        "session_enter",
+        "completed",
+        "session_exit",
+        "published",
+    ]
+
+
+def test_analysis_notification_matches_consumer_contract(monkeypatch):
+    artifact_id = uuid4()
+    run_id = uuid4()
+    sqs = MagicMock()
+    client_factory = MagicMock(return_value=sqs)
+    monkeypatch.setenv(
+        "NOTIFICATION_QUEUE_URL",
+        "https://sqs.ap-southeast-2.amazonaws.com/123/notifications",
+    )
+    monkeypatch.setattr(analysis.boto3, "client", client_factory)
+    analysis._notification_sqs_client.cache_clear()
+
+    try:
+        for _ in range(2):
+            analysis._publish_notification(
+                artifact_id=artifact_id,
+                ticker="csl",
+                scrape_run_id=run_id,
+                sentiment={
+                    "sentiment_label": "positive",
+                    "confidence_score": 0.9,
+                },
+            )
+    finally:
+        analysis._notification_sqs_client.cache_clear()
+
+    client_factory.assert_called_once_with("sqs")
+    assert sqs.send_message.call_count == 2
+    published = sqs.send_message.call_args.kwargs
+    assert published["QueueUrl"].endswith("/notifications")
+    body = json.loads(published["MessageBody"])
+    assert set(body) == {
+        "schema_version",
+        "artifact_id",
+        "ticker",
+        "scrape_run_id",
+        "sentiment_label",
+        "confidence_score",
+    }
+    message = NotificationMessage.model_validate(body)
+    assert message.artifact_id == artifact_id
+    assert message.scrape_run_id == run_id
+    assert message.ticker == "CSL"
+    assert message.sentiment_label == "positive"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "label"),
+    [("false", "positive"), ("true", "neutral")],
+)
+def test_analysis_notification_prefilter_skips_publish(monkeypatch, enabled, label):
+    publish = MagicMock()
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
+    monkeypatch.setattr(analysis, "_publish_notification", publish)
+
+    analysis._try_publish_notification(
+        artifact_id=uuid4(),
+        ticker="CSL",
+        scrape_run_id=uuid4(),
+        sentiment={"sentiment_label": label, "confidence_score": 0.9},
+        correlation="message-1",
+        attempt=1,
+    )
+
+    publish.assert_not_called()
+
+
+def test_analysis_notification_publish_failure_never_raises(monkeypatch, caplog):
+    artifact_id = uuid4()
+    run_id = uuid4()
+    private_detail = "private queue detail"
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+
+    def fail_publish(**_kwargs):
+        raise RuntimeError(private_detail)
+
+    monkeypatch.setattr(analysis, "_publish_notification", fail_publish)
+
+    with caplog.at_level(logging.ERROR):
+        analysis._try_publish_notification(
+            artifact_id=artifact_id,
+            ticker="CSL",
+            scrape_run_id=run_id,
+            sentiment={
+                "sentiment_label": "negative",
+                "confidence_score": 0.8,
+            },
+            correlation="message-1",
+            attempt=2,
+        )
+
+    assert private_detail not in caplog.text
+    event = json.loads(caplog.records[-1].message)
+    assert event == {
+        "stage": "analysis",
+        "event": "notification_publish_failed",
+        "correlation_id": "message-1",
+        "run_id": str(run_id),
+        "artifact_id": str(artifact_id),
+        "attempt": 2,
+        "error_code": "RuntimeError",
+    }
 
 
 def test_analysis_worker_parses_public_discussion_message() -> None:
@@ -805,6 +953,72 @@ def test_analysis_handler_dispatches_public_discussion_message(
     )
 
 
+def test_analysis_handler_dispatches_bounded_summary_field_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repair = MagicMock(return_value={"updated": 4, "missing_after": 82})
+    monkeypatch.setattr(analysis, "_resummarise_missing_fields", repair)
+
+    result = analysis.handler(
+        {
+            "operation": "resummarise_missing_fields",
+            "apply": True,
+            "confirmation": "RESUMMARISE_MISSING_FIELDS",
+            "limit": 4,
+        },
+        None,
+    )
+
+    assert result == {"updated": 4, "missing_after": 82}
+    repair.assert_called_once_with(apply=True, limit=4)
+
+
+def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:
+    with pytest.raises(ValueError, match="requires confirmation"):
+        analysis.handler(
+            {
+                "operation": "resummarise_missing_fields",
+                "apply": True,
+                "limit": 4,
+            },
+            None,
+        )
+
+
+def test_summary_values_preserve_display_clarity_and_prompt_fields() -> None:
+    output = SimpleNamespace(
+        summary={
+            "summary": "The company announced an update.",
+            "about": "The filing covers the update.",
+            "changed": "A new program was announced.",
+            "matters": "The program may affect investors.",
+            "confirmed_facts": ["The program was announced."],
+            "speculation": ["The program may affect investors."],
+        },
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-announcement-summary-v3",
+    )
+
+    result = analysis._summary_values(output)
+
+    assert result == {
+        "summary_text": (
+            "The company announced an update.\n\n"
+            "The filing covers the update.\n\n"
+            "A new program was announced.\n\n"
+            "The program may affect investors."
+        ),
+        "model_used": "bedrock:test-model",
+        "prompt_version": "llm-announcement-summary-v3",
+        "summary": "The company announced an update.",
+        "about": "The filing covers the update.",
+        "changed": "A new program was announced.",
+        "matters": "The program may affect investors.",
+        "confirmed_facts": ["The program was announced."],
+        "speculation": ["The program may affect investors."],
+    }
+
+
 def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -825,8 +1039,11 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
         }
     )
     monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.groq.summarise_public_discussion", summarise)
-    monkeypatch.setattr("app.services.groq.active_model_name", lambda: "test-groq")
+    monkeypatch.setattr("app.services.llm.summarise_public_discussion", summarise)
+    monkeypatch.setattr(
+        "app.services.llm.active_model_name",
+        lambda: "bedrock:test-model",
+    )
 
     output = analyse_public_discussion_text(
         title="$BHP earnings outlook",
@@ -836,7 +1053,7 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
 
     assert output.parsed.category == "USER_DISCUSSION"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "test-groq"
+    assert output.summary_model == "bedrock:test-model"
     analyse_sentiment.assert_called_once_with(
         "$BHP earnings outlook\n\nI think profit will rise next year."
     )
@@ -866,8 +1083,8 @@ def test_analysis_worker_persists_public_discussion_results(
             "changed": "No claimed change identified.",
             "matters": "Earnings interest BHP investors.",
         },
-        summary_model="test-groq",
-        summary_prompt_version="groq-public-discussion-summary-v1",
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-public-discussion-summary-v2",
         sentiment={
             "sentiment_label": "neutral",
             "label": "neutral",

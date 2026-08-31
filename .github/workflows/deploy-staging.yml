@@ -1,8 +1,20 @@
-name: Prepare staging release
+name: Deploy staging release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
+      auth_provider:
+        description: Backend authentication provider for this change set
+        required: true
+        default: legacy
+        type: choice
+        options:
+          - legacy
+          - dual
+          - cognito
       enable_schedule:
         description: Enable the weekly scrape in the reviewed change set
         required: true
@@ -27,8 +39,16 @@ on:
         options:
           - "false"
           - "true"
+      enable_notifications:
+        description: Enable user-facing Brevo watchlist alerts
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       enable_bedrock:
-        description: Grant analysis access to Nova Micro
+        description: Grant API and analysis access to Bedrock GPT-OSS 120B
         required: true
         default: "false"
         type: choice
@@ -52,33 +72,222 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: read
   id-token: write
 
 concurrency:
-  group: stocks-in-hand-staging-prepare
+  group: stocks-in-hand-staging-deploy
   cancel-in-progress: false
 
 jobs:
   prepare:
-    name: Build images and create change set
+    name: Validate, build, and deploy
     runs-on: ubuntu-latest
     environment: staging
     env:
       AWS_REGION: ap-southeast-2
       STACK_NAME: stocks-in-hand-staging
       PARAMETER_PATH_PREFIX: /stocks-in-hand/staging
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stocks_in_hand_test
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stocks_in_hand_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stocks_in_hand_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Check out the selected commit
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-api.txt
+            backend/requirements-testing.txt
+
+      - name: Install backend test dependencies
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check \
+            -r backend/requirements-api.txt \
+            -r backend/requirements-testing.txt \
+            pypdf==6.14.2 \
+            defusedxml==0.7.1 \
+            playwright==1.61.0
+
+      - name: Reproduce and repair the deployed schema drift
+        working-directory: backend
+        shell: bash
+        run: |
+          python -c "from sqlalchemy import create_engine, text; import os; engine=create_engine(os.environ['DATABASE_URL'], isolation_level='AUTOCOMMIT'); connection=engine.connect(); connection.execute(text('CREATE ROLE anon NOLOGIN')); connection.execute(text('CREATE ROLE authenticated NOLOGIN')); connection.close(); engine.dispose()"
+          alembic upgrade 86d2cognitoidentity
+          python -c "from sqlalchemy import create_engine, text; import os; engine=create_engine(os.environ['DATABASE_URL']); connection=engine.connect(); connection.execute(text('ALTER TABLE artifacts DROP COLUMN is_duplicate')); connection.commit(); connection.close(); engine.dispose()"
+          alembic upgrade head
+
+      - name: Run backend tests and security checks
+        shell: bash
+        run: |
+          python -m pytest -q backend/tests
+          python -m bandit -q -r backend/app backend/main.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run frontend tests and production build
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+          NEXT_PUBLIC_AUTH_PROVIDER: legacy
+        run: |
+          npm ci
+          npm test
+          npm run build
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v6.1.2
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          role-session-name: stocks-in-hand-prepare
+          role-session-name: stocks-in-hand-deploy
+
+      - name: Resolve deployment configuration
+        shell: bash
+        env:
+          AUTO_AUTH_PROVIDER: ${{ vars.AUTO_DEPLOY_AUTH_PROVIDER }}
+          AUTO_ENABLE_SCHEDULE: ${{ vars.AUTO_DEPLOY_ENABLE_SCHEDULE }}
+          AUTO_ENABLE_PUBLIC_DISCUSSION_SCHEDULE: ${{ vars.AUTO_DEPLOY_ENABLE_PUBLIC_DISCUSSION_SCHEDULE }}
+          AUTO_ENABLE_ANALYSIS: ${{ vars.AUTO_DEPLOY_ENABLE_ANALYSIS }}
+          AUTO_ENABLE_NOTIFICATIONS: ${{ vars.AUTO_DEPLOY_ENABLE_NOTIFICATIONS }}
+          AUTO_ENABLE_BEDROCK: ${{ vars.AUTO_DEPLOY_ENABLE_BEDROCK }}
+          AUTO_SCHEDULED_TICKERS: ${{ vars.AUTO_DEPLOY_SCHEDULED_TICKERS }}
+          AUTO_SCHEDULED_PUBLIC_DISCUSSION_SOURCES: ${{ vars.AUTO_DEPLOY_SCHEDULED_PUBLIC_DISCUSSION_SOURCES }}
+          AUTO_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: ${{ vars.AUTO_DEPLOY_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT }}
+          MANUAL_AUTH_PROVIDER: ${{ inputs.auth_provider }}
+          MANUAL_ENABLE_SCHEDULE: ${{ inputs.enable_schedule }}
+          MANUAL_ENABLE_PUBLIC_DISCUSSION_SCHEDULE: ${{ inputs.enable_public_discussion_schedule }}
+          MANUAL_ENABLE_ANALYSIS: ${{ inputs.enable_analysis }}
+          MANUAL_ENABLE_NOTIFICATIONS: ${{ inputs.enable_notifications }}
+          MANUAL_ENABLE_BEDROCK: ${{ inputs.enable_bedrock }}
+          MANUAL_SCHEDULED_TICKERS: ${{ inputs.scheduled_tickers }}
+          MANUAL_SCHEDULED_PUBLIC_DISCUSSION_SOURCES: ${{ inputs.scheduled_public_discussion_sources }}
+          MANUAL_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: ${{ inputs.public_discussion_per_source_limit }}
+        run: |
+          read_stack_parameter() {
+            local parameter_name="$1"
+            aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Parameters[?ParameterKey=='$parameter_name'].ParameterValue | [0]" \
+              --output text 2>/dev/null || true
+          }
+
+          resolve_automatic_value() {
+            local override="$1"
+            local parameter_name="$2"
+            local fallback="$3"
+            local value
+            if [ -n "$override" ]; then
+              printf '%s' "$override"
+              return
+            fi
+            value="$(read_stack_parameter "$parameter_name")"
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              value="$fallback"
+            fi
+            printf '%s' "$value"
+          }
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            AUTH_PROVIDER="$MANUAL_AUTH_PROVIDER"
+            ENABLE_SCHEDULE="$MANUAL_ENABLE_SCHEDULE"
+            ENABLE_PUBLIC_DISCUSSION_SCHEDULE="$MANUAL_ENABLE_PUBLIC_DISCUSSION_SCHEDULE"
+            ENABLE_ANALYSIS="$MANUAL_ENABLE_ANALYSIS"
+            ENABLE_NOTIFICATIONS="$MANUAL_ENABLE_NOTIFICATIONS"
+            ENABLE_BEDROCK="$MANUAL_ENABLE_BEDROCK"
+            SCHEDULED_TICKERS="$MANUAL_SCHEDULED_TICKERS"
+            SCHEDULED_PUBLIC_DISCUSSION_SOURCES="$MANUAL_SCHEDULED_PUBLIC_DISCUSSION_SOURCES"
+            PUBLIC_DISCUSSION_PER_SOURCE_LIMIT="$MANUAL_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT"
+          else
+            AUTH_PROVIDER="$(resolve_automatic_value "$AUTO_AUTH_PROVIDER" AuthProvider legacy)"
+            ENABLE_SCHEDULE="$(resolve_automatic_value "$AUTO_ENABLE_SCHEDULE" ScheduleEnabled false)"
+            ENABLE_PUBLIC_DISCUSSION_SCHEDULE="$(resolve_automatic_value "$AUTO_ENABLE_PUBLIC_DISCUSSION_SCHEDULE" PublicDiscussionScheduleEnabled false)"
+            ENABLE_ANALYSIS="$(resolve_automatic_value "$AUTO_ENABLE_ANALYSIS" AnalysisEnabled true)"
+            ENABLE_NOTIFICATIONS="$(resolve_automatic_value "$AUTO_ENABLE_NOTIFICATIONS" NotificationsEnabled false)"
+            ENABLE_BEDROCK="$(resolve_automatic_value "$AUTO_ENABLE_BEDROCK" BedrockEnabled false)"
+            SCHEDULED_TICKERS="$(resolve_automatic_value "$AUTO_SCHEDULED_TICKERS" ScheduledTickers ANZ,BHP,CBA,CSL,WES)"
+            SCHEDULED_PUBLIC_DISCUSSION_SOURCES="$(resolve_automatic_value "$AUTO_SCHEDULED_PUBLIC_DISCUSSION_SOURCES" ScheduledPublicDiscussionSources bluesky,mastodon)"
+            PUBLIC_DISCUSSION_PER_SOURCE_LIMIT="$(resolve_automatic_value "$AUTO_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" PublicDiscussionPerSourceLimit 10)"
+          fi
+
+          case "$AUTH_PROVIDER" in
+            legacy|dual|cognito) ;;
+            *) echo "::error::AUTH_PROVIDER must be legacy, dual, or cognito"; exit 1 ;;
+          esac
+          for setting_name in \
+            ENABLE_SCHEDULE \
+            ENABLE_PUBLIC_DISCUSSION_SCHEDULE \
+            ENABLE_ANALYSIS \
+            ENABLE_NOTIFICATIONS \
+            ENABLE_BEDROCK; do
+            setting_value="${!setting_name}"
+            if [ "$setting_value" != "true" ] && [ "$setting_value" != "false" ]; then
+              echo "::error::$setting_name must be true or false"
+              exit 1
+            fi
+          done
+
+          {
+            echo "AUTH_PROVIDER=$AUTH_PROVIDER"
+            echo "ENABLE_SCHEDULE=$ENABLE_SCHEDULE"
+            echo "ENABLE_PUBLIC_DISCUSSION_SCHEDULE=$ENABLE_PUBLIC_DISCUSSION_SCHEDULE"
+            echo "ENABLE_ANALYSIS=$ENABLE_ANALYSIS"
+            echo "ENABLE_NOTIFICATIONS=$ENABLE_NOTIFICATIONS"
+            echo "ENABLE_BEDROCK=$ENABLE_BEDROCK"
+            echo "SCHEDULED_TICKERS=$SCHEDULED_TICKERS"
+            echo "SCHEDULED_PUBLIC_DISCUSSION_SOURCES=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES"
+            echo "PUBLIC_DISCUSSION_PER_SOURCE_LIMIT=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate Brevo notification prerequisites
+        if: env.ENABLE_NOTIFICATIONS == 'true'
+        shell: bash
+        env:
+          ALERT_SENDER_EMAIL: ${{ vars.ALERT_SENDER_EMAIL }}
+        run: |
+          if [ -z "$ALERT_SENDER_EMAIL" ]; then
+            echo "::error::ALERT_SENDER_EMAIL is missing from the staging environment"
+            exit 1
+          fi
+
+          PARAMETER_NAME="$PARAMETER_PATH_PREFIX/brevo-api-key"
+          if ! PARAMETER_TYPE="$(aws ssm get-parameter \
+            --name "$PARAMETER_NAME" \
+            --query 'Parameter.Type' \
+            --output text 2>/dev/null)"; then
+            echo "::error::The Brevo API key parameter is missing or unreadable"
+            exit 1
+          fi
+          if [ "$PARAMETER_TYPE" != "SecureString" ]; then
+            echo "::error::The Brevo API key parameter must be a SecureString"
+            exit 1
+          fi
+          echo "Brevo notification prerequisites are present"
 
       - name: Resolve immutable release values
         id: values
@@ -87,11 +296,20 @@ jobs:
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+            --output text)"
+          if [ -z "$FRONTEND_BASE_URL" ] || [ "$FRONTEND_BASE_URL" = "None" ]; then
+            echo "The existing stack does not expose FrontendUrl" >&2
+            exit 1
+          fi
           {
             echo "AWS_ACCOUNT_ID=$ACCOUNT_ID"
             echo "ECR_REGISTRY=$REGISTRY"
             echo "RELEASE_SHA=$GITHUB_SHA"
             echo "CFN_ROLE_ARN=$CFN_ROLE"
+            echo "FRONTEND_BASE_URL=$FRONTEND_BASE_URL"
           } >> "$GITHUB_ENV"
           {
             echo "registry=$REGISTRY"
@@ -177,9 +395,35 @@ jobs:
         shell: bash
         run: sam validate --lint --template-file infra/template.yaml
 
-      - name: Create the SAM change set without executing it
+      - name: Capture the previous release for automatic rollback
+        id: previous_release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
+          PREVIOUS_API_IMAGE="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Parameters[?ParameterKey=='ApiImageUri'].ParameterValue" \
+            --output text)"
+          if [ -z "$PREVIOUS_API_IMAGE" ] || [ "$PREVIOUS_API_IMAGE" = "None" ]; then
+            echo "ApiImageUri parameter is missing from the current stack" >&2
+            exit 1
+          fi
+          PREVIOUS_RELEASE_SHA="${PREVIOUS_API_IMAGE##*:}"
+          if ! [[ "$PREVIOUS_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not parse a full release SHA from the current ApiImageUri" >&2
+            exit 1
+          fi
+          echo "release_sha=$PREVIOUS_RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create or execute the SAM change set
+        id: deploy
+        shell: bash
+        run: |
+          DEPLOY_MODE_ARGS=()
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            DEPLOY_MODE_ARGS+=(--no-execute-changeset)
+          fi
+
           sam deploy \
             --template-file infra/template.yaml \
             --stack-name "$STACK_NAME" \
@@ -192,26 +436,35 @@ jobs:
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
+            --image-repositories "NotificationFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --no-confirm-changeset \
-            --no-execute-changeset \
             --no-fail-on-empty-changeset \
+            "${DEPLOY_MODE_ARGS[@]}" \
             --parameter-overrides \
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
-              "ScheduleEnabled=${{ inputs.enable_schedule }}" \
-              "PublicDiscussionScheduleEnabled=${{ inputs.enable_public_discussion_schedule }}" \
-              "AnalysisEnabled=${{ inputs.enable_analysis }}" \
-              "BedrockEnabled=${{ inputs.enable_bedrock }}" \
-              "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
-              "ScheduledPublicDiscussionSources=${{ inputs.scheduled_public_discussion_sources }}" \
-              "PublicDiscussionPerSourceLimit=${{ inputs.public_discussion_per_source_limit }}" \
+              "FrontendBaseUrl=$FRONTEND_BASE_URL" \
+              "AuthProvider=$AUTH_PROVIDER" \
+              "ScheduleEnabled=$ENABLE_SCHEDULE" \
+              "PublicDiscussionScheduleEnabled=$ENABLE_PUBLIC_DISCUSSION_SCHEDULE" \
+              "AnalysisEnabled=$ENABLE_ANALYSIS" \
+              "NotificationsEnabled=$ENABLE_NOTIFICATIONS" \
+              "AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}" \
+              "BedrockEnabled=$ENABLE_BEDROCK" \
+              "ScheduledTickers=$SCHEDULED_TICKERS" \
+              "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
+              "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA" \
+              "SiteDomainName=${{ vars.SITE_DOMAIN_NAME }}" \
+              "SiteCertificateArn=${{ vars.SITE_CERTIFICATE_ARN }}" \
+              "SiteHostedZoneId=${{ vars.SITE_HOSTED_ZONE_ID }}"
 
       - name: Export the change set for Person 1 review
         id: change_set
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           CHANGE_SET_ARN="$(aws cloudformation list-change-sets \
@@ -238,9 +491,154 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the change-set evidence
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: staging-change-set-${{ steps.values.outputs.release_sha }}
           path: change-set.json
           if-no-files-found: error
           retention-days: 14
+
+      - name: Resolve deployed endpoints and frontend configuration
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          API_ENDPOINT="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+            --output text)"
+          AUTH_PROVIDER="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='AuthProvider'].OutputValue" \
+            --output text)"
+          USER_POOL_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" \
+            --output text)"
+          APP_CLIENT_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolClientId'].OutputValue" \
+            --output text)"
+          FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" \
+            --output text)"
+          DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendDistributionId'].OutputValue" \
+            --output text)"
+
+          for required_value in \
+            API_ENDPOINT \
+            AUTH_PROVIDER \
+            USER_POOL_ID \
+            APP_CLIENT_ID \
+            FRONTEND_BUCKET \
+            DISTRIBUTION_ID; do
+            value="${!required_value}"
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error::$required_value is missing from the deployed stack"
+              exit 1
+            fi
+          done
+
+          {
+            echo "API_ENDPOINT=$API_ENDPOINT"
+            echo "NEXT_PUBLIC_AUTH_PROVIDER=$AUTH_PROVIDER"
+            echo "NEXT_PUBLIC_AWS_REGION=$AWS_REGION"
+            echo "NEXT_PUBLIC_COGNITO_USER_POOL_ID=$USER_POOL_ID"
+            echo "NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=$APP_CLIENT_ID"
+            echo "FRONTEND_BUCKET=$FRONTEND_BUCKET"
+            echo "DISTRIBUTION_ID=$DISTRIBUTION_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Wait for the automatically deployed API to report healthy
+        id: health
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          python backend/scripts/wait_for_health.py \
+            --url "$API_ENDPOINT/health"
+
+      - name: Prepare rollback after an automatic health-check failure
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          failure() &&
+          steps.health.outcome == 'failure' &&
+          steps.previous_release.outputs.release_sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run prepare-staging-backend-rollback.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f release_sha="${{ steps.previous_release.outputs.release_sha }}" \
+            -f compatibility_reference="auto-triggered: health check failed on $GITHUB_SHA"
+          {
+            echo "### Automatic rollback preparation triggered"
+            echo ""
+            echo "The API health check failed. A reviewed rollback change set"
+            echo "is being prepared for \`${{ steps.previous_release.outputs.release_sha }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the deployed frontend configuration
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+        run: |
+          npm run build
+          test -f out/index.html
+
+      - name: Package the automatic frontend rollback artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          tar -czf "frontend-$RELEASE_SHA.tar.gz" -C frontend/out .
+          sha256sum "frontend-$RELEASE_SHA.tar.gz" > "frontend-$RELEASE_SHA.sha256"
+
+      - name: Upload the automatic frontend rollback artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-${{ steps.values.outputs.release_sha }}
+          path: |
+            frontend-${{ steps.values.outputs.release_sha }}.tar.gz
+            frontend-${{ steps.values.outputs.release_sha }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Preserve the automatic frontend release snapshot
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          aws s3 sync frontend/out \
+            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
+            --cache-control "no-cache"
+          aws s3 sync frontend/out/_next/static \
+            "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA/_next/static" \
+            --cache-control "public,max-age=31536000,immutable"
+
+      - name: Publish the automatic frontend release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          aws s3 sync frontend/out "s3://$FRONTEND_BUCKET" \
+            --delete \
+            --exclude "_releases/*" \
+            --cache-control "no-cache"
+          aws s3 sync frontend/out/_next/static \
+            "s3://$FRONTEND_BUCKET/_next/static" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DISTRIBUTION_ID" \
+            --paths "/*"
+          {
+            echo "### Main deployed automatically to staging"
+            echo ""
+            echo "Release SHA: \`$RELEASE_SHA\`"
+            echo ""
+            echo "API health check passed and the CloudFront invalidation started."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -12,6 +12,7 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
+from app.services.summary_metadata import normalise_summary_metadata
 
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
@@ -57,9 +58,11 @@ def store_artifact_analysis(
         raise ValueError(f"Artifact {artifact_id} does not exist")
 
     artifact.raw_text = raw_text
+    summary_metadata = normalise_summary_metadata(summary)
     artifact.artifact_metadata = {
         **(artifact.artifact_metadata or {}),
         **(metadata or {}),
+        **summary_metadata,
     }
 
     if summary is not None:
@@ -76,6 +79,7 @@ def store_artifact_analysis(
             db.add(summary_row)
         summary_row.summary_text = str(summary["summary_text"])
         summary_row.model_used = summary.get("model_used")
+        summary_row.prompt_version = summary.get("prompt_version")
         summary_row.confidence_score = summary.get("confidence_score")
 
     if sentiment is not None:

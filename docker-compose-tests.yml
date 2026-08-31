@@ -5,13 +5,15 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: spike
+    volumes:
+      - ./backend/postgres-init.sql:/docker-entrypoint-initdb.d/10-supabase-roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d spike"]
       interval: 5s
       retries: 5
 
   backend:
-    # Contains api key for groq usage
+    # Loads local provider settings and optional source credentials.
     env_file:
       - ./backend/.env
     build:
@@ -19,6 +21,15 @@ services:
       target: testing
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      NOTIFICATIONS_ENABLED: "true"
+      NOTIFICATIONS_DRY_RUN: "true"
+      ALERT_SENDER_EMAIL: alerts@example.com
+      BREVO_API_KEY: ""
+      FRONTEND_BASE_URL: http://frontend:3000
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && bash tests.sh"]
@@ -27,6 +38,13 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/_test_output:/test_output
+      # Repository contract tests inspect deployment and packaging files.
+      - ./.github:/.github:ro
+      - ./backend:/backend:ro
+      - ./frontend:/frontend:ro
+      - ./infra:/infra:ro
+      - ./docker-compose-dev.yml:/docker-compose-dev.yml:ro
+      - ./docker-compose-tests.yml:/docker-compose-tests.yml:ro
 
   frontend:
     build:

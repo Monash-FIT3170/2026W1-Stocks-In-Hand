@@ -5,6 +5,7 @@ from pathlib import Path
 from playwright.async_api import BrowserContext, async_playwright
 
 from ..base import Announcement, BaseScraper
+from ..browser import chromium_launch_options
 
 
 class TCLScraper(BaseScraper):
@@ -34,15 +35,7 @@ class TCLScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(
@@ -85,11 +78,6 @@ class TCLScraper(BaseScraper):
                         "raw_time": time_str,
                     },
                 )
-
-                try:
-                    ann.local_path = await self._download_via_browser(context, ann)
-                except Exception as e:
-                    print(f"[TCL] Failed to download '{ann.title}': {e}")
 
                 announcements.append(ann)
 
@@ -213,14 +201,3 @@ class TCLScraper(BaseScraper):
 
         print(f"[TCL] Saved: {dest}")
         return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "TCL downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

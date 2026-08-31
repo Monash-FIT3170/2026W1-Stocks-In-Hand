@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from playwright.async_api import BrowserContext, async_playwright
 
 from ..base import Announcement, BaseScraper
+from ..browser import chromium_launch_options
 
 
 class TLSScraper(BaseScraper):
@@ -22,15 +23,7 @@ class TLSScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(
@@ -69,11 +62,6 @@ class TLSScraper(BaseScraper):
                             "raw_date": row["date_str"],
                         },
                     )
-
-                    try:
-                        ann.local_path = await self._download_via_browser(context, ann)
-                    except Exception as e:
-                        print(f"[TLS] Failed to download '{ann.title}': {e}")
 
                     announcements.append(ann)
                 except Exception as e:
@@ -273,14 +261,3 @@ class TLSScraper(BaseScraper):
 
         print(f"[TLS] Saved: {dest}")
         return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "TLS downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

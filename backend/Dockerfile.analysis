@@ -15,8 +15,13 @@ RUN pip uninstall -y opencv-python \
 
 # Resolve the model during the image build, at an immutable revision. Lambda
 # execution never needs Hugging Face network access.
-RUN python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; revision='${FINBERT_REVISION}'; tokenizer=AutoTokenizer.from_pretrained('ProsusAI/finbert', revision=revision); model=AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert', revision=revision); tokenizer.save_pretrained('/opt/finbert'); model.save_pretrained('/opt/finbert')" \
+RUN python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; revision='${FINBERT_REVISION}'; tokenizer=AutoTokenizer.from_pretrained('ProsusAI/finbert', revision=revision); model=AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert', revision=revision); tokenizer.save_pretrained('/var/task/models/finbert'); model.save_pretrained('/var/task/models/finbert')" \
+    && chmod -R a+rX /var/task/models/finbert \
+    && test "$(stat -c '%a' /var/task/models/finbert/model.safetensors)" = "644" \
     && rm -rf /root/.cache/huggingface
+# Fail the image build if the exact offline runtime path cannot tokenize and
+# execute the packaged model without Hugging Face network access.
+RUN HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -c "import torch; from transformers import AutoModelForSequenceClassification, AutoTokenizer; tokenizer=AutoTokenizer.from_pretrained('/var/task/models/finbert', local_files_only=True); model=AutoModelForSequenceClassification.from_pretrained('/var/task/models/finbert', local_files_only=True); encoded=tokenizer(['FinBERT image smoke test'], return_tensors='pt'); logits=model(**encoded).logits; assert logits.shape[-1] == 3"
 
 COPY app ${LAMBDA_TASK_ROOT}/app
 COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
@@ -24,7 +29,7 @@ COPY parsing ${LAMBDA_TASK_ROOT}/parsing
 
 # RapidOCR includes its ONNX models in the image, so scanned PDFs are analysed
 # without Textract, network calls, or a separate OCR service.
-ENV FINBERT_MODEL=/opt/finbert \
+ENV FINBERT_MODEL=/var/task/models/finbert \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
     TOKENIZERS_PARALLELISM=false

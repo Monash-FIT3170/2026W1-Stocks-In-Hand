@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright, BrowserContext
 
 from ..base import BaseScraper, Announcement
+from ..browser import chromium_launch_options
 
 
 class WDSScraper(BaseScraper):
@@ -41,15 +42,7 @@ class WDSScraper(BaseScraper):
         announcements: list[Announcement] = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--headless=new",
-                ],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
 
             context = await browser.new_context(
                 user_agent=(
@@ -137,12 +130,6 @@ class WDSScraper(BaseScraper):
                     print(f"[WDS] Failed to process link {item['article_url']}: {e}")
 
             announcements = self._dedupe_announcements(announcements)
-
-            for ann in announcements:
-                try:
-                    ann.local_path = await self._download_via_browser(context, ann)
-                except Exception as e:
-                    print(f"[WDS] Failed to download '{ann.title}': {e}")
 
             await browser.close()
 
@@ -373,14 +360,3 @@ class WDSScraper(BaseScraper):
         dest.write_bytes(body)
         print(f"[WDS] Saved: {dest}")
         return dest
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        if announcement.local_path:
-            return announcement.local_path
-
-        raise NotImplementedError(
-            "WDS downloads are handled inside fetch_announcements via browser context"
-        )
-
-    async def scrape(self) -> list[Announcement]:
-        return await self.fetch_announcements()

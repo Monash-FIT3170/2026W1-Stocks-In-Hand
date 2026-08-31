@@ -1,6 +1,20 @@
 import { TickerBriefShell } from "../../components/ticker/TickerBriefShell"
 
-const DEPLOYED_TICKERS = ["ANZ", "CBA", "BHP", "WES", "CSL"]
+const DEPLOYED_TICKERS = [
+  "ANZ",
+  "BHP",
+  "CBA",
+  "COL",
+  "COH",
+  "CSL",
+  "MQG",
+  "ORG",
+  "RIO",
+  "TCL",
+  "TLS",
+  "WDS",
+  "WES",
+]
 
 export const dynamicParams = false
 

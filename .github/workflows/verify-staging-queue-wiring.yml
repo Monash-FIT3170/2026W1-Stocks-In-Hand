@@ -1,0 +1,134 @@
+name: Verify staging queue wiring
+
+# CD integration test for the Discovery -> Download -> Analysis queue
+# pipeline. Run this manually after "Execute approved staging change set"
+# to confirm every queue, dead-letter queue, consumer, alarm, and stack
+# output in the *deployed* stack reconciles with what the template
+# declares.
+#
+# Strictly read-only: it only calls cloudformation:DescribeStacks and
+# cloudformation:ListStackResources, both of which stocks-in-hand-github-
+# staging (the role behind AWS_DEPLOY_ROLE_ARN) already has for this stack.
+# No new IAM permissions, no template changes, and no other AWS
+# configuration are required to add or run this workflow. It never
+# creates, updates, deletes, or sends anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-verify-queues
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Reconcile deployed queue pipeline against the template
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-verify-queues
+
+      - name: Confirm every queue-pipeline resource deployed cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resources=(
+            DiscoveryQueue
+            DownloadQueue
+            AnalysisQueue
+            DiscoveryDeadLetterQueue
+            DownloadDeadLetterQueue
+            AnalysisDeadLetterQueue
+            AnalysisQueuePolicy
+            RawDocumentBucket
+            DiscoveryFunction
+            DownloadFunction
+            AnalysisFunction
+            SchedulerFunction
+            DiscoveryDlqAlarm
+            DownloadDlqAlarm
+            AnalysisDlqAlarm
+          )
+
+          {
+            echo "### Staging queue-wiring reconciliation"
+            echo ""
+            echo "| Resource | Status |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failures=0
+          for resource in "${resources[@]}"; do
+            status="$(aws cloudformation list-stack-resources \
+              --stack-name "$STACK_NAME" \
+              --query "StackResourceSummaries[?LogicalResourceId=='$resource'].ResourceStatus" \
+              --output text)"
+
+            echo "| $resource | ${status:-MISSING} |" >> "$GITHUB_STEP_SUMMARY"
+
+            case "$status" in
+              CREATE_COMPLETE|UPDATE_COMPLETE)
+                ;;
+              "")
+                echo "::error::$resource is missing from $STACK_NAME" >&2
+                failures=$((failures + 1))
+                ;;
+              *)
+                echo "::error::$resource is in unhealthy state: $status" >&2
+                failures=$((failures + 1))
+                ;;
+            esac
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures queue-pipeline resource(s) failed reconciliation" >&2
+            exit 1
+          fi
+
+      - name: Confirm queue and DLQ URLs are still exported
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          outputs=(
+            DiscoveryQueueUrl
+            DownloadQueueUrl
+            AnalysisQueueUrl
+            DiscoveryDeadLetterQueueUrl
+            DownloadDeadLetterQueueUrl
+            AnalysisDeadLetterQueueUrl
+          )
+
+          failures=0
+          for output in "${outputs[@]}"; do
+            value="$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$output'].OutputValue" \
+              --output text)"
+
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error::Stack output $output is missing or empty" >&2
+              failures=$((failures + 1))
+            else
+              echo "$output = $value" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures stack output(s) failed reconciliation" >&2
+            exit 1
+          fi

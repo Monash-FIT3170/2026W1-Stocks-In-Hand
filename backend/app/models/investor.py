@@ -9,6 +9,7 @@ class Investor(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, nullable=False)
+    cognito_sub = Column(String(128), unique=True, nullable=True, index=True)
     username = Column(String, nullable=True)
     hashed_password = Column(String, nullable=True)
     role = Column(String, default="user")

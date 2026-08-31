@@ -1,0 +1,48 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  DNS and TLS for the Stocks In Hand custom domain. Deploy manually to
+  us-east-1 (CloudFront only accepts ACM certificates from that region),
+  separately from the staging application stack.
+
+Parameters:
+  HostedZoneName:
+    Type: String
+    Description: Root domain registered at your registrar, e.g. example.com.
+    AllowedPattern: ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$
+  SiteDomainName:
+    Type: String
+    Description: >-
+      Hostname the frontend will be served on. Defaults to the root domain;
+      set to a subdomain (e.g. app.example.com) if you don't want the apex
+      itself pointed at CloudFront.
+    Default: ""
+    AllowedPattern: ^$|^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$
+
+Conditions:
+  UseApexAsSiteDomain: !Equals [!Ref SiteDomainName, ""]
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref HostedZoneName
+
+  SiteCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !If [UseApexAsSiteDomain, !Ref HostedZoneName, !Ref SiteDomainName]
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !If [UseApexAsSiteDomain, !Ref HostedZoneName, !Ref SiteDomainName]
+          HostedZoneId: !Ref HostedZone
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref HostedZone
+  NameServers:
+    Description: Set these as the domain's nameservers at your registrar.
+    Value: !Join [",", !GetAtt HostedZone.NameServers]
+  CertificateArn:
+    Value: !Ref SiteCertificate
+  SiteDomainName:
+    Value: !If [UseApexAsSiteDomain, !Ref HostedZoneName, !Ref SiteDomainName]

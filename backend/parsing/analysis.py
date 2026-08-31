@@ -379,7 +379,7 @@ def analyse_document(
         source_adapter=source_adapter,
     )
 
-    # Sentiment is based on deterministic source text. A Groq response must not
+    # Sentiment is based on deterministic source text. An LLM response must not
     # change the FinBERT input on message retries.
     from app.services import sentiment as sentiment_service
 
@@ -387,20 +387,20 @@ def analyse_document(
     sentiment_text = f"{title}\n\n{parsed.raw_text}"[:max_chars]
     sentiment = sentiment_service.analyse_text(sentiment_text)
 
-    from app.services import groq as groq_service
+    from app.services import llm as llm_service
 
     summary: dict[str, str] | None = None
     summary_model: str | None = None
     summary_prompt_version: str | None = None
     try:
-        summary = groq_service.summarise_announcement(
+        summary = llm_service.summarise_announcement(
             title=title,
             category=parsed.category,
             extracted_data=parsed.extracted_data,
             raw_text=parsed.raw_text,
         )
-        summary_model = groq_service.active_model_name()
-        summary_prompt_version = groq_service.SUMMARY_PROMPT_VERSION
+        summary_model = llm_service.active_model_name()
+        summary_prompt_version = llm_service.SUMMARY_PROMPT_VERSION
     except RuntimeError as exc:
         if "not configured" not in str(exc).lower():
             raise
@@ -429,13 +429,13 @@ def analyse_public_discussion_text(
         f"{title}\n\n{parsed.raw_text}"[:max_chars]
     )
 
-    from app.services import groq as groq_service
+    from app.services import llm as llm_service
 
     summary: dict[str, str] | None = None
     summary_model: str | None = None
     summary_prompt_version: str | None = None
     try:
-        response = groq_service.summarise_public_discussion(
+        response = llm_service.summarise_public_discussion(
             title=title,
             source_type=source_type,
             raw_text=parsed.raw_text,
@@ -445,9 +445,9 @@ def analyse_public_discussion_text(
             for key in ("summary", "about", "changed", "matters")
             if isinstance((value := response.get(key)), str)
         }
-        summary_model = groq_service.active_model_name()
+        summary_model = llm_service.active_model_name()
         summary_prompt_version = (
-            groq_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
+            llm_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
         )
     except RuntimeError as exc:
         if "not configured" not in str(exc).lower():

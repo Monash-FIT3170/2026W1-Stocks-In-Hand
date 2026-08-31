@@ -3,12 +3,12 @@ import styles from "../../page.module.css"
 import { CitationLinks } from "../ticker/CitationLinks"
 
 // Shared announcement summary card.
-// Used by both the global announcements feed and the ticker news tab. Keep the data
+// Used by both the global market feed and the ticker news tab. Keep the data
 // shape simple here: each card expects an item with ticker, tag, time, title, about,
 // changed, matters, and url fields.
 export function AnnouncementCard({ item }) {
   const filingUrl = item.url || null
-  const sourceLabel = item.source_label || "View original ASX filing"
+  const sourceLabel = item.source_label || "View original source"
 
   return (
     <article className={styles.announcementCard}>

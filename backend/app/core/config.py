@@ -1,3 +1,5 @@
+"""Environment-backed application settings."""
+
 import os
 from pathlib import Path
 
@@ -23,6 +25,30 @@ def _load_local_env() -> None:
 
 _load_local_env()
 
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
+
+
+def _env_confidence(name: str, default: float) -> float:
+    value = float(os.getenv(name, str(default)))
+    if not 0 <= value <= 1:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return value
+
+
+def _first_env(*names: str) -> str:
+    """Return the first non-empty value from equivalent environment names."""
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
 class Settings:
     """Application configuration loaded from environment variables.
 
@@ -37,6 +63,16 @@ class Settings:
         "postgresql://user:password@localhost:5432/spike"
     )
     AWS_REGION: str = os.getenv("AWS_REGION", "ap-southeast-2")
+    AUTH_PROVIDER: str = os.getenv("AUTH_PROVIDER", "legacy").strip().lower()
+    COGNITO_USER_POOL_ID: str = os.getenv("COGNITO_USER_POOL_ID", "").strip()
+    COGNITO_APP_CLIENT_ID: str = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
+    COGNITO_ISSUER: str = os.getenv("COGNITO_ISSUER", "").strip()
+    COGNITO_JWKS_CACHE_SECONDS: int = int(
+        os.getenv("COGNITO_JWKS_CACHE_SECONDS", "300")
+    )
+    COGNITO_LINK_EXISTING_BY_EMAIL: bool = (
+        os.getenv("COGNITO_LINK_EXISTING_BY_EMAIL", "false").lower() == "true"
+    )
     DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
     REDDIT_CLIENT_ID_PARAMETER: str = os.getenv(
         "REDDIT_CLIENT_ID_PARAMETER",
@@ -52,8 +88,55 @@ class Settings:
     )
     DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
     ANALYSIS_QUEUE_URL: str = os.getenv("ANALYSIS_QUEUE_URL", "")
+    NOTIFICATIONS_ENABLED: bool = (
+        os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
+    )
+    NOTIFICATIONS_DRY_RUN: bool = (
+        os.getenv("NOTIFICATIONS_DRY_RUN", "false").lower() == "true"
+    )
+    ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED: bool = (
+        os.getenv("ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED", "false").lower()
+        == "true"
+    )
+    NOTIFICATION_QUEUE_URL: str = os.getenv("NOTIFICATION_QUEUE_URL", "")
+    ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
+    ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    BREVO_API_KEY_PARAMETER: str = os.getenv("BREVO_API_KEY_PARAMETER", "")
+    BREVO_API_BASE_URL: str = os.getenv(
+        "BREVO_API_BASE_URL",
+        "https://api.brevo.com/v3",
+    )
+    ALERT_DAILY_BUDGET: int = _env_int(
+        "ALERT_DAILY_BUDGET",
+        180,
+        minimum=0,
+    )
+    ALERT_MAX_PER_INVESTOR_PER_RUN: int = _env_int(
+        "ALERT_MAX_PER_INVESTOR_PER_RUN",
+        5,
+        minimum=1,
+    )
+    ALERT_DEFAULT_MIN_CONFIDENCE: float = _env_confidence(
+        "ALERT_DEFAULT_MIN_CONFIDENCE",
+        0.75,
+    )
+    ALERT_CLAIM_STALE_MINUTES: int = _env_int(
+        "ALERT_CLAIM_STALE_MINUTES",
+        15,
+        minimum=1,
+    )
+    ALERT_VERIFICATION_TOKEN_TTL_HOURS: int = _env_int(
+        "ALERT_VERIFICATION_TOKEN_TTL_HOURS",
+        24,
+        minimum=1,
+    )
+    FRONTEND_BASE_URL: str = os.getenv(
+        "FRONTEND_BASE_URL",
+        "http://localhost:3000",
+    )
     SOURCE_URLS: dict[str, str] = {
-        ticker: os.getenv(f"{ticker}_SOURCE_URL", source.source_url)
+        ticker: os.getenv(f"{ticker}_SOURCE_URL", str(source.source_url))
         for ticker, source in SOURCES.items()
     }
     SUPPORTED_TICKERS: list[str] = [
@@ -88,6 +171,10 @@ class Settings:
     )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
+    REDDIT_USER_AGENT: str = os.getenv(
+        "REDDIT_USER_AGENT",
+        "windows:stocks-in-hand:1.0.0 (read-only ASX market research)",
+    )
     BLUESKY_IDENTIFIER: str = os.getenv("BLUESKY_IDENTIFIER", "")
     BLUESKY_APP_PASSWORD: str = os.getenv("BLUESKY_APP_PASSWORD", "")
     BLUESKY_SERVICE_URL: str = os.getenv(
@@ -103,18 +190,41 @@ class Settings:
         for url in os.getenv("PUBLIC_DISCUSSION_FEED_URLS", "").split(",")
         if url.strip()
     ]
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "bedrock").strip().lower()
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+    BEDROCK_ENABLED: bool = (
+        os.getenv("BEDROCK_ENABLED", "false").lower() == "true"
+    )
+    BEDROCK_MODEL_ID: str = os.getenv(
+        "BEDROCK_MODEL_ID",
+        "openai.gpt-oss-120b-1:0",
+    ).strip()
+    BEDROCK_SERVICE_TIER: str = os.getenv(
+        "BEDROCK_SERVICE_TIER",
+        "default",
+    ).strip().lower()
+    BEDROCK_MAX_PROMPT_CHARS: int = _env_int(
+        "BEDROCK_MAX_PROMPT_CHARS",
+        30000,
+        minimum=1000,
+    )
+    BEDROCK_MAX_OUTPUT_TOKENS: int = _env_int(
+        "BEDROCK_MAX_OUTPUT_TOKENS",
+        1024,
+        minimum=128,
+    )
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
-    MARKETAUX_API_TOKEN: str = os.getenv("MARKETAUX_API_TOKEN", "")
+    MARKETAUX_API_TOKEN: str = _first_env(
+        "MARKETAUX_API_TOKEN",
+        "MARKETAUX_API_KEY",
+    )
     MARKETAUX_BASE_URL: str = os.getenv(
         "MARKETAUX_BASE_URL",
         "https://api.marketaux.com/v1",
     )
     NEWS_FETCH_LIMIT: int = int(os.getenv("NEWS_FETCH_LIMIT", "10"))
-    
+
     CORS_ORIGINS: list[str] = [
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -129,3 +239,31 @@ class Settings:
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 settings = Settings()
+
+if settings.AUTH_PROVIDER not in {"legacy", "dual", "cognito"}:
+    raise ValueError("AUTH_PROVIDER must be 'legacy', 'dual', or 'cognito'")
+
+if settings.LLM_PROVIDER not in {"bedrock", "groq"}:
+    raise ValueError("LLM_PROVIDER must be 'bedrock' or 'groq'")
+
+if settings.BEDROCK_SERVICE_TIER not in {"default", "flex", "priority"}:
+    raise ValueError(
+        "BEDROCK_SERVICE_TIER must be 'default', 'flex', or 'priority'"
+    )
+
+if not settings.BEDROCK_MODEL_ID:
+    raise ValueError("BEDROCK_MODEL_ID must not be empty")
+
+if settings.AUTH_PROVIDER in {"dual", "cognito"}:
+    missing_cognito_settings = [
+        name
+        for name in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID")
+        if not getattr(settings, name)
+    ]
+    if missing_cognito_settings:
+        raise ValueError(
+            "Cognito authentication requires: "
+            + ", ".join(missing_cognito_settings)
+        )
+    if settings.COGNITO_JWKS_CACHE_SECONDS <= 0:
+        raise ValueError("COGNITO_JWKS_CACHE_SECONDS must be greater than zero")

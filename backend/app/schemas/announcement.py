@@ -9,6 +9,9 @@ class AnnouncementResponse(BaseModel):
     id: UUID
     ticker: str
     tag: str
+    source_type: str
+    source_name: str
+    source_label: str
     published_at: Optional[datetime]
     title: str
     about: str
