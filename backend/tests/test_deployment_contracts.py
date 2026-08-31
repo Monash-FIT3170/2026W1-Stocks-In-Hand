@@ -177,7 +177,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
 
 
 def test_staging_workflow_wires_brevo_notification_parameters() -> None:
-    """The reviewed change set must carry the notification release controls."""
+    """Every change set must carry the notification release controls."""
     workflow = (
         REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
     ).read_text(encoding="utf-8")
@@ -191,18 +191,68 @@ def test_staging_workflow_wires_brevo_notification_parameters() -> None:
         '--image-repositories "NotificationFunction=$ECR_REGISTRY/'
         'stocks-in-hand-api"' in workflow
     )
-    assert '"NotificationsEnabled=${{ inputs.enable_notifications }}"' in workflow
+    assert '"NotificationsEnabled=$ENABLE_NOTIFICATIONS"' in workflow
     assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
+    assert "AUTO_DEPLOY_ENABLE_NOTIFICATIONS" in workflow
     assert "Validate Brevo notification prerequisites" in workflow
     preflight = workflow.split(
         "      - name: Validate Brevo notification prerequisites", 1
     )[1].split("      - name:", 1)[0]
-    assert "if: inputs.enable_notifications == 'true'" in preflight
+    assert "if: env.ENABLE_NOTIFICATIONS == 'true'" in preflight
     assert 'ALERT_SENDER_EMAIL: ${{ vars.ALERT_SENDER_EMAIL }}' in preflight
     assert '"$PARAMETER_PATH_PREFIX/brevo-api-key"' in preflight
     assert "aws ssm get-parameter" in preflight
     assert "Parameter.Type" in preflight
     assert '"$PARAMETER_TYPE" != "SecureString"' in preflight
+
+
+def test_approved_main_merges_deploy_backend_and_frontend_automatically() -> None:
+    workflow = (
+        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "name: Deploy staging release" in workflow
+    assert "  push:\n    branches:\n      - main" in workflow
+    assert "environment: staging" in workflow
+    assert "group: stocks-in-hand-staging-deploy" in workflow
+    assert "cancel-in-progress: false" in workflow
+
+    configuration = workflow.split(
+        "      - name: Resolve deployment configuration", 1
+    )[1].split("      - name:", 1)[0]
+    assert "read_stack_parameter" in configuration
+    assert "AUTO_DEPLOY_AUTH_PROVIDER" in configuration
+    assert "AUTO_DEPLOY_ENABLE_SCHEDULE" in configuration
+    assert "AUTO_DEPLOY_ENABLE_BEDROCK" in configuration
+    assert (
+        'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]'
+        in configuration
+    )
+
+    deployment = workflow.split(
+        "      - name: Create or execute the SAM change set", 1
+    )[1].split("      - name:", 1)[0]
+    assert "sam deploy" in deployment
+    assert "DEPLOY_MODE_ARGS+=(--no-execute-changeset)" in deployment
+    assert '"${DEPLOY_MODE_ARGS[@]}"' in deployment
+    assert (
+        '"ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA"'
+        in deployment
+    )
+
+    assert (
+        "Wait for the automatically deployed API to report healthy"
+        in workflow
+    )
+    assert "backend/scripts/wait_for_health.py" in workflow
+    assert (
+        "Prepare rollback after an automatic health-check failure"
+        in workflow
+    )
+    assert "Build the deployed frontend configuration" in workflow
+    assert "Preserve the automatic frontend release snapshot" in workflow
+    assert "Publish the automatic frontend release" in workflow
+    assert "aws cloudfront create-invalidation" in workflow
 
 
 def test_github_oidc_can_check_brevo_parameter_metadata() -> None:

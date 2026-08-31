@@ -214,21 +214,21 @@ settings before they are included.
    full Git commit SHA.
 6. Verify the sender in Brevo, store the Brevo API key in SSM, set the protected
    GitHub `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
-7. Create the SAM change set with both schedule flags set to `false` and
-   notifications disabled. Person 1 reviews it before Person 2 executes the
-   approved ARN.
-8. Upload a SHA-named `frontend/out` snapshot, publish it to the versioned
-   frontend bucket, and invalidate CloudFront.
-9. Create exactly one administrator and manually trigger one bounded run for
+7. Complete the first reviewed SAM deployment with both schedule flags and
+   notifications disabled.
+8. Keep the `ProtectMain` approval ruleset active, restrict the GitHub
+   `staging` environment to `main`, and enable automatic deployment.
+9. Merge an approved pull request. The workflow builds SHA-tagged images,
+   executes the SAM change set, checks API health, uploads a SHA-named frontend
+   snapshot, publishes it, and starts a CloudFront invalidation.
+10. Create exactly one administrator and manually trigger one bounded run for
    every enabled source. Public discussion collector routes require that
    administrator session.
-10. Verify the database, queues, private S3 object, analysis result, logs,
+11. Verify the database, queues, private S3 object, analysis result, logs,
     duplicate suppression, and one DLQ redrive.
-11. Enable alerts through a second reviewed change set, then complete the Brevo
-    smoke test below.
-12. Enable either schedule only after its sources pass bounded smoke tests.
-13. Configure the manual GitHub OIDC workflow only after the first manual
-     deployment succeeds.
+12. Enable alerts through an `AUTO_DEPLOY_ENABLE_NOTIFICATIONS=true` release,
+    then complete the Brevo smoke test below.
+13. Enable either schedule only after its sources pass bounded smoke tests.
 
 Every Lambda publishes through its `live` alias. Backend rollback creates a new
 reviewed change set that points to the previous retained ECR image SHA. Database

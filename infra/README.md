@@ -1,8 +1,9 @@
 # Staging deployment
 
-This guide creates one staging deployment in `ap-southeast-2`. Start manually,
-leave the EventBridge schedule disabled, and configure GitHub Actions only after
-ANZ, CBA, BHP, WES, and CSL work end to end.
+This guide creates one staging deployment in `ap-southeast-2`. Bootstrap it
+manually and leave the EventBridge schedule disabled. After the first verified
+release, each approved merge to `main` validates, deploys the backend, checks
+API health, publishes the frontend, and starts a CloudFront invalidation.
 
 ## Prerequisites
 
@@ -416,20 +417,37 @@ In GitHub:
 2. add environment variable `AWS_DEPLOY_ROLE_ARN` with that output;
 3. add environment variable `OPERATIONS_EMAIL`;
 4. add `ALERT_SENDER_EMAIL` after verifying that sender address in Brevo;
-5. require Person 1 approval for the `staging` environment;
-6. run **Prepare staging release** to build images and create a change set;
-7. have Person 1 review the uploaded change-set JSON;
-8. have Person 2 run **Execute approved staging change set** with the approved ARN;
-9. run **Publish staging frontend** with the approved full Git SHA;
-10. leave `enable_notifications` set to `false` until the Brevo smoke test;
-11. leave `enable_schedule` set to `false` for ordinary deployments;
-12. leave `enable_bedrock` set to `false` until model access and the canary are approved;
-13. leave `enable_analysis` set to `true` for deterministic and FinBERT analysis; and
-14. set `scheduled_tickers` only to sources that passed their AWS smoke test.
+5. keep the active `ProtectMain` ruleset with one approval and last-push approval;
+6. restrict the `staging` environment to the `main` branch;
+7. remove the environment reviewer after the branch restriction is active; and
+8. merge an approved pull request to start **Deploy staging release**.
 
-The workflows request short-lived AWS tokens through OIDC. Preparation,
-execution, frontend publishing, and rollback are separate manual actions. This
-prevents an image build from bypassing Person 1's change-set review.
+Automatic releases preserve the current stack values for authentication,
+schedules, analysis, notifications, Bedrock, tickers, public sources, and the
+per-source limit. Set one of these optional `staging` environment variables to
+change a value on the next approved merge:
+
+```text
+AUTO_DEPLOY_AUTH_PROVIDER
+AUTO_DEPLOY_ENABLE_SCHEDULE
+AUTO_DEPLOY_ENABLE_PUBLIC_DISCUSSION_SCHEDULE
+AUTO_DEPLOY_ENABLE_ANALYSIS
+AUTO_DEPLOY_ENABLE_NOTIFICATIONS
+AUTO_DEPLOY_ENABLE_BEDROCK
+AUTO_DEPLOY_SCHEDULED_TICKERS
+AUTO_DEPLOY_SCHEDULED_PUBLIC_DISCUSSION_SOURCES
+AUTO_DEPLOY_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT
+```
+
+Leave notifications, schedules, and Bedrock disabled until their smoke tests
+pass. A manual run of **Deploy staging release** still creates an unexecuted
+change set. **Execute approved staging change set** and **Publish staging
+frontend** remain available for reviewed recovery work.
+
+The workflows request short-lived AWS tokens through OIDC. Automatic main
+deployments execute only after the same workflow passes backend tests, security
+checks, frontend tests, image builds, and SAM lint. A failed API health check
+prepares a rollback change set but does not downgrade the database.
 
 ## Bedrock limits
 
