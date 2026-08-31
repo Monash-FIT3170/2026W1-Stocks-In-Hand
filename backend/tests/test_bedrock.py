@@ -151,6 +151,63 @@ def test_provider_routes_structured_category_request_to_bedrock() -> None:
     invoke.assert_called_once()
 
 
+def test_announcement_summary_repairs_malformed_model_json_once() -> None:
+    """A formatting defect must not discard otherwise recoverable analysis."""
+    malformed = '{\nsummary: "An update"\n}'
+    repaired = json.dumps(
+        {
+            "summary": "The company announced an update.",
+            "about": "The filing describes the update.",
+            "changed": "The update was confirmed.",
+            "matters": "Investors can assess the confirmed change.",
+            "confirmed_facts": ["The company confirmed the update."],
+            "speculation": [],
+        }
+    )
+
+    with patch.object(
+        llm,
+        "_call_llm",
+        side_effect=[malformed, repaired],
+    ) as invoke:
+        result = llm.summarise_announcement(
+            title="Company update",
+            category="organisational",
+            extracted_data={},
+            raw_text="The company confirmed an update.",
+        )
+
+    assert result["summary"] == "The company announced an update."
+    assert invoke.call_count == 2
+    repair_prompt = invoke.call_args_list[1].args[0]
+    assert json.dumps(malformed, ensure_ascii=False) in repair_prompt
+    assert invoke.call_args_list[1].kwargs == {"temperature": 0}
+
+
+def test_announcement_summary_does_not_repair_valid_json() -> None:
+    """Valid structured output must retain the single-call fast path."""
+    response = json.dumps(
+        {
+            "summary": "The company announced an update.",
+            "about": "The filing describes the update.",
+            "changed": "The update was confirmed.",
+            "matters": "Investors can assess the confirmed change.",
+            "confirmed_facts": ["The company confirmed the update."],
+            "speculation": [],
+        }
+    )
+
+    with patch.object(llm, "_call_llm", return_value=response) as invoke:
+        llm.summarise_announcement(
+            title="Company update",
+            category="organisational",
+            extracted_data={},
+            raw_text="The company confirmed an update.",
+        )
+
+    invoke.assert_called_once()
+
+
 def test_reddit_digest_rejects_unrecognised_sentiment() -> None:
     """Reddit digests must use one of the supported sentiment labels."""
     with pytest.raises(ValueError, match="sentiment was not recognised"):
