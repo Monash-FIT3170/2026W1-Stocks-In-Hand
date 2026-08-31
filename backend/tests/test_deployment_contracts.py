@@ -29,6 +29,16 @@ def test_api_image_does_not_own_finbert_inference() -> None:
     assert "On-demand FinBERT inference is not available in the API runtime" in route
 
 
+def test_analysis_image_keeps_finbert_out_of_lambda_opt_mount() -> None:
+    dockerfile = (
+        REPOSITORY_ROOT / "backend" / "Dockerfile.analysis"
+    ).read_text(encoding="utf-8")
+
+    assert "FINBERT_MODEL=/var/task/models/finbert" in dockerfile
+    assert "save_pretrained('/var/task/models/finbert')" in dockerfile
+    assert "/opt/finbert" not in dockerfile
+
+
 def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
     template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
 
