@@ -88,5 +88,5 @@ jobs:
         shell: bash
         working-directory: backend
         run: >
-          pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
+          python -m pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
           -v
