@@ -193,6 +193,48 @@ def test_staging_workflow_wires_brevo_notification_parameters() -> None:
     )
     assert '"NotificationsEnabled=${{ inputs.enable_notifications }}"' in workflow
     assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
+    assert "Validate Brevo notification prerequisites" in workflow
+    preflight = workflow.split(
+        "      - name: Validate Brevo notification prerequisites", 1
+    )[1].split("      - name:", 1)[0]
+    assert "if: inputs.enable_notifications == 'true'" in preflight
+    assert 'ALERT_SENDER_EMAIL: ${{ vars.ALERT_SENDER_EMAIL }}' in preflight
+    assert '"$PARAMETER_PATH_PREFIX/brevo-api-key"' in preflight
+    assert "aws ssm get-parameter" in preflight
+    assert "Parameter.Type" in preflight
+    assert '"$PARAMETER_TYPE" != "SecureString"' in preflight
+
+
+def test_github_oidc_can_check_brevo_parameter_metadata() -> None:
+    """The prepare role may inspect the Brevo parameter without decrypting it."""
+    template = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Sid: ReadBrevoParameterMetadata" in template
+    assert "Action: ssm:GetParameter" in template
+    assert (
+        "parameter/stocks-in-hand/staging/brevo-api-key" in template
+    )
+
+
+def test_custom_domain_certificate_parameter_is_lint_constrained() -> None:
+    """SAM lint must know that the optional certificate value is an ACM ARN."""
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    certificate_parameter = template.split("  SiteCertificateArn:", 1)[1].split(
+        "  SiteHostedZoneId:", 1
+    )[0]
+
+    assert "AllowedPattern:" in certificate_parameter
+    assert "arn:aws[a-zA-Z-]*:acm:us-east-1:" in certificate_parameter
+    assert "CustomDomainValuesRequiredTogether:" in template
+    distribution = template.split("  FrontendDistribution:", 1)[1].split(
+        "  FrontendBucketPolicy:", 1
+    )[0]
+    assert "ignore_checks:" in distribution
+    assert "- W1030" in distribution
 
 
 def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:

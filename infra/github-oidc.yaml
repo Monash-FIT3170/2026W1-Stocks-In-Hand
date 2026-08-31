@@ -311,6 +311,11 @@ Resources:
                 Effect: Allow
                 Action: cloudformation:GetTemplateSummary
                 Resource: "*"
+              - Sid: ReadBrevoParameterMetadata
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/stocks-in-hand/staging/brevo-api-key
               - Sid: UseCloudFormationExecutionRole
                 Effect: Allow
                 Action: iam:PassRole

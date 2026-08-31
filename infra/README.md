@@ -92,6 +92,12 @@ Verify one sender address in Brevo. Add that address as the protected GitHub
 environment variable `ALERT_SENDER_EMAIL`. A custom sending domain is not
 required for the first controlled staging test.
 
+When `enable_notifications=true`, the staging preparation workflow checks that
+the sender variable is non-empty and that the Brevo parameter exists as a
+`SecureString`. The check reads parameter metadata only. It does not decrypt or
+print the API key. Deploy the current `infra/github-oidc.yaml` first so the
+GitHub role has permission to perform this check.
+
 Reddit credentials and the blog feed allowlist are optional. Store them only
 when those sources are enabled:
 
@@ -390,6 +396,10 @@ If the AWS account already has
 `token.actions.githubusercontent.com` configured as an IAM provider, deploy
 with `CreateOidcProvider=false` and pass its ARN as
 `ExistingOidcProviderArn`.
+
+Redeploy this stack before the first enabled Brevo release. Existing GitHub
+roles created from older revisions do not have the narrowly scoped permission
+to check `/stocks-in-hand/staging/brevo-api-key` metadata.
 
 Read the deployment role:
 

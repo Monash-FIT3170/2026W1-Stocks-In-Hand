@@ -163,6 +163,31 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           role-session-name: stocks-in-hand-prepare
 
+      - name: Validate Brevo notification prerequisites
+        if: inputs.enable_notifications == 'true'
+        shell: bash
+        env:
+          ALERT_SENDER_EMAIL: ${{ vars.ALERT_SENDER_EMAIL }}
+        run: |
+          if [ -z "$ALERT_SENDER_EMAIL" ]; then
+            echo "::error::ALERT_SENDER_EMAIL is missing from the staging environment"
+            exit 1
+          fi
+
+          PARAMETER_NAME="$PARAMETER_PATH_PREFIX/brevo-api-key"
+          if ! PARAMETER_TYPE="$(aws ssm get-parameter \
+            --name "$PARAMETER_NAME" \
+            --query 'Parameter.Type' \
+            --output text 2>/dev/null)"; then
+            echo "::error::The Brevo API key parameter is missing or unreadable"
+            exit 1
+          fi
+          if [ "$PARAMETER_TYPE" != "SecureString" ]; then
+            echo "::error::The Brevo API key parameter must be a SecureString"
+            exit 1
+          fi
+          echo "Brevo notification prerequisites are present"
+
       - name: Resolve immutable release values
         id: values
         shell: bash
