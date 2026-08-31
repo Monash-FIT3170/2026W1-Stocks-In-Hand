@@ -1,7 +1,7 @@
 """Database state transitions shared by the scrape API and workers."""
 
-from datetime import datetime, timezone
 import hashlib
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -13,7 +13,6 @@ from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.schemas.scrape_run import ScrapeRunCreate
-
 
 _DOWNSTREAM_RUN_STATUSES = {"downloading", "analyzing", "partial", "completed"}
 
@@ -55,6 +54,112 @@ def create_scrape_run(db: Session, scrape_run: ScrapeRunCreate) -> ScrapeRun:
     db_run = ScrapeRun(**scrape_run.model_dump())
     db.add(db_run)
     return _commit(db, db_run)
+
+
+def create_public_discussion_run(
+    db: Session,
+    *,
+    platform_id: UUID,
+    source_url: str,
+    idempotency_key: str,
+) -> ScrapeRun:
+    """Create durable state before a public discussion background task starts."""
+    run, _created = get_or_create_public_discussion_run(
+        db,
+        platform_id=platform_id,
+        source_url=source_url,
+        idempotency_key=idempotency_key,
+    )
+    return run
+
+
+def get_or_create_public_discussion_run(
+    db: Session,
+    *,
+    platform_id: UUID,
+    source_url: str,
+    idempotency_key: str,
+    trigger_type: str = "manual",
+) -> tuple[ScrapeRun, bool]:
+    """Create one durable public discussion run per idempotency key."""
+    existing = (
+        db.query(ScrapeRun)
+        .filter(ScrapeRun.idempotency_key == idempotency_key)
+        .first()
+    )
+    if existing:
+        return existing, False
+
+    run = ScrapeRun(
+        platform_id=platform_id,
+        status="queued",
+        source_url=source_url,
+        idempotency_key=idempotency_key,
+        trigger_type=trigger_type,
+        queued_at=_utcnow(),
+    )
+    db.add(run)
+    try:
+        return _commit(db, run), True
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(ScrapeRun)
+            .filter(ScrapeRun.idempotency_key == idempotency_key)
+            .first()
+        )
+        if existing is None:
+            raise
+        return existing, False
+
+
+def mark_public_discussion_run_started(
+    db: Session,
+    scrape_run_id: UUID,
+) -> ScrapeRun | None:
+    run = _lock_run(db, scrape_run_id)
+    if run is None or run.status in {"completed", "partial"}:
+        return run
+    run.status = "running"
+    run.started_at = run.started_at or _utcnow()
+    run.finished_at = None
+    run.error_message = None
+    return _commit(db, run)
+
+
+def mark_public_discussion_run_completed(
+    db: Session,
+    scrape_run_id: UUID,
+    *,
+    items_found: int,
+    items_saved: int,
+    items_failed: int = 0,
+) -> ScrapeRun | None:
+    run = _lock_run(db, scrape_run_id)
+    if run is None:
+        return None
+    run.items_found = max(items_found, 0)
+    run.items_saved = max(items_saved, 0)
+    run.items_failed = max(items_failed, 0)
+    run.status = "partial" if run.items_failed else "completed"
+    run.finished_at = _utcnow()
+    run.error_message = None
+    return _commit(db, run)
+
+
+def mark_public_discussion_run_failed(
+    db: Session,
+    scrape_run_id: UUID,
+    *,
+    error: str,
+) -> ScrapeRun | None:
+    run = _lock_run(db, scrape_run_id)
+    if run is None:
+        return None
+    run.status = "failed"
+    run.finished_at = _utcnow()
+    run.error_message = error[:8000]
+    return _commit(db, run)
 
 
 def _get_or_create_platform(db: Session, source_url: str) -> InformationPlatform:
@@ -453,4 +558,65 @@ def mark_artifact_analysis_failed(
     if first_failure and run:
         run.items_failed = (run.items_failed or 0) + 1
         _finish_run_if_terminal(run)
+    return _commit(db, artifact)
+
+
+def mark_inline_artifact_analysis_started(
+    db: Session,
+    artifact_id: UUID,
+) -> Artifact | None:
+    """Start stored-text analysis without changing document-run counters."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.analysis_status == "completed":
+        return artifact
+    if not (artifact.raw_text or artifact.title):
+        raise ValueError(f"Artifact {artifact_id} has no stored text")
+    artifact.analysis_status = "analyzing"
+    artifact.last_error = None
+    return _commit(db, artifact)
+
+
+def mark_inline_artifact_analysis_queued(
+    db: Session,
+    artifact_id: UUID,
+) -> Artifact | None:
+    """Record a successful queue send while keeping retries idempotent."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.analysis_status in {
+        "queued",
+        "analyzing",
+        "completed",
+    }:
+        return artifact
+    artifact.analysis_status = "queued"
+    artifact.last_error = None
+    return _commit(db, artifact)
+
+
+def mark_inline_artifact_analysis_completed(
+    db: Session,
+    artifact_id: UUID,
+) -> Artifact | None:
+    """Complete stored-text analysis without reopening its collection run."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None:
+        return None
+    artifact.analysis_status = "completed"
+    artifact.analyzed_at = artifact.analyzed_at or _utcnow()
+    artifact.last_error = None
+    return _commit(db, artifact)
+
+
+def mark_inline_artifact_analysis_failed(
+    db: Session,
+    artifact_id: UUID,
+    *,
+    error: str,
+) -> Artifact | None:
+    """Fail stored-text analysis without changing collection success state."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.analysis_status == "completed":
+        return artifact
+    artifact.analysis_status = "failed"
+    artifact.last_error = error[:8000]
     return _commit(db, artifact)

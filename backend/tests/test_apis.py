@@ -138,6 +138,65 @@ def test_news_feed_uses_generic_source_label_when_news_source_missing() -> None:
     assert result[0]["source_label"] == "View original source"
 
 
+def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
+    """The shared frontend shell should need one quote request per ticker load."""
+    from datetime import datetime, timezone
+    import uuid
+
+    from app.api.routes import ticker
+
+    ticker_record = MagicMock(
+        id=uuid.uuid4(),
+        symbol="CBA",
+        company_name="Commonwealth Bank of Australia",
+        sector="Financials",
+        industry="Banks",
+        exchange="ASX",
+    )
+    published_at = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    artifact = MagicMock(
+        id=uuid.uuid4(),
+        title="CBA results",
+        raw_text="CBA published its latest financial results.",
+        artifact_metadata={"about": "CBA reported its latest financial results."},
+        artifact_type="financial_results",
+        source_type="asx_announcement",
+        url="https://example.com/cba-results",
+        published_at=published_at,
+        created_at=published_at,
+    )
+    sentiment = MagicMock(
+        sentiment_label="positive",
+        confidence_score=0.91,
+        model_used="ProsusAI/finbert",
+        created_at=published_at,
+    )
+
+    with patch.object(ticker, "_ensure_default_tickers"), patch.object(
+        ticker.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker_record,
+    ), patch.object(
+        ticker,
+        "_live_quote",
+        return_value=(150.0, 149.0),
+    ) as live_quote, patch.object(
+        ticker,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker,
+        "_latest_sentiment_for_ticker",
+        return_value=sentiment,
+    ):
+        result = ticker.get_ticker_brief("CBA", db=MagicMock())
+
+    live_quote.assert_called_once_with("CBA")
+    assert result["overview"]["latest_signal_confidence_pct"] == "91%"
+    assert result["overview"]["sentiment_status"] == "available"
+    assert result["aside"]["key_numbers"][0]["value"] == "$150.00"
+
+
 # --- Reddit route tests ---
 
 def _make_mock_submission(
@@ -227,6 +286,173 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
     assert result[0]["is_self"] is False
 
 
+# --- Bluesky route tests ---
+
+def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
+    """Public Bluesky search results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "posts": [{
+            "uri": "at://did:plc:test/app.bsky.feed.post/abc123",
+            "record": {
+                "text": "ANZ results look strong.",
+                "createdAt": "2026-08-09T01:00:00Z",
+                "langs": ["en"],
+                "tags": [{"tag": "ASX"}],
+            },
+            "author": {"handle": "investor.bsky.social", "displayName": "Investor"},
+            "replyCount": 2,
+            "repostCount": 3,
+            "likeCount": 4,
+            "quoteCount": 1,
+        }],
+    }
+
+    with patch("app.api.routes.bluesky.httpx.get", return_value=mock_response):
+        from app.api.routes.bluesky import _fetch_posts
+        result = _fetch_posts(query="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor.bsky.social"
+    assert result[0]["like_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
+def test_bluesky_ticker_filter_requires_financial_context() -> None:
+    """Posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_bluesky_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
+def test_mastodon_ticker_filter_requires_financial_context() -> None:
+    """Mastodon posts need a ticker mention and a finance-related signal."""
+    from app.crud.artifact import _is_mastodon_ticker_post
+
+    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
+    unrelated = MagicMock(title="Thank you Anz", raw_text="")
+
+    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
+    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
+
+
+def test_stored_sentiment_groups_forum_sources_as_public_discussion() -> None:
+    """All supported forum sources should share the public discussion category."""
+    from app.api.routes.category_sentiment import _categories_for_stored_artifact
+
+    for source_type in ("reddit", "bluesky", "mastodon"):
+        artifact = MagicMock(source_type=source_type)
+        assert _categories_for_stored_artifact(artifact) == ["user_discussion"]
+
+
+# --- Mastodon route tests ---
+
+def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
+    """Public Mastodon hashtag results are converted into stored post fields."""
+    mock_response = MagicMock()
+    mock_response.json.return_value = [{
+        "id": "114123456789",
+        "created_at": "2026-08-10T01:00:00Z",
+        "content": "<p>ANZ results look <strong>strong</strong>.</p>",
+        "url": "https://aus.social/@investor/114123456789",
+        "account": {"acct": "investor", "display_name": "Investor"},
+        "replies_count": 2,
+        "reblogs_count": 3,
+        "favourites_count": 4,
+        "language": "en",
+        "tags": [{"name": "ASX", "url": "https://aus.social/tags/ASX"}],
+        "sensitive": False,
+        "spoiler_text": "",
+    }]
+
+    with patch("app.api.routes.mastodon.httpx.get", return_value=mock_response):
+        from app.api.routes.mastodon import _fetch_posts
+        result = _fetch_posts(tag="ANZ", limit=1)
+
+    assert len(result) == 1
+    assert result[0]["id"] == "114123456789"
+    assert result[0]["text"] == "ANZ results look strong."
+    assert result[0]["author"] == "investor"
+    assert result[0]["favourites_count"] == 4
+    assert result[0]["tags"] == ["ASX"]
+
+
+def test_public_discussion_summary_combines_all_sources() -> None:
+    """All public discussion sources are included in one summary request."""
+    from app.api.routes import category_sentiment
+
+    reddit_post = MagicMock(
+        title="ANZ earnings discussion",
+        raw_text="Investors are watching the result.",
+        url="https://reddit.com/example",
+        artifact_metadata={"score": 7},
+    )
+    bluesky_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="ASX investors are positive.",
+        url="https://bsky.app/example",
+        artifact_metadata={
+            "like_count": 3,
+            "repost_count": 2,
+            "reply_count": 1,
+            "quote_count": 0,
+        },
+    )
+    mastodon_post = MagicMock(
+        title="ANZ shares rise",
+        raw_text="Investors are positive about the result.",
+        url="https://aus.social/example",
+        artifact_metadata={
+            "favourites_count": 4,
+            "reblogs_count": 2,
+            "replies_count": 1,
+        },
+    )
+    captured_posts = []
+
+    def fake_summary(**kwargs):
+        captured_posts.extend(kwargs["posts"])
+        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
+
+    with patch.object(
+        category_sentiment.artifact_crud,
+        "get_reddit_posts_for_ticker",
+        return_value=[reddit_post],
+    ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_bluesky_posts_for_ticker",
+        return_value=[bluesky_post],
+    ), patch.object(
+        category_sentiment.artifact_crud,
+        "get_mastodon_posts_for_ticker",
+        return_value=[mastodon_post],
+    ), patch.object(
+        category_sentiment.reddit_route,
+        "_summarise_reddit_posts",
+        side_effect=fake_summary,
+    ):
+        result = category_sentiment._summarise_recent_public_discussion(
+            ticker="ANZ",
+            db=MagicMock(),
+            days=30,
+            reddit_limit=50,
+            bluesky_limit=50,
+            mastodon_limit=50,
+        )
+
+    assert result["summary"] == "Discussion is positive."
+    assert len(captured_posts) == 3
+    assert captured_posts[0]["score"] == 7
+    assert captured_posts[1]["score"] == 6
+    assert captured_posts[2]["score"] == 7
+
+
 def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
     """Reddit summaries should use the configured Groq model, not a hardcoded ID."""
     from app.api.routes import reddit
@@ -274,60 +500,57 @@ def test_summarise_reddit_posts_uses_configured_groq_model() -> None:
     )
 
 
-def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
-    """POST /sentiment/{ticker} wires ASX categories and Reddit summary together."""
+def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
+    """Ticker views read worker-produced sentiment without API inference."""
+    from datetime import datetime, timezone
+    import uuid
+
     from app.api.routes import category_sentiment
+    from app.schemas.category_sentiment import CategorySentimentResponse
 
-    captured_categories = {}
+    ticker_record = MagicMock(id=uuid.uuid4(), symbol="ANZ")
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = ticker_record
 
-    def fake_analyse_categories(categories):
-        captured_categories.update(categories)
-        return {
-            name: {
-                "summary": text,
-                "sentiment_label": "neutral",
-                "label": "neutral",
-                "score": 0.5,
-                "confidence_score": 0.5,
-                "distribution": {"positive": 0.2, "neutral": 0.6, "negative": 0.2},
-                "model_used": "test-finbert",
-                "chunks_used": 1,
-                "chunks_analyzed": 1,
-            }
-            for name, text in categories.items()
-        }
+    revenue_artifact = MagicMock(
+        source_type="asx_announcement",
+        artifact_type="financial_results",
+        title="ANZ revenue increased",
+        artifact_metadata={"about": "Revenue increased during the half year."},
+    )
+    reddit_artifact = MagicMock(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="Investors discuss ANZ",
+        artifact_metadata={"summary": "Investors remain mixed on ANZ."},
+    )
+    analyzed_at = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    positive = MagicMock(
+        sentiment_label="positive",
+        confidence_score=0.86,
+        model_used="ProsusAI/finbert",
+        created_at=analyzed_at,
+    )
+    neutral = MagicMock(
+        sentiment_label="neutral",
+        confidence_score=0.71,
+        model_used="ProsusAI/finbert",
+        created_at=analyzed_at,
+    )
 
     with patch.object(
         category_sentiment,
-        "_categorise_recent_asx",
-        return_value={"revenue": "ANZ revenue increased."},
-    ), patch.object(
-        category_sentiment,
-        "_summarise_recent_reddit",
-        return_value={
-            "summary": "Retail investors are mixed on ANZ.",
-            "dominant_sentiment": "mixed",
-            "key_themes": ["banks"],
-        },
+        "_stored_sentiment_rows",
+        return_value=[(revenue_artifact, positive), (reddit_artifact, neutral)],
     ), patch.object(
         category_sentiment.sentiment_service,
         "analyse_categories",
-        side_effect=fake_analyse_categories,
-    ), patch.object(
-        category_sentiment.sentiment_service,
-        "model_name",
-        return_value="test-finbert",
-    ):
-        result = category_sentiment.analyse_ticker_category_sentiments(
-            ticker="anz",
-            body=None,
-            db=MagicMock(),
-        )
+    ) as analyse_categories:
+        result = category_sentiment.get_ticker_category_sentiments("anz", db=db)
 
     assert result["ticker"] == "ANZ"
-    assert result["model_used"] == "test-finbert"
-    assert captured_categories["revenue"] == "ANZ revenue increased."
-    assert captured_categories["user_discussion"] == "Retail investors are mixed on ANZ."
+    assert result["status"] == "partial"
+    assert result["model_used"] == "ProsusAI/finbert"
     assert set(result["categories"]) == {
         "revenue",
         "strategy",
@@ -336,11 +559,53 @@ def test_sentiment_pipeline_combines_asx_and_reddit() -> None:
         "organisational",
         "user_discussion",
     }
-    assert result["categories"]["revenue"]["sentiment_label"] == "neutral"
+    assert result["categories"]["revenue"]["sentiment_label"] == "positive"
+    assert result["categories"]["revenue"]["available"] is True
+    assert result["categories"]["risk"]["sentiment_label"] is None
+    assert result["categories"]["risk"]["available"] is False
+    assert result["categories"]["user_discussion"]["sentiment_label"] == "neutral"
+    validated = CategorySentimentResponse.model_validate(result)
+    assert validated.status == "partial"
+    assert validated.categories["risk"].sentiment_label is None
+    analyse_categories.assert_not_called()
+
+
+def test_sentiment_route_reports_unavailable_without_stored_analysis() -> None:
+    from app.api.routes import category_sentiment
+
+    ticker_record = MagicMock(id="ticker-id", symbol="BHP")
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = ticker_record
+
+    with patch.object(category_sentiment, "_stored_sentiment_rows", return_value=[]):
+        result = category_sentiment.get_ticker_category_sentiments("bhp", db=db)
+
+    assert result["status"] == "unavailable"
+    assert result["model_used"] is None
+    assert all(not category["available"] for category in result["categories"].values())
+    assert all(category["sentiment_label"] is None for category in result["categories"].values())
+
+
+def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    from app.api.routes import category_sentiment
+    from app.schemas.category_sentiment import CategorySentimentRequest
+
+    with pytest.raises(HTTPException) as error:
+        category_sentiment.build_ticker_category_sentiment(
+            ticker="ANZ",
+            body=CategorySentimentRequest(categories={"revenue": "Revenue increased."}),
+            db=MagicMock(),
+        )
+
+    assert error.value.status_code == 503
+    assert "analysis pipeline" in error.value.detail
 
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:
-    """Gemini summary parsing should return the four fields the UI uses."""
+    """Gemini summary parsing should preserve text and clarity fields."""
     from app.services.gemini import parse_summary_response
 
     result = parse_summary_response(
@@ -349,7 +614,9 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
           "summary": "The company announced an updated dividend timetable.",
           "about": "The filing explains the dividend key dates.",
           "changed": "The payment date was confirmed.",
-          "matters": "Investors can use the dates to plan income expectations."
+          "matters": "Investors can use the dates to plan income expectations.",
+          "confirmed_facts": ["The payment date is 2 January 2040."],
+          "speculation": ["Investors may use the date to plan future income."]
         }
         """
     )
@@ -359,6 +626,8 @@ def test_gemini_summary_response_parser_accepts_strict_json() -> None:
         "about": "The filing explains the dividend key dates.",
         "changed": "The payment date was confirmed.",
         "matters": "Investors can use the dates to plan income expectations.",
+        "confirmed_facts": ["The payment date is 2 January 2040."],
+        "speculation": ["Investors may use the date to plan future income."],
     }
 
 
@@ -370,6 +639,27 @@ def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
 
     with pytest.raises(ValueError, match="missing keys"):
         parse_summary_response('{"summary": "Only one field"}')
+
+
+def test_gemini_summary_response_parser_rejects_non_list_clarity_fields() -> None:
+    """Clarity fields must remain structured so the UI can label each claim."""
+    import pytest
+
+    from app.services.gemini import parse_summary_response
+
+    with pytest.raises(ValueError, match="confirmed_facts.*list of strings"):
+        parse_summary_response(
+            """
+            {
+              "summary": "A summary.",
+              "about": "An announcement.",
+              "changed": "A change.",
+              "matters": "An impact.",
+              "confirmed_facts": "This should be a list.",
+              "speculation": []
+            }
+            """
+        )
 
 
 def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
@@ -401,6 +691,8 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
             "about": "The filing explains dividend timing.",
             "changed": "The payment date was confirmed.",
             "matters": "Investors can plan income timing.",
+            "confirmed_facts": ["The payment date is 2 January 2040."],
+            "speculation": ["The dividend may affect future income expectations."],
         },
     ), patch.object(
         gemini.artifact_summary_crud,
@@ -419,6 +711,12 @@ def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
     assert artifact.artifact_metadata["about"] == "The filing explains dividend timing."
     assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
     assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
+    assert artifact.artifact_metadata["confirmed_facts"] == [
+        "The payment date is 2 January 2040."
+    ]
+    assert artifact.artifact_metadata["speculation"] == [
+        "The dividend may affect future income expectations."
+    ]
     assert result["summary"] == "The company confirmed its dividend timetable."
     mock_upsert.assert_called_once()
 
@@ -465,3 +763,111 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         raw_text=artifact.raw_text,
     )
     summarise_announcement.assert_not_called()
+
+
+def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
+    """A later summary can replace old clarity classifications with empty lists."""
+    from app.api.routes.gemini import _summary_metadata
+
+    metadata = {
+        "category": "DividendAnnouncement",
+        "speculation": ["An outdated forecast."],
+    }
+    result = _summary_metadata(
+        metadata,
+        {
+            "summary": "A concise summary.",
+            "about": "",
+            "changed": "No material change identified.",
+            "matters": "The dates help investors plan.",
+            "confirmed_facts": ["The payment date was announced."],
+            "speculation": [],
+        },
+    )
+
+    assert result["confirmed_facts"] == ["The payment date was announced."]
+    assert result["speculation"] == []
+    assert metadata["speculation"] == ["An outdated forecast."]
+
+
+def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
+    """Ticker-wide backfills should revisit summaries created before clarity v2."""
+    from app.api.routes.gemini import _has_current_summary
+
+    assert not _has_current_summary({"about": "An existing legacy summary."})
+    assert _has_current_summary(
+        {
+            "about": "A current summary.",
+            "confirmed_facts": [],
+            "speculation": [],
+        }
+    )
+
+
+def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
+    """The overview contract should expose classified claims for the summary UI."""
+    from datetime import datetime, timezone
+
+    from app.api.routes import ticker as ticker_route
+
+    ticker = MagicMock()
+    ticker.id = "ticker-id"
+    ticker.symbol = "ANZ"
+    ticker.company_name = "ANZ Group Holdings Limited"
+    ticker.sector = "Financials"
+    ticker.industry = "Banks"
+    ticker.exchange = "ASX"
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "about": "ANZ published an update.",
+        "confirmed_facts": [
+            " Net profit was $1 billion. ",
+            "Net profit was $1 billion.",
+            None,
+        ],
+        "speculation": ["Management expects costs to fall."],
+    }
+    artifact.raw_text = "ANZ published an update."
+    artifact.source_type = "asx_announcement"
+    artifact.title = "ANZ update"
+    artifact.url = "https://example.test/anz-update"
+    artifact.published_at = datetime(2040, 1, 2, tzinfo=timezone.utc)
+    artifact.created_at = artifact.published_at
+
+    with patch.object(ticker_route, "_ensure_default_tickers"), patch.object(
+        ticker_route.crud,
+        "get_ticker_by_symbol",
+        return_value=ticker,
+    ), patch.object(
+        ticker_route,
+        "_ticker_artifacts",
+        return_value=[artifact],
+    ), patch.object(
+        ticker_route,
+        "_latest_sentiment_for_ticker",
+        return_value=None,
+    ), patch.object(ticker_route, "_live_quote", return_value=None):
+        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+
+    assert result["clarity"] == {
+        "is_classified": True,
+        "confirmed_facts": ["Net profit was $1 billion."],
+        "speculation": ["Management expects costs to fall."],
+    }
+
+
+def test_clarity_contract_marks_legacy_metadata_as_unclassified() -> None:
+    """Older artifacts must not be presented as verified without classification."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": "A malformed legacy value.",
+    }
+
+    assert _clarity_for_artifact(artifact) == {
+        "is_classified": False,
+        "confirmed_facts": [],
+        "speculation": [],
+    }

@@ -61,20 +61,11 @@ class SecurityNotification(ReportCategory):
 
     name = "SecurityNotification"
 
-    _TITLE_KEYWORDS = [
-        "notification regarding",
-        "unquoted securities",
-        "cessation of securities",
-        "corporations act",
-        "subsection 259c",
-    ]
-    _TEXT_KEYWORDS = ["unquoted", "cessation", "notification"]
-
     @classmethod
     def extract(cls, title: str, text: str, client=None) -> dict:
         if "Appendix 3H" in text:
             return _extract_3h(text)
         if "Appendix 3G" in text:
             return _extract_3g(text)
-        # Corporations Act 259C or other administrative notices — no structured extraction
+        # Corporations Act 259C and other notices have no structured extraction.
         return {}

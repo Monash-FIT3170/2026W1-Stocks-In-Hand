@@ -6,10 +6,18 @@ import logging
 import os
 import re
 import time
-from urllib.parse import unquote_plus
+from pathlib import PurePosixPath
+from urllib.parse import unquote_plus, urlparse
 from uuid import UUID
 
 import boto3
+from app.messages import PublicDiscussionAnalysisMessage
+from parsing.analysis import (
+    AnalysisOutput,
+    analyse_document,
+    analyse_public_discussion_text,
+)
+from pydantic import ValidationError
 
 from lambdas.common import (
     PermanentDocumentError,
@@ -23,7 +31,7 @@ from lambdas.download_validation import (
     DocumentFormat,
     validate_document_content,
 )
-from parsing.analysis import AnalysisOutput, analyse_document
+from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
 SUPPORTED_TICKERS = frozenset({"ANZ", "BHP", "CBA", "CSL", "WES"})
@@ -40,6 +48,41 @@ OBJECT_KEY = re.compile(
     r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
     re.IGNORECASE,
 )
+
+
+def _artifact_filename(artifact) -> str | None:
+    metadata = getattr(artifact, "artifact_metadata", None)
+    if isinstance(metadata, dict):
+        filename = metadata.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            return filename.strip()
+    for attribute in ("document_url", "url"):
+        value = getattr(artifact, attribute, None)
+        if isinstance(value, str) and value:
+            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
+            if filename:
+                return filename
+    return None
+
+
+def parse_public_discussion_message(
+    record: dict,
+) -> PublicDiscussionAnalysisMessage | None:
+    try:
+        body = json.loads(record["body"])
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(body, dict) or body.get("message_type") != (
+        "public_discussion_analysis"
+    ):
+        return None
+    try:
+        return PublicDiscussionAnalysisMessage.model_validate(body)
+    except ValidationError as exc:
+        raise PermanentDocumentError(
+            "Public discussion analysis message does not match schema version 1",
+            code="invalid_message",
+        ) from exc
 
 
 def parse_s3_notifications(
@@ -132,6 +175,9 @@ def _artifact_state(
             "s3_bucket": artifact.s3_bucket,
             "s3_key": artifact.s3_key,
             "checksum": artifact.checksum_sha256,
+            "source_type": getattr(artifact, "source_type", None),
+            "source_adapter": getattr(artifact, "source_adapter", None),
+            "filename": _artifact_filename(artifact),
         }
 
     if state["download_status"] == "stored":
@@ -292,6 +338,120 @@ def _mark_failed(artifact_id: UUID, error: str) -> None:
         raise
 
 
+def _mark_public_discussion_failed(artifact_id: UUID, error: str) -> None:
+    try:
+        with database_session() as db:
+            from app.crud.scrape_run import mark_inline_artifact_analysis_failed
+
+            mark_inline_artifact_analysis_failed(db, artifact_id, error=error)
+    except Exception:
+        log_event(
+            stage=STAGE,
+            event="state_update_failed",
+            level=logging.ERROR,
+            artifact_id=artifact_id,
+            error_code="database_error",
+        )
+        raise
+
+
+def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
+    with database_session() as db:
+        from app.crud.artifact import get_artifact
+        from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
+
+        artifact = get_artifact(db, artifact_id)
+        if artifact is None:
+            raise PermanentDocumentError(
+                "Artifact does not exist",
+                code="artifact_not_found",
+            )
+        source_type = str(artifact.source_type or "").lower()
+        if source_type not in PUBLIC_DISCUSSION_SOURCE_TYPES:
+            raise PermanentDocumentError(
+                "Artifact is not a supported public discussion source",
+                code="artifact_identity_mismatch",
+            )
+        title = (artifact.title or "").strip()
+        raw_text = (artifact.raw_text or "").strip()
+        if not title and not raw_text:
+            raise PermanentDocumentError(
+                "Public discussion artifact has no stored text",
+                code="no_extractable_text",
+            )
+        return {
+            "completed": artifact.analysis_status == "completed",
+            "run_id": artifact.scrape_run_id,
+            "title": title or "Untitled public discussion",
+            "raw_text": raw_text,
+            "source_type": source_type,
+        }
+
+
+def _analyse_public_discussion_artifact(
+    *,
+    artifact_id: UUID,
+    correlation: str,
+    attempt: int,
+) -> None:
+    started_at = time.monotonic()
+    state = _public_discussion_artifact_state(artifact_id)
+    if state["completed"]:
+        log_event(
+            stage=STAGE,
+            event="duplicate_skipped",
+            started_at=started_at,
+            correlation_id=correlation,
+            run_id=state["run_id"],
+            artifact_id=artifact_id,
+            attempt=attempt,
+        )
+        return
+
+    with database_session() as db:
+        from app.crud.scrape_run import mark_inline_artifact_analysis_started
+
+        mark_inline_artifact_analysis_started(db, artifact_id)
+
+    output = analyse_public_discussion_text(
+        title=state["title"],
+        raw_text=state["raw_text"],
+        source_type=state["source_type"],
+    )
+
+    with database_session() as db:
+        from app.crud.artifact import store_artifact_analysis
+
+        store_artifact_analysis(
+            db,
+            artifact_id=artifact_id,
+            raw_text=output.parsed.raw_text,
+            metadata={
+                "category": "user_discussion",
+                "category_confidence": 1.0,
+            },
+            summary=_summary_values(output),
+            sentiment=_sentiment_values(output),
+        )
+
+    with database_session() as db:
+        from app.crud.scrape_run import mark_inline_artifact_analysis_completed
+
+        mark_inline_artifact_analysis_completed(db, artifact_id)
+
+    log_event(
+        stage=STAGE,
+        event="completed",
+        started_at=started_at,
+        correlation_id=correlation,
+        run_id=state["run_id"],
+        artifact_id=artifact_id,
+        attempt=attempt,
+        category="USER_DISCUSSION",
+        source_type=state["source_type"],
+    )
+
+
 def _analyse_object(
     *,
     s3,
@@ -344,6 +504,21 @@ def _analyse_object(
         max_pages=int(os.getenv("MAX_PDF_PAGES", "100")),
         document_format=document_format,
         max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
+        filename=state.get("filename") or key.rsplit("/", 1)[-1],
+        source_type=state.get("source_type"),
+        source_adapter=state.get("source_adapter"),
+    )
+    if output.parsed.classification is None:
+        raise RuntimeError("Analysis output is missing structured classification")
+    analysis_metadata = merge_classification_metadata(
+        {}, output.parsed.classification
+    )
+    analysis_metadata.update(
+        {
+            "extracted_data": output.parsed.extracted_data,
+            "page_count": output.parsed.page_count,
+            "document_format": document_format,
+        }
     )
 
     with database_session() as db:
@@ -353,13 +528,7 @@ def _analyse_object(
             db,
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
-            metadata={
-                "category": output.parsed.category,
-                "category_confidence": output.parsed.category_confidence,
-                "extracted_data": output.parsed.extracted_data,
-                "page_count": output.parsed.page_count,
-                "document_format": document_format,
-            },
+            metadata=analysis_metadata,
             summary=_summary_values(output),
             sentiment=_sentiment_values(output),
         )
@@ -379,6 +548,11 @@ def _analyse_object(
         attempt=attempt,
         page_count=output.parsed.page_count,
         category=output.parsed.category,
+        classification_status=output.parsed.classification.status,
+        primary_category=output.parsed.classification.primary_category,
+        classification_score=output.parsed.classification.score,
+        classifier_version=output.parsed.classification.classifier_version,
+        source_adapter=state.get("source_adapter"),
     )
 
 
@@ -386,8 +560,18 @@ def _handle_record(record: dict) -> None:
     correlation = correlation_id(record)
     attempt = receive_attempt(record)
     artifact_id: UUID | None = None
+    public_discussion_message: PublicDiscussionAnalysisMessage | None = None
     started_at = time.monotonic()
     try:
+        public_discussion_message = parse_public_discussion_message(record)
+        if public_discussion_message is not None:
+            artifact_id = public_discussion_message.artifact_id
+            _analyse_public_discussion_artifact(
+                artifact_id=artifact_id,
+                correlation=correlation,
+                attempt=attempt,
+            )
+            return
         notifications = parse_s3_notifications(record)
         s3 = boto3.client("s3")
         expected_bucket = os.environ["RAW_DOCUMENT_BUCKET"]
@@ -415,7 +599,10 @@ def _handle_record(record: dict) -> None:
             "unexpected_bucket",
         }
         if artifact_id is not None and exc.code not in untrusted_event_errors:
-            _mark_failed(artifact_id, f"{exc.code}: {exc}")
+            if public_discussion_message is not None:
+                _mark_public_discussion_failed(artifact_id, f"{exc.code}: {exc}")
+            else:
+                _mark_failed(artifact_id, f"{exc.code}: {exc}")
         log_event(
             stage=STAGE,
             event="permanent_failure",
@@ -428,7 +615,13 @@ def _handle_record(record: dict) -> None:
         )
     except Exception as exc:
         if artifact_id is not None:
-            _mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
+            if public_discussion_message is not None:
+                _mark_public_discussion_failed(
+                    artifact_id,
+                    f"{type(exc).__name__}: {exc}",
+                )
+            else:
+                _mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
         log_event(
             stage=STAGE,
             event="retryable_failure",

@@ -3,12 +3,6 @@
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-
 from app.api.deps import require_admin_investor
 from app.api.routes import (
     announcement,
@@ -16,11 +10,15 @@ from app.api.routes import (
     artifact_sentiment,
     artifact_summary,
     auth,
+    blog,
+    bluesky,
     category_sentiment,
     gemini,
     information_platform,
     investor,
+    mastodon,
     news,
+    public_discussion,
     reddit,
     scrape_run,
     ticker,
@@ -29,13 +27,17 @@ from app.api.routes import (
 )
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
-from app.database.connection import SessionLocal, get_db
+from app.database.connection import get_db
 from app.messages import QueueAMessage
 from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
 from app.services import scrape_queue
 from app.sources import source_for_ticker
-
+from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 app = FastAPI(title="StonksInHand API")
 app.add_middleware(
@@ -60,7 +62,11 @@ for route_module in (
     information_platform,
     auth,
     news,
+    blog,
     reddit,
+    bluesky,
+    mastodon,
+    public_discussion,
     gemini,
     category_sentiment,
     announcement,

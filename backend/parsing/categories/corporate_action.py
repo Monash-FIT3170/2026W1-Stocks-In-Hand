@@ -8,12 +8,6 @@ class CorporateAction(ReportCategory):
 
     name = "CorporateAction"
 
-    _TITLE_KEYWORDS = [
-        "acquire", "acquisition", "merger", "joint venture",
-        "divestment", "divest",
-    ]
-    _TEXT_KEYWORDS = ["acquire", "merger", "acquisition", "strategic", "transaction"]
-
     @classmethod
     def extract(cls, title: str, text: str, client=None) -> dict:
         return {}

@@ -11,6 +11,14 @@ on:
         options:
           - "false"
           - "true"
+      enable_public_discussion_schedule:
+        description: Enable bounded weekday public discussion collection
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
       enable_analysis:
         description: Allow Queue C to start analysis work
         required: true
@@ -31,6 +39,16 @@ on:
         description: Comma-separated tickers for the weekly schedule
         required: true
         default: "ANZ,BHP,CBA,CSL,WES"
+        type: string
+      scheduled_public_discussion_sources:
+        description: Comma-separated public sources to collect
+        required: true
+        default: "bluesky,mastodon"
+        type: string
+      public_discussion_per_source_limit:
+        description: Maximum items collected from each public source
+        required: true
+        default: "10"
         type: string
 
 permissions:
@@ -170,6 +188,7 @@ jobs:
             --role-arn "$CFN_ROLE_ARN" \
             --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -181,9 +200,12 @@ jobs:
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
               "ScheduleEnabled=${{ inputs.enable_schedule }}" \
+              "PublicDiscussionScheduleEnabled=${{ inputs.enable_public_discussion_schedule }}" \
               "AnalysisEnabled=${{ inputs.enable_analysis }}" \
               "BedrockEnabled=${{ inputs.enable_bedrock }}" \
               "ScheduledTickers=${{ inputs.scheduled_tickers }}" \
+              "ScheduledPublicDiscussionSources=${{ inputs.scheduled_public_discussion_sources }}" \
+              "PublicDiscussionPerSourceLimit=${{ inputs.public_discussion_per_source_limit }}" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
               "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA" \

@@ -13,7 +13,7 @@ from app.services import gemini as gemini_service
 router = APIRouter(prefix="/gemini", tags=["gemini"])
 
 
-def _summary_text(title: str, summary: dict[str, str]) -> str:
+def _summary_text(title: str, summary: dict[str, object]) -> str:
     parts = [
         summary.get("summary"),
         summary.get("about"),
@@ -27,7 +27,7 @@ def _summary_text(title: str, summary: dict[str, str]) -> str:
 def _generate_artifact_summary(
     artifact: Artifact,
     metadata: dict,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, object], str]:
     if artifact.source_type == "news" or artifact.artifact_type == "news_article":
         return (
             gemini_service.summarise_news_article(
@@ -52,6 +52,31 @@ def _generate_artifact_summary(
             raw_text=artifact.raw_text,
         ),
         gemini_service.SUMMARY_PROMPT_VERSION,
+    )
+
+
+def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
+    """Merge generated summary fields into JSON metadata without mutating input."""
+    next_metadata = dict(metadata)
+
+    for key in gemini_service.SUMMARY_TEXT_KEYS:
+        value = summary.get(key)
+        if isinstance(value, str) and value.strip():
+            next_metadata[key] = value.strip()
+
+    for key in gemini_service.SUMMARY_LIST_KEYS:
+        if key in summary:
+            value = summary.get(key)
+            next_metadata[key] = list(value) if isinstance(value, list) else []
+
+    return next_metadata
+
+
+def _has_current_summary(metadata: dict) -> bool:
+    """Return whether metadata includes both summary copy and clarity lists."""
+    return bool(metadata.get("about")) and all(
+        isinstance(metadata.get(key), list)
+        for key in gemini_service.SUMMARY_LIST_KEYS
     )
 
 
@@ -129,7 +154,7 @@ def summarise_ticker_artifacts(
 
     for artifact in artifacts:
         metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        if metadata.get("about"):
+        if _has_current_summary(metadata):
             skipped += 1
             continue
 
@@ -139,12 +164,7 @@ def summarise_ticker_artifacts(
             errors.append({"artifact_id": str(artifact.id), "error": str(exc)})
             continue
 
-        next_metadata = dict(metadata)
-        for key in ("summary", "about", "changed", "matters"):
-            value = summary.get(key)
-            if value:
-                next_metadata[key] = value
-        artifact.artifact_metadata = next_metadata
+        artifact.artifact_metadata = _summary_metadata(metadata, summary)
 
         artifact_summary_crud.upsert_artifact_summary(
             db,
@@ -184,12 +204,7 @@ def summarise_artifact(
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Groq summary request failed") from exc
 
-    next_metadata = dict(metadata)
-    for key in ("summary", "about", "changed", "matters"):
-        value = summary.get(key)
-        if value:
-            next_metadata[key] = value
-    artifact.artifact_metadata = next_metadata
+    artifact.artifact_metadata = _summary_metadata(metadata, summary)
 
     db_summary = artifact_summary_crud.upsert_artifact_summary(
         db,

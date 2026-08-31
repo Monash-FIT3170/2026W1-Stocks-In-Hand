@@ -7,7 +7,7 @@ from .corporate_action import CorporateAction
 from .leadership_change import LeadershipChange
 from .transcript import ExecutiveTranscript
 
-# Order matters: more specific categories are evaluated before broader ones.
+# Compatibility extractor classes. Classification order is owned by the rules engine.
 CATEGORIES: list[type[ReportCategory]] = [
     QuarterlyTradingUpdate,
     HalfYearResults,

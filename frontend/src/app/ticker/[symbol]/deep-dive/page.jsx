@@ -1,23 +1,19 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { AppFrame } from "../../../components/layout/AppFrame"
-import { BriefAside } from "../../../components/ticker/BriefAside"
-import { BriefTabs } from "../../../components/ticker/BriefTabs"
 import { DeepDiveTimeline } from "../../../components/ticker/DeepDiveTimeline"
-import { TickerHeader } from "../../../components/ticker/TickerHeader"
-import { fetchTickerBriefAside, fetchTickerDeepDive, fetchTickerOverview } from "../../../lib/api"
+import { useTickerBrief } from "../../../components/ticker/TickerBriefShell"
+import { fetchTickerDeepDive } from "../../../lib/api"
 import styles from "../../../page.module.css"
 
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
 // Timeline entries come from DB-backed ticker artifacts.
-export default function TickerDeepDiveRoute({ params }) {
-  const symbol = params.symbol.toUpperCase()
+export default function TickerDeepDiveRoute() {
+  const { symbol } = useTickerBrief()
+  const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState({
-    aside: null,
-    error: false,
+    error: "",
     isLoading: true,
-    overview: null,
     timeline: [],
   })
 
@@ -26,17 +22,13 @@ export default function TickerDeepDiveRoute({ params }) {
 
     async function loadDeepDive() {
       try {
-        const [timeline, overview, aside] = await Promise.all([
-          fetchTickerDeepDive(symbol),
-          fetchTickerOverview(symbol),
-          fetchTickerBriefAside(symbol),
-        ])
+        const timeline = await fetchTickerDeepDive(symbol)
         if (!cancelled) {
-          setState({ aside, error: false, isLoading: false, overview, timeline })
+          setState({ error: "", isLoading: false, timeline })
         }
       } catch {
         if (!cancelled) {
-          setState({ aside: null, error: true, isLoading: false, overview: null, timeline: [] })
+          setState({ error: "The deep-dive timeline is unavailable right now. Check your connection and try again.", isLoading: false, timeline: [] })
         }
       }
     }
@@ -45,45 +37,32 @@ export default function TickerDeepDiveRoute({ params }) {
     return () => {
       cancelled = true
     }
-  }, [symbol])
+  }, [attempt, symbol])
 
   if (state.isLoading) {
     return (
-      <AppFrame active="home">
-        <section className={styles.contentPage}>
-          <div className={styles.emptyCard}><h3>Loading {symbol} deep dive...</h3></div>
-        </section>
-      </AppFrame>
+      <div className={styles.contentSkeleton} aria-live="polite">Loading {symbol} deep dive…</div>
     )
   }
 
   if (state.error) {
     return (
-      <AppFrame active="home">
-        <section className={styles.contentPage}>
-          <div className={styles.emptyCard}>
-            <h3>{symbol} not found</h3>
-            <p>This ticker is not in the database yet. It will appear once the data pipeline has run.</p>
-          </div>
-        </section>
-      </AppFrame>
+      <div className={styles.emptyCard} role="alert">
+        <h2>Deep dive could not be loaded</h2>
+        <p>{state.error}</p>
+        <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
+      </div>
     )
   }
 
-  const { timeline, overview, aside } = state
+  const { timeline } = state
 
   return (
-    <AppFrame active="home">
-      <section className={styles.contentPage}>
-        <div className={styles.briefShell}>
-          <div className={styles.briefMain}>
-            <TickerHeader data={overview} />
-            <BriefTabs active="deep" symbol={symbol} />
-            <DeepDiveTimeline timeline={timeline} />
-          </div>
-          <BriefAside data={aside} />
-        </div>
-      </section>
-    </AppFrame>
+    timeline.length > 0 ? <DeepDiveTimeline timeline={timeline} /> : (
+      <div className={styles.emptyCard}>
+        <h2>No deep-dive timeline yet</h2>
+        <p>The analysis pipeline has not stored enough source material for {symbol}.</p>
+      </div>
+    )
   )
 }

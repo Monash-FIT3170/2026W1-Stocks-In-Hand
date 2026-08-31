@@ -21,6 +21,13 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
+  PublicDiscussionScheduleEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Enable bounded weekday public discussion collection.
   AnalysisEnabled:
     Type: String
     Default: "true"
@@ -38,6 +45,15 @@ Parameters:
   ScheduledTickers:
     Type: String
     Default: ANZ,BHP,CBA,CSL,WES
+  ScheduledPublicDiscussionSources:
+    Type: String
+    Default: bluesky,mastodon
+    Description: Comma-separated subset of reddit, bluesky, mastodon, and blog.
+  PublicDiscussionPerSourceLimit:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 25
   ApiImageUri:
     Type: String
   ScraperImageUri:
@@ -66,6 +82,7 @@ Parameters:
 
 Conditions:
   IsScheduleEnabled: !Equals [!Ref ScheduleEnabled, "true"]
+  IsPublicDiscussionScheduleEnabled: !Equals [!Ref PublicDiscussionScheduleEnabled, "true"]
   IsAnalysisEnabled: !Equals [!Ref AnalysisEnabled, "true"]
   IsBedrockEnabled: !Equals [!Ref BedrockEnabled, "true"]
   HasCustomDomain: !Not [!Equals [!Ref SiteDomainName, ""]]
@@ -237,6 +254,79 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # The Cognito foundation was provisioned ahead of the reviewed application
+  # cutover. Keep these stable logical IDs in legacy releases so CloudFormation
+  # cannot orphan the retained pool or delete its public app client.
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub stocks-in-hand-${Environment}-users
+      UserPoolTags:
+        Project: StocksInHand
+        Environment: !Ref Environment
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      DeletionProtection: ACTIVE
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ClientName: !Sub stocks-in-hand-${Environment}-web
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 7
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      ReadAttributes:
+        - email
+        - email_verified
+        - name
+      WriteAttributes:
+        - email
+        - name
+
   ServerlessHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -263,7 +353,11 @@ Resources:
         Variables:
           DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
           GROQ_API_KEY_PARAMETER: !Sub ${ParameterPathPrefix}/groq-api-key
+          REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
+          REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
+          PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
           DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue
+          ANALYSIS_QUEUE_URL: !Ref AnalysisQueue
           SUPPORTED_TICKERS: ANZ,BHP,CBA,CSL,WES
           SESSION_COOKIE_SECURE: "true"
           SESSION_COOKIE_SAMESITE: lax
@@ -287,6 +381,10 @@ Resources:
               Effect: Allow
               Action: sqs:SendMessage
               Resource: !GetAtt DiscoveryQueue.Arn
+            - Sid: EnqueuePublicDiscussionAnalysis
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt AnalysisQueue.Arn
       Events:
         ApiRoot:
           Type: HttpApi
@@ -502,6 +600,49 @@ Resources:
               Action: sqs:SendMessage
               Resource: !GetAtt DiscoveryQueue.Arn
 
+  PublicDiscussionSchedulerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub stocks-in-hand-${Environment}-public-discussion-scheduler
+      AutoPublishAlias: live
+      PackageType: Image
+      ImageUri: !Ref ApiImageUri
+      ImageConfig:
+        Command:
+          - lambdas.public_discussion_schedule.handler
+      Architectures:
+        - x86_64
+      MemorySize: 1024
+      Timeout: 180
+      Environment:
+        Variables:
+          DATABASE_URL_PARAMETER: !Sub ${ParameterPathPrefix}/database-url
+          REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
+          REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
+          PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
+          ANALYSIS_QUEUE_URL: !Ref AnalysisQueue
+          SCHEDULED_PUBLIC_DISCUSSION_SOURCES: !Ref ScheduledPublicDiscussionSources
+          PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: !Ref PublicDiscussionPerSourceLimit
+          PUBLIC_DISCUSSION_SEARCH_QUERY: ASX
+      Policies:
+        - Statement:
+            - Sid: ReadRuntimeParameters
+              Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/*
+            - Sid: DecryptRuntimeParameters
+              Effect: Allow
+              Action: kms:Decrypt
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+            - Sid: EnqueuePublicDiscussionAnalysis
+              Effect: Allow
+              Action: sqs:SendMessage
+              Resource: !GetAtt AnalysisQueue.Arn
+
   SchedulerInvokeRole:
     Type: AWS::IAM::Role
     Properties:
@@ -519,7 +660,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: lambda:InvokeFunction
-                Resource: !GetAtt SchedulerFunction.Arn
+                Resource:
+                  - !GetAtt SchedulerFunction.Arn
+                  - !GetAtt PublicDiscussionSchedulerFunction.Arn
 
   WeeklyScrapeSchedule:
     Type: AWS::Scheduler::Schedule
@@ -534,6 +677,24 @@ Resources:
       Target:
         Arn: !GetAtt SchedulerFunction.Arn
         Input: '{"source":"weekly"}'
+        RetryPolicy:
+          MaximumEventAgeInSeconds: 3600
+          MaximumRetryAttempts: 2
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+
+  WeekdayPublicDiscussionSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Bounded weekday collection from enabled public sources.
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      Name: !Sub stocks-in-hand-${Environment}-public-discussion-weekday
+      ScheduleExpression: cron(0 10 ? * MON-FRI *)
+      ScheduleExpressionTimezone: Australia/Melbourne
+      State: !If [IsPublicDiscussionScheduleEnabled, ENABLED, DISABLED]
+      Target:
+        Arn: !GetAtt PublicDiscussionSchedulerFunction.Arn
+        Input: '{"source":"weekday-public-discussion"}'
         RetryPolicy:
           MaximumEventAgeInSeconds: 3600
           MaximumRetryAttempts: 2
@@ -567,6 +728,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-scheduler
+      RetentionInDays: 7
+
+  PublicDiscussionSchedulerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/stocks-in-hand-${Environment}-public-discussion-scheduler
       RetentionInDays: 7
 
   DiscoveryDlqAlarm:
@@ -643,17 +810,56 @@ Resources:
         function handler(event) {
           var request = event.request;
           var uri = request.uri;
-          if (uri.endsWith('/')) {
-            request.uri += 'index.html';
-          } else if (!uri.split('/').pop().includes('.')) {
-            request.uri += '/index.html';
+          if (uri.indexOf('/api/') === 0 || uri.split('/').pop().includes('.')) {
+            return request;
           }
+
+          var route = uri.replace(/\/+$/, '') || '/';
+          var staticRoutes = {
+            '/': true,
+            '/about': true,
+            '/announcements': true,
+            '/data-sources': true,
+            '/search': true,
+            '/sign-in': true,
+            '/sign-out': true,
+            '/sign-up': true,
+            '/terms': true,
+            '/watchlist': true
+          };
+          var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|CSL|WES)(\/(news|deep-dive))?$/;
+
+          if (!staticRoutes[route] && !tickerRoute.test(route)) {
+            request.uri = '/404.html';
+            request.headers['x-stonks-not-found'] = { value: '1' };
+            return request;
+          }
+
+          request.uri = route === '/' ? '/index.html' : route + '/index.html';
           return request;
         }
       FunctionConfig:
         Comment: Rewrite static Next.js routes to generated index files.
         Runtime: cloudfront-js-2.0
       Name: !Sub stocks-in-hand-${Environment}-routes
+
+  FrontendResponseFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      AutoPublish: true
+      FunctionCode: |
+        function handler(event) {
+          var response = event.response;
+          if (event.request.headers['x-stonks-not-found']) {
+            response.statusCode = 404;
+            response.statusDescription = 'Not Found';
+          }
+          return response;
+        }
+      FunctionConfig:
+        Comment: Return a correct 404 status for the exported not-found page.
+        Runtime: cloudfront-js-2.0
+      Name: !Sub stocks-in-hand-${Environment}-responses
 
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
@@ -673,6 +879,8 @@ Resources:
           FunctionAssociations:
             - EventType: viewer-request
               FunctionARN: !GetAtt FrontendRouteFunction.FunctionARN
+            - EventType: viewer-response
+              FunctionARN: !GetAtt FrontendResponseFunction.FunctionARN
           TargetOriginId: frontend-s3
           ViewerProtocolPolicy: redirect-to-https
         CacheBehaviors:
@@ -783,6 +991,10 @@ Outputs:
   SiteUrl:
     Condition: HasCustomDomain
     Value: !Sub https://${SiteDomainName}
+  CognitoUserPoolId:
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Value: !Ref CognitoUserPoolClient
   RawDocumentBucketName:
     Value: !Ref RawDocumentBucket
   DiscoveryQueueUrl:
@@ -799,3 +1011,5 @@ Outputs:
     Value: !Ref AnalysisDeadLetterQueue
   WeeklyScheduleName:
     Value: !Ref WeeklyScrapeSchedule
+  PublicDiscussionScheduleName:
+    Value: !Ref WeekdayPublicDiscussionSchedule

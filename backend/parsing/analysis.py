@@ -11,12 +11,17 @@ from typing import Any
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
+from lambdas.common import PermanentDocumentError
+from lambdas.download_validation import DocumentFormat
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
 
-from lambdas.common import PermanentDocumentError
-from lambdas.download_validation import DocumentFormat
-from parsing.classifier import classify
+from parsing.classification import (
+    ClassificationInput,
+    ClassificationResult,
+    classify_document,
+)
+from parsing.extractors import extractor_for
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,7 @@ class ParsedDocument:
     category: str
     category_confidence: float
     extracted_data: dict[str, Any]
+    classification: ClassificationResult | None = None
 
 
 @dataclass(frozen=True)
@@ -314,15 +320,36 @@ def extract_document(
     )
 
 
-def apply_rules(parsed: ParsedDocument, *, title: str) -> ParsedDocument:
-    category, confidence, _ = classify(title, parsed.raw_text)
-    extracted_data = category.extract(title, parsed.raw_text) if category else {}
+def apply_rules(
+    parsed: ParsedDocument,
+    *,
+    title: str,
+    filename: str | None = None,
+    source_type: str | None = None,
+    source_adapter: str | None = None,
+) -> ParsedDocument:
+    classification = classify_document(
+        ClassificationInput(
+            title=title,
+            text=parsed.raw_text,
+            filename=filename,
+            source_type=source_type,
+            source_adapter=source_adapter,
+        )
+    )
+    extractor = (
+        extractor_for(classification.primary_category)
+        if classification.status == "classified"
+        else None
+    )
+    extracted_data = extractor.extract(title, parsed.raw_text) if extractor else {}
     return ParsedDocument(
         raw_text=parsed.raw_text,
         page_count=parsed.page_count,
-        category=category.__name__ if category else "UNKNOWN",
-        category_confidence=confidence,
+        category=classification.compatibility_category,
+        category_confidence=classification.score,
         extracted_data=extracted_data,
+        classification=classification,
     )
 
 
@@ -333,6 +360,9 @@ def analyse_document(
     max_pages: int,
     document_format: DocumentFormat = "pdf",
     max_ocr_pages: int | None = None,
+    filename: str | None = None,
+    source_type: str | None = None,
+    source_adapter: str | None = None,
 ) -> AnalysisOutput:
     parsed = apply_rules(
         extract_document(
@@ -344,6 +374,9 @@ def analyse_document(
             else int(os.getenv("MAX_OCR_PAGES", "5")),
         ),
         title=title,
+        filename=filename,
+        source_type=source_type,
+        source_adapter=source_adapter,
     )
 
     # Sentiment is based on deterministic source text. A Groq response must not
@@ -374,6 +407,60 @@ def analyse_document(
 
     return AnalysisOutput(
         parsed=parsed,
+        summary=summary,
+        summary_model=summary_model,
+        summary_prompt_version=summary_prompt_version,
+        sentiment=sentiment,
+    )
+
+
+def analyse_public_discussion_text(
+    *,
+    title: str,
+    raw_text: str,
+    source_type: str,
+) -> AnalysisOutput:
+    """Analyse stored discussion text without treating it as a company filing."""
+    parsed = _text_document(raw_text or title)
+    from app.services import sentiment as sentiment_service
+
+    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
+    sentiment = sentiment_service.analyse_text(
+        f"{title}\n\n{parsed.raw_text}"[:max_chars]
+    )
+
+    from app.services import groq as groq_service
+
+    summary: dict[str, str] | None = None
+    summary_model: str | None = None
+    summary_prompt_version: str | None = None
+    try:
+        response = groq_service.summarise_public_discussion(
+            title=title,
+            source_type=source_type,
+            raw_text=parsed.raw_text,
+        )
+        summary = {
+            key: value
+            for key in ("summary", "about", "changed", "matters")
+            if isinstance((value := response.get(key)), str)
+        }
+        summary_model = groq_service.active_model_name()
+        summary_prompt_version = (
+            groq_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
+        )
+    except RuntimeError as exc:
+        if "not configured" not in str(exc).lower():
+            raise
+
+    return AnalysisOutput(
+        parsed=ParsedDocument(
+            raw_text=parsed.raw_text,
+            page_count=1,
+            category="USER_DISCUSSION",
+            category_confidence=1.0,
+            extracted_data={},
+        ),
         summary=summary,
         summary_model=summary_model,
         summary_prompt_version=summary_prompt_version,
