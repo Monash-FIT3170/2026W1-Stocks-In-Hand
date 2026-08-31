@@ -234,6 +234,10 @@ Resources:
                   - HasSpecificDnsHostedZone
                   - !Sub "arn:${AWS::Partition}:route53:::hostedzone/${DnsHostedZoneId}"
                   - "*"
+              - Sid: ReadDnsChangeStatus
+                Effect: Allow
+                Action: route53:GetChange
+                Resource: !Sub "arn:${AWS::Partition}:route53:::change/*"
               - Sid: UseServerlessTransform
                 Effect: Allow
                 Action: cloudformation:CreateChangeSet
