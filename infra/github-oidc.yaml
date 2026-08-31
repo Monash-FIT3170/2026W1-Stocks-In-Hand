@@ -20,9 +20,17 @@ Parameters:
     Type: String
     Default: ""
     Description: Required only when the account already has the GitHub OIDC provider.
+  DnsHostedZoneId:
+    Type: String
+    Default: "*"
+    Description: >-
+      Route 53 hosted zone ID created by infra/domain.yaml, once known.
+      Defaults to "*" (any zone) until you redeploy this stack with the real
+      ID to tighten the permission.
 
 Conditions:
   ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  HasSpecificDnsHostedZone: !Not [!Equals [!Ref DnsHostedZoneId, "*"]]
 
 Resources:
   GitHubOidcProvider:
@@ -216,6 +224,16 @@ Resources:
                   - cloudfront:UpdateFunction
                   - cloudfront:UpdateOriginAccessControl
                 Resource: "*"
+              - Sid: ManageApplicationDnsRecords
+                Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
+                  - route53:ListResourceRecordSets
+                Resource: !If
+                  - HasSpecificDnsHostedZone
+                  - !Sub "arn:${AWS::Partition}:route53:::hostedzone/${DnsHostedZoneId}"
+                  - "*"
               - Sid: UseServerlessTransform
                 Effect: Allow
                 Action: cloudformation:CreateChangeSet
