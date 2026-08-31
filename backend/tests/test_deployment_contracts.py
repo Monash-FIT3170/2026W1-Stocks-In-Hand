@@ -268,6 +268,20 @@ def test_github_oidc_can_check_brevo_parameter_metadata() -> None:
     )
 
 
+def test_cloudformation_role_can_poll_route53_dns_changes() -> None:
+    """CloudFormation must be able to confirm Route 53 record changes."""
+    template = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
+        encoding="utf-8"
+    )
+    statement = template.split("- Sid: ReadDnsChangeStatus", 1)[1].split(
+        "- Sid:", 1
+    )[0]
+
+    assert "Action: route53:GetChange" in statement
+    assert 'Resource: !Sub "arn:${AWS::Partition}:route53:::change/*"' in statement
+    assert "hostedzone/" not in statement
+
+
 def test_custom_domain_certificate_parameter_is_lint_constrained() -> None:
     """SAM lint must know that the optional certificate value is an ACM ARN."""
     template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
