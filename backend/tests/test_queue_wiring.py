@@ -152,11 +152,16 @@ def test_api_function_may_only_enqueue_to_discovery_and_analysis_queues() -> Non
     assert "DownloadQueue.Arn" not in block
 
 
-def test_scheduler_function_may_only_enqueue_to_discovery_queue() -> None:
+def test_scheduler_function_may_only_enqueue_to_discovery_and_analysis_queues() -> None:
     block = _resource("SchedulerFunction")
+    assert "DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue" in block
+    assert "ANALYSIS_QUEUE_URL: !Ref AnalysisQueue" in block
+    assert "Sid: EnqueueDiscovery" in block
+    assert "Sid: EnqueueStoredArtifactAnalysis" in block
     assert "Resource: !GetAtt DiscoveryQueue.Arn" in block
+    assert "Resource: !GetAtt AnalysisQueue.Arn" in block
     assert "DownloadQueue.Arn" not in block
-    assert "AnalysisQueue.Arn" not in block
+    assert "NotificationQueue.Arn" not in block
 
 
 def test_discovery_function_may_only_enqueue_to_download_queue() -> None:
@@ -169,12 +174,15 @@ def test_discovery_function_may_only_enqueue_to_download_queue() -> None:
 def test_worker_and_scheduler_queue_environment_variables_match_their_targets() -> None:
     expectations = {
         "DiscoveryFunction": ("DOWNLOAD_QUEUE_URL", "DownloadQueue"),
-        "SchedulerFunction": ("DISCOVERY_QUEUE_URL", "DiscoveryQueue"),
         "PublicDiscussionSchedulerFunction": ("ANALYSIS_QUEUE_URL", "AnalysisQueue"),
     }
     for function_id, (variable, queue_id) in expectations.items():
         block = _resource(function_id)
         assert f"{variable}: !Ref {queue_id}" in block, function_id
+
+    scheduler = _resource("SchedulerFunction")
+    assert "DISCOVERY_QUEUE_URL: !Ref DiscoveryQueue" in scheduler
+    assert "ANALYSIS_QUEUE_URL: !Ref AnalysisQueue" in scheduler
 
 
 def test_download_function_never_sends_directly_to_analysis_queue() -> None:

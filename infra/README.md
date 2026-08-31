@@ -119,6 +119,11 @@ run and 25 articles per ticker. `ScheduleEnabled` must also be `true` for this
 automatic collection to run. The API can still fetch Marketaux news on demand
 when Marketaux is enabled and the weekly schedule is disabled.
 
+Scheduled Marketaux records are stored first, then sent to the analysis queue.
+The analysis worker uses the news-specific Bedrock prompt and stores the four
+display fields before the announcements page reads them. A repeated bounded run
+also queues duplicate articles that were stored before this wiring existed.
+
 Reddit credentials and the blog feed allowlist are optional. Store them only
 when those sources are enabled:
 
@@ -396,6 +401,8 @@ PublicDiscussionPerSourceLimit=10
 Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
 the feed allowlist exists. Each EventBridge event has a stable idempotency key,
 the Lambda has reserved concurrency one, and at most five blog feeds run.
+Collected public posts are queued for analysis even when they discuss the ASX
+market generally and do not name one of the supported company tickers.
 
 ## 10. Configure GitHub Actions with OIDC
 

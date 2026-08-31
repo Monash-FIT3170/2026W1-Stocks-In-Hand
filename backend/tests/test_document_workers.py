@@ -35,6 +35,7 @@ from parsing import analysis as parsing_analysis
 from parsing.analysis import (
     AnalysisOutput,
     ParsedDocument,
+    analyse_news_text,
     analyse_public_discussion_text,
     extract_pdf,
 )
@@ -1089,6 +1090,51 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
     )
 
 
+def test_news_analysis_uses_source_text_and_news_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    analyse_sentiment = MagicMock(
+        return_value={
+            "sentiment_label": "positive",
+            "label": "bullish",
+            "confidence_score": 0.8,
+            "model_used": "test-finbert",
+        }
+    )
+    summarise = MagicMock(
+        return_value={
+            "summary": "BHP reported stronger copper production.",
+            "about": "The article covers BHP production.",
+            "changed": "Reported copper production increased.",
+            "matters": "Higher output may affect revenue expectations.",
+        }
+    )
+    monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
+    monkeypatch.setattr("app.services.llm.summarise_news_article", summarise)
+    monkeypatch.setattr(
+        "app.services.llm.active_model_name",
+        lambda: "bedrock:test-model",
+    )
+
+    output = analyse_news_text(
+        title="BHP production update",
+        raw_text="BHP reported stronger copper production.",
+        source_name="Publisher",
+    )
+
+    assert output.parsed.category == "NEWS_ARTICLE"
+    assert output.sentiment["sentiment_label"] == "positive"
+    assert output.summary_model == "bedrock:test-model"
+    analyse_sentiment.assert_called_once_with(
+        "BHP production update\n\nBHP reported stronger copper production."
+    )
+    summarise.assert_called_once_with(
+        title="BHP production update",
+        source_name="Publisher",
+        raw_text="BHP reported stronger copper production.",
+    )
+
+
 def test_analysis_worker_persists_public_discussion_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1162,6 +1208,84 @@ def test_analysis_worker_persists_public_discussion_results(
     assert calls["started"] is True
     assert calls["stored"]["metadata"]["category"] == "user_discussion"
     assert calls["stored"]["sentiment"]["sentiment_label"] == "neutral"
+    assert calls["completed"] is True
+
+
+def test_analysis_worker_persists_news_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_id = uuid4()
+    output = AnalysisOutput(
+        parsed=ParsedDocument(
+            raw_text="BHP reported stronger copper production.",
+            page_count=1,
+            category="NEWS_ARTICLE",
+            category_confidence=1.0,
+            extracted_data={},
+        ),
+        summary={
+            "summary": "BHP reported stronger copper production.",
+            "about": "The article covers BHP production.",
+            "changed": "Reported copper production increased.",
+            "matters": "Higher output may affect revenue expectations.",
+        },
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-news-summary-v2",
+        sentiment={
+            "sentiment_label": "positive",
+            "label": "bullish",
+            "confidence_score": 0.8,
+            "model_used": "test-finbert",
+        },
+    )
+    calls: dict[str, object] = {}
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    monkeypatch.setattr(
+        analysis,
+        "_public_discussion_artifact_state",
+        lambda _artifact_id: {
+            "completed": False,
+            "run_id": None,
+            "title": "BHP production update",
+            "raw_text": "BHP reported stronger copper production.",
+            "source_type": "news",
+            "source_name": "Publisher",
+        },
+    )
+    monkeypatch.setattr(
+        analysis,
+        "analyse_news_text",
+        lambda **_kwargs: output,
+    )
+    monkeypatch.setattr(analysis, "database_session", fake_session)
+    monkeypatch.setattr(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
+        lambda *_args, **_kwargs: calls.setdefault("started", True),
+    )
+    monkeypatch.setattr(
+        "app.crud.artifact.store_artifact_analysis",
+        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
+    )
+    monkeypatch.setattr(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
+        lambda *_args, **_kwargs: calls.setdefault("completed", True),
+    )
+
+    analysis._analyse_public_discussion_artifact(
+        artifact_id=artifact_id,
+        correlation="message-1",
+        attempt=1,
+    )
+
+    assert calls["started"] is True
+    assert calls["stored"]["metadata"]["category"] == "news_article"
+    assert calls["stored"]["summary"]["changed"] == (
+        "Reported copper production increased."
+    )
     assert calls["completed"] is True
 
 

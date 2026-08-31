@@ -470,6 +470,9 @@ def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
         assert "${ParameterPathPrefix}/marketaux-api-token" in function
     assert "MARKETAUX_ENABLED: !Ref MarketauxEnabled" in scheduler_function
     assert "MARKETAUX_PER_TICKER_LIMIT: !Ref MarketauxPerTickerLimit" in scheduler_function
+    assert "ANALYSIS_QUEUE_URL: !Ref AnalysisQueue" in scheduler_function
+    assert "Sid: EnqueueStoredArtifactAnalysis" in scheduler_function
+    assert "Resource: !GetAtt AnalysisQueue.Arn" in scheduler_function
 
     assert "enable_marketaux:" in workflow
     assert "AUTO_DEPLOY_ENABLE_MARKETAUX" in workflow

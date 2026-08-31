@@ -284,7 +284,7 @@ def test_reddit_client_uses_configured_user_agent() -> None:
     )
 
 
-def test_public_discussion_analysis_queue_requires_a_match_and_configuration() -> None:
+def test_public_discussion_analysis_queue_does_not_require_a_ticker_match() -> None:
     from app.services import public_discussion
 
     artifact = SimpleNamespace(id=uuid.uuid4(), analysis_status="pending")
@@ -296,15 +296,12 @@ def test_public_discussion_analysis_queue_requires_a_match_and_configuration() -
         )
 
     with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", "queue-url"), patch(
-        "app.services.analysis_queue.enqueue_public_discussion_analysis",
+        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
         return_value="message-1",
     ) as enqueue, patch(
         "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
     ) as mark_queued:
-        assert (
-            public_discussion.queue_artifact_analysis(db, artifact, [MagicMock()])
-            is True
-        )
+        assert public_discussion.queue_artifact_analysis(db, artifact, []) is True
 
     enqueue.assert_called_once_with(artifact.id)
     mark_queued.assert_called_once_with(db, artifact.id)
@@ -373,7 +370,7 @@ def test_pending_analysis_requeue_is_dry_run_first() -> None:
         "_pending_analysis_artifacts",
         return_value=artifacts,
     ), patch(
-        "app.services.analysis_queue.enqueue_public_discussion_analysis",
+        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
     ) as enqueue:
         result = public_discussion.requeue_pending_analysis(MagicMock())
 
@@ -394,7 +391,7 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
         "_pending_analysis_artifacts",
         return_value=artifacts,
     ) as pending, patch(
-        "app.services.analysis_queue.enqueue_public_discussion_analysis",
+        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
         return_value="message-id",
     ) as enqueue, patch(
         "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
