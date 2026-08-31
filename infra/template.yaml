@@ -1042,12 +1042,19 @@ Resources:
             '/': true,
             '/about': true,
             '/announcements': true,
+            '/confirm-sign-up': true,
             '/data-sources': true,
+            '/forgot-password': true,
+            '/mfa-setup': true,
+            '/reset-password': true,
             '/search': true,
+            '/settings/notifications': true,
             '/sign-in': true,
             '/sign-out': true,
             '/sign-up': true,
             '/terms': true,
+            '/unsubscribe': true,
+            '/verify-notifications': true,
             '/watchlist': true
           };
           var tickerRoute = /^\/ticker\/(ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)(\/(news|deep-dive))?$/;

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from app.sources import SOURCES
@@ -85,6 +86,29 @@ def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
     assert "x-stonks-not-found" in template
     assert "response.statusCode = 404" in template
     assert "EventType: viewer-response" in template
+
+
+def test_cloudfront_allows_every_exported_static_page() -> None:
+    """Every non-dynamic frontend page must survive the viewer-request rewrite."""
+    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
+        encoding="utf-8"
+    )
+    routes_block = template.split("var staticRoutes = {", 1)[1].split("};", 1)[0]
+    configured_routes = set(re.findall(r"'([^']+)': true", routes_block))
+
+    app_root = REPOSITORY_ROOT / "frontend" / "src" / "app"
+    source_routes = set()
+    for page in app_root.rglob("page.jsx"):
+        relative_parent = page.relative_to(app_root).parent
+        if any(part.startswith("[") for part in relative_parent.parts):
+            continue
+        route = "/" if relative_parent == Path(".") else f"/{relative_parent.as_posix()}"
+        source_routes.add(route)
+
+    assert source_routes <= configured_routes, (
+        "CloudFront staticRoutes is missing exported pages: "
+        f"{sorted(source_routes - configured_routes)}"
+    )
 
 
 def test_brevo_notification_infrastructure_contract() -> None:
