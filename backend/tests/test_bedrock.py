@@ -211,6 +211,28 @@ def test_summary_parser_quotes_only_known_unquoted_keys() -> None:
         )
 
 
+def test_summary_parser_removes_one_redundant_opening_brace() -> None:
+    """GPT-OSS may wrap an otherwise valid object with one unmatched brace."""
+    response = """
+    {
+    {
+      "summary": "The company announced an update.",
+      "about": "The filing describes the update.",
+      "changed": "The update was confirmed.",
+      "matters": "Investors can assess the confirmed change.",
+      "confirmed_facts": ["The company confirmed the update."],
+      "speculation": []
+    }
+    """
+
+    result = llm.parse_summary_response(response)
+
+    assert result["summary"] == "The company announced an update."
+
+    with pytest.raises(json.JSONDecodeError):
+        llm.parse_summary_response("{{{\"summary\": \"Too many wrappers\"}")
+
+
 def test_announcement_summary_does_not_repair_valid_json() -> None:
     """Valid structured output must retain the single-call fast path."""
     response = json.dumps(

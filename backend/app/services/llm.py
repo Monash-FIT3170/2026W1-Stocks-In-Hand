@@ -91,10 +91,11 @@ def parse_summary_response(
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
-        quoted_known_keys = _UNQUOTED_SUMMARY_KEY.sub(r'\1"\2":', cleaned)
-        if quoted_known_keys == cleaned:
+        normalised = re.sub(r"^\{\s*(?=\{)", "", cleaned, count=1)
+        normalised = _UNQUOTED_SUMMARY_KEY.sub(r'\1"\2":', normalised)
+        if normalised == cleaned:
             raise
-        data = json.loads(quoted_known_keys)
+        data = json.loads(normalised)
     if not isinstance(data, dict):
         raise ValueError("LLM summary response must be a JSON object")
 
