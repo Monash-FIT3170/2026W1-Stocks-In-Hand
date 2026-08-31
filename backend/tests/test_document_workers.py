@@ -953,6 +953,72 @@ def test_analysis_handler_dispatches_public_discussion_message(
     )
 
 
+def test_analysis_handler_dispatches_bounded_summary_field_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repair = MagicMock(return_value={"updated": 4, "missing_after": 82})
+    monkeypatch.setattr(analysis, "_resummarise_missing_fields", repair)
+
+    result = analysis.handler(
+        {
+            "operation": "resummarise_missing_fields",
+            "apply": True,
+            "confirmation": "RESUMMARISE_MISSING_FIELDS",
+            "limit": 4,
+        },
+        None,
+    )
+
+    assert result == {"updated": 4, "missing_after": 82}
+    repair.assert_called_once_with(apply=True, limit=4)
+
+
+def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:
+    with pytest.raises(ValueError, match="requires confirmation"):
+        analysis.handler(
+            {
+                "operation": "resummarise_missing_fields",
+                "apply": True,
+                "limit": 4,
+            },
+            None,
+        )
+
+
+def test_summary_values_preserve_display_clarity_and_prompt_fields() -> None:
+    output = SimpleNamespace(
+        summary={
+            "summary": "The company announced an update.",
+            "about": "The filing covers the update.",
+            "changed": "A new program was announced.",
+            "matters": "The program may affect investors.",
+            "confirmed_facts": ["The program was announced."],
+            "speculation": ["The program may affect investors."],
+        },
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-announcement-summary-v3",
+    )
+
+    result = analysis._summary_values(output)
+
+    assert result == {
+        "summary_text": (
+            "The company announced an update.\n\n"
+            "The filing covers the update.\n\n"
+            "A new program was announced.\n\n"
+            "The program may affect investors."
+        ),
+        "model_used": "bedrock:test-model",
+        "prompt_version": "llm-announcement-summary-v3",
+        "summary": "The company announced an update.",
+        "about": "The filing covers the update.",
+        "changed": "A new program was announced.",
+        "matters": "The program may affect investors.",
+        "confirmed_facts": ["The program was announced."],
+        "speculation": ["The program may affect investors."],
+    }
+
+
 def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

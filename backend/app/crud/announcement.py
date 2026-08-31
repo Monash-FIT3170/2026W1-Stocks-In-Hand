@@ -9,6 +9,11 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
+from app.services.summary_metadata import (
+    SUMMARY_TEXT_KEYS,
+    normalise_summary_metadata,
+    split_combined_summary_text,
+)
 
 
 _WHITESPACE = re.compile(r"\s+")
@@ -80,6 +85,24 @@ def _source_details(artifact: Artifact) -> tuple[str, str, str]:
     return source_type, source_name, f"View original at {source_name}"
 
 
+def _summary_fields(artifact: Artifact, metadata: dict) -> dict[str, str]:
+    """Read structured metadata, with a safe fallback for legacy combined rows."""
+    fields = {
+        key: value
+        for key, value in normalise_summary_metadata(metadata).items()
+        if key in SUMMARY_TEXT_KEYS
+    }
+    if all(key in fields for key in SUMMARY_TEXT_KEYS):
+        return fields
+
+    summaries = getattr(artifact, "summaries", None) or []
+    if summaries:
+        recovered = split_combined_summary_text(summaries[0].summary_text)
+        for key, value in recovered.items():
+            fields.setdefault(key, value)
+    return fields
+
+
 def _sydney_day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
     local_now = now.astimezone(_SYDNEY_TZ) if now else datetime.now(_SYDNEY_TZ)
     start = datetime.combine(local_now.date(), time.min, tzinfo=_SYDNEY_TZ)
@@ -96,6 +119,7 @@ def _sydney_date_end(value: date) -> datetime:
 
 def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    summary_fields = _summary_fields(artifact, metadata)
     source_type, source_name, source_label = _source_details(artifact)
     title = _clean_text(artifact.title) or f"Untitled {_format_label(source_type, 'market update')}"
 
@@ -109,17 +133,26 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
         published_at=artifact.published_at or artifact.created_at,
         title=title,
         about=(
-            _metadata_value(metadata, "about", "what_its_about", "what_it_is_about")
+            _clean_text(summary_fields.get("about"))
+            or _metadata_value(
+                metadata,
+                "about",
+                "what_its_about",
+                "what_it_is_about",
+            )
+            or _clean_text(summary_fields.get("summary"))
             or _metadata_value(metadata, "summary")
             or _preview_text(artifact.raw_text)
             or title
         ),
         changed=(
-            _metadata_value(metadata, "changed", "what_changed")
+            _clean_text(summary_fields.get("changed"))
+            or _metadata_value(metadata, "changed", "what_changed")
             or "No change summary available yet."
         ),
         matters=(
-            _metadata_value(metadata, "matters", "why_it_matters")
+            _clean_text(summary_fields.get("matters"))
+            or _metadata_value(metadata, "matters", "why_it_matters")
             or "No impact summary available yet."
         ),
         url=(
@@ -144,6 +177,7 @@ def get_announcements(
         .options(
             joinedload(Artifact.ticker),
             joinedload(Artifact.platform),
+            joinedload(Artifact.summaries),
             joinedload(Artifact.ticker_mentions).joinedload(
                 ArtifactTickerMention.ticker
             ),

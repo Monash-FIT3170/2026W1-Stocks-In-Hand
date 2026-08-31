@@ -14,6 +14,11 @@ from uuid import UUID
 
 import boto3
 from app.messages import PublicDiscussionAnalysisMessage
+from app.services.summary_metadata import (
+    combine_summary_text,
+    has_complete_summary_metadata,
+    normalise_summary_metadata,
+)
 from parsing.analysis import (
     AnalysisOutput,
     analyse_document,
@@ -315,18 +320,124 @@ def _read_s3_document(
 def _summary_values(output: AnalysisOutput) -> dict | None:
     if output.summary is None:
         return None
-    text = "\n\n".join(
-        value.strip()
-        for key in ("summary", "about", "changed", "matters")
-        if isinstance((value := output.summary.get(key)), str) and value.strip()
-    )
+    fields = normalise_summary_metadata(output.summary)
+    text = combine_summary_text(fields)
     if not text:
         return None
     return {
         "summary_text": text,
         "model_used": output.summary_model,
         "prompt_version": output.summary_prompt_version,
+        **fields,
     }
+
+
+def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
+    """Find completed ASX artifacts missing display or clarity summary fields."""
+    with database_session() as db:
+        from app.models.artifact import Artifact
+        from app.models.artifact_summary import ArtifactSummary
+
+        rows = (
+            db.query(Artifact.id, Artifact.artifact_metadata)
+            .join(ArtifactSummary, ArtifactSummary.artifact_id == Artifact.id)
+            .filter(Artifact.source_type == "asx_announcement")
+            .filter(Artifact.analysis_status == "completed")
+            .order_by(Artifact.created_at.asc(), Artifact.id.asc())
+            .all()
+        )
+    missing = [
+        artifact_id
+        for artifact_id, metadata in rows
+        if not has_complete_summary_metadata(metadata)
+    ]
+    return missing[:limit], len(missing)
+
+
+def _summary_input(artifact_id: UUID) -> dict:
+    with database_session() as db:
+        from app.crud.artifact import get_artifact
+
+        artifact = get_artifact(db, artifact_id)
+        if artifact is None or artifact.analysis_status != "completed":
+            raise RuntimeError("Completed artifact is no longer available")
+        metadata = (
+            artifact.artifact_metadata
+            if isinstance(artifact.artifact_metadata, dict)
+            else {}
+        )
+        return {
+            "title": artifact.title or "Untitled ASX announcement",
+            "category": str(
+                metadata.get("category") or artifact.artifact_type or "UNKNOWN"
+            ),
+            "extracted_data": metadata.get("extracted_data")
+            if isinstance(metadata.get("extracted_data"), dict)
+            else {},
+            "raw_text": artifact.raw_text or "",
+        }
+
+
+def _resummarise_missing_fields(  # pylint: disable=too-many-locals
+    *,
+    apply: bool,
+    limit: int,
+) -> dict:
+    """Boundedly regenerate missing structured fields through the active LLM."""
+    capped_limit = max(min(limit, 20), 1)
+    artifact_ids, total_missing = _missing_summary_artifact_ids(capped_limit)
+    result: dict[str, object] = {
+        "apply": apply,
+        "selected": len(artifact_ids),
+        "missing_before": total_missing,
+        "updated": 0,
+        "failed": [],
+    }
+    if not apply:
+        result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
+        return result
+
+    from app.services import llm as llm_service
+    from app.crud.artifact import store_artifact_analysis
+
+    model_used = llm_service.active_model_name()
+    if not model_used.startswith("bedrock:"):
+        raise RuntimeError("Structured summary repair requires Amazon Bedrock")
+
+    for artifact_id in artifact_ids:
+        try:
+            summary_input = _summary_input(artifact_id)
+            summary = llm_service.summarise_announcement(**summary_input)
+            fields = normalise_summary_metadata(summary)
+            if not has_complete_summary_metadata(fields):
+                raise RuntimeError("Bedrock response omitted structured summary fields")
+            summary_values = {
+                "summary_text": combine_summary_text(fields),
+                "model_used": model_used,
+                "prompt_version": llm_service.SUMMARY_PROMPT_VERSION,
+                **fields,
+            }
+            with database_session() as db:
+                store_artifact_analysis(
+                    db,
+                    artifact_id=artifact_id,
+                    raw_text=summary_input["raw_text"],
+                    metadata=fields,
+                    summary=summary_values,
+                )
+            result["updated"] = int(result["updated"]) + 1
+        # Continue so one malformed model response cannot block the batch.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            result["failed"].append(
+                {
+                    "artifact_id": str(artifact_id),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+
+    _remaining_ids, remaining = _missing_summary_artifact_ids(1)
+    result["missing_after"] = remaining
+    return result
 
 
 def _sentiment_values(output: AnalysisOutput) -> dict:
@@ -728,6 +839,14 @@ def _handle_record(record: dict) -> None:
 
 
 def handler(event: dict, _context) -> dict:
+    if event.get("operation") == "resummarise_missing_fields":
+        apply = event.get("apply") is True
+        if apply and event.get("confirmation") != "RESUMMARISE_MISSING_FIELDS":
+            raise ValueError("Summary repair apply mode requires confirmation")
+        return _resummarise_missing_fields(
+            apply=apply,
+            limit=int(event.get("limit", 10)),
+        )
     for record in event.get("Records", []):
         _handle_record(record)
     return {"processed": len(event.get("Records", []))}

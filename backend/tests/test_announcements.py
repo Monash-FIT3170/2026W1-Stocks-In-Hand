@@ -19,6 +19,7 @@ from app.crud.announcement import (
     get_announcements,
 )
 from app.models.artifact import Artifact
+from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 
 
@@ -83,6 +84,36 @@ def test_announcement_mapping_uses_summary_metadata_as_about_fallback() -> None:
     assert result.about == "The company released a concise generated summary."
     assert result.changed == "No material change identified."
     assert result.matters == "Investors can use this as a quick filing overview."
+
+
+def test_announcement_mapping_recovers_legacy_combined_bedrock_summary() -> None:
+    artifact = Artifact(
+        id=uuid.uuid4(),
+        source_type="asx_announcement",
+        artifact_type="asx_announcement_other",
+        title="Community grants update",
+        raw_text="Raw PDF header text",
+        artifact_metadata={"category": "UNKNOWN"},
+    )
+    artifact.summaries.append(
+        ArtifactSummary(
+            summary_text=(
+                "Woodside awarded community grants.\n\n"
+                "The filing covers local community funding.\n\n"
+                "A new grant round was announced.\n\n"
+                "The investment may support Woodside's social licence."
+            ),
+            model_used="bedrock:openai.gpt-oss-120b-1:0",
+        )
+    )
+
+    result = _announcement_from_artifact(artifact)
+
+    assert result.about == "The filing covers local community funding."
+    assert result.changed == "A new grant round was announced."
+    assert result.matters == (
+        "The investment may support Woodside's social licence."
+    )
 
 
 def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
