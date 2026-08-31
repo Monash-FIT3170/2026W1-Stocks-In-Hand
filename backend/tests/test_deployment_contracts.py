@@ -36,6 +36,8 @@ def test_analysis_image_keeps_finbert_out_of_lambda_opt_mount() -> None:
 
     assert "FINBERT_MODEL=/var/task/models/finbert" in dockerfile
     assert "save_pretrained('/var/task/models/finbert')" in dockerfile
+    assert "chmod -R a+rX /var/task/models/finbert" in dockerfile
+    assert 'model.safetensors)\" = \"644\"' in dockerfile
     assert "/opt/finbert" not in dockerfile
 
 

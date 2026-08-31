@@ -16,6 +16,8 @@ RUN pip uninstall -y opencv-python \
 # Resolve the model during the image build, at an immutable revision. Lambda
 # execution never needs Hugging Face network access.
 RUN python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; revision='${FINBERT_REVISION}'; tokenizer=AutoTokenizer.from_pretrained('ProsusAI/finbert', revision=revision); model=AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert', revision=revision); tokenizer.save_pretrained('/var/task/models/finbert'); model.save_pretrained('/var/task/models/finbert')" \
+    && chmod -R a+rX /var/task/models/finbert \
+    && test "$(stat -c '%a' /var/task/models/finbert/model.safetensors)" = "644" \
     && rm -rf /root/.cache/huggingface
 # Fail the image build if the exact offline runtime path cannot tokenize and
 # execute the packaged model without Hugging Face network access.
