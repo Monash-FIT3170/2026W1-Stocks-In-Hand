@@ -17,6 +17,9 @@ RUN pip uninstall -y opencv-python \
 # execution never needs Hugging Face network access.
 RUN python -c "from transformers import AutoModelForSequenceClassification, AutoTokenizer; revision='${FINBERT_REVISION}'; tokenizer=AutoTokenizer.from_pretrained('ProsusAI/finbert', revision=revision); model=AutoModelForSequenceClassification.from_pretrained('ProsusAI/finbert', revision=revision); tokenizer.save_pretrained('/opt/finbert'); model.save_pretrained('/opt/finbert')" \
     && rm -rf /root/.cache/huggingface
+# Fail the image build if the exact offline runtime path cannot tokenize and
+# execute the packaged model without Hugging Face network access.
+RUN HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -c "import torch; from transformers import AutoModelForSequenceClassification, AutoTokenizer; tokenizer=AutoTokenizer.from_pretrained('/opt/finbert', local_files_only=True); model=AutoModelForSequenceClassification.from_pretrained('/opt/finbert', local_files_only=True); encoded=tokenizer(['FinBERT image smoke test'], return_tensors='pt'); logits=model(**encoded).logits; assert logits.shape[-1] == 3"
 
 COPY app ${LAMBDA_TASK_ROOT}/app
 COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
