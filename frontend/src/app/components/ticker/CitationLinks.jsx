@@ -1,4 +1,4 @@
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 
 function formatSourceDate(value) {
   if (!value) {

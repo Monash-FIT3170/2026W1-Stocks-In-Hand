@@ -102,6 +102,7 @@ function SearchContent() {
     () => normalizeTickers(tickers).filter((ticker) => matchesQuery(ticker, query)),
     [tickers, query]
   )
+  const isPreview = tickers.some((ticker) => ticker.is_preview)
 
   function handleSearch(event) {
     event.preventDefault()
@@ -115,6 +116,7 @@ function SearchContent() {
         <form className={styles.pageSearchBar} onSubmit={handleSearch}>
           <SearchIcon />
           <input aria-label="Search company or ticker" value={value} onChange={(event) => setValue(event.target.value)} />
+          <button className={styles.searchSubmit} type="submit">Search</button>
         </form>
         <div className={styles.searchHeader}>
           <h1>{query ? <>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></> : "Browse ASX companies"}</h1>
@@ -124,6 +126,7 @@ function SearchContent() {
               ? "Company results could not be retrieved."
               : `${results.length} ${results.length === 1 ? "company" : "companies"} ${query ? "matched your search" : "available"}.`}</p>
         </div>
+        {isPreview ? <div className={styles.previewNotice}><strong>Local preview data</strong><span>Illustrative companies are shown because the local API is not connected.</span></div> : null}
         {error ? (
           <div className={styles.emptyCard} role="alert">
             <h2>Could not load company search</h2>

@@ -4,7 +4,8 @@ import { useEffect, useState } from "react"
 import { DeepDiveTimeline } from "../../../components/ticker/DeepDiveTimeline"
 import { useTickerBrief } from "../../../components/ticker/TickerBriefShell"
 import { fetchTickerDeepDive } from "../../../lib/api"
-import styles from "../../../page.module.css"
+import pageStyles from "../../../page.module.css"
+import styles from "../../../components/research/ResearchSurface.module.css"
 
 // Ticker brief deep-dive tab for "/ticker/[symbol]/deep-dive".
 // Timeline entries come from DB-backed ticker artifacts.
@@ -51,13 +52,13 @@ export default function TickerDeepDiveRoute() {
 
   if (state.isLoading) {
     return (
-      <div className={styles.contentSkeleton} aria-live="polite">Loading {symbol} deep dive…</div>
+      <div className={pageStyles.contentSkeleton} aria-live="polite">Loading {symbol} deep dive…</div>
     )
   }
 
   if (state.error) {
     return (
-      <div className={styles.emptyCard} role="alert">
+      <div className={styles.statePanel} role="alert">
         <h2>Deep dive could not be loaded</h2>
         <p>{state.error}</p>
         <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
@@ -68,11 +69,14 @@ export default function TickerDeepDiveRoute() {
   const { timeline } = state
 
   return (
-    timeline.length > 0 ? <DeepDiveTimeline timeline={timeline} /> : (
-      <div className={styles.emptyCard}>
+    <div className={styles.briefContent}>
+      <header className={styles.newsHeader}><h2>Company timeline</h2><p>{timeline.length} source-led events</p></header>
+      {timeline.length > 0 ? <DeepDiveTimeline timeline={timeline} /> : (
+      <div className={styles.statePanel}>
         <h2>No deep-dive timeline yet</h2>
         <p>No announcements have been stored for {symbol} yet. Run the data pipeline to populate this timeline.</p>
       </div>
-    )
+      )}
+    </div>
   )
 }

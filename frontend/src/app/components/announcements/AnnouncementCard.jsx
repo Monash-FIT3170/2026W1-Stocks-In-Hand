@@ -1,5 +1,5 @@
 import Link from "next/link"
-import styles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 import { CitationLinks } from "../ticker/CitationLinks"
 
 // Shared announcement summary card.
@@ -12,22 +12,29 @@ export function AnnouncementCard({ item }) {
 
   return (
     <article className={styles.announcementCard}>
-      <div className={styles.cardTopLine}>
-        <span className={styles.tickerPill}>{item.ticker}</span>
-        <span className={styles.redPill}>{item.tag}</span>
-        <span>{item.time}</span>
+      <div className={styles.sourceRail}>
+        <span className={styles.sourceIndex} aria-hidden="true" />
+        <span className={styles.tickerMark}>{item.ticker}</span>
+        <span className={styles.sourceKind}>{item.tag || item.source_type || "Source record"}</span>
       </div>
-      <h2>{item.title}</h2>
-      <div className={styles.explainGrid}>
-        <div><span>What it&apos;s about</span><p>{item.about}</p></div>
-        <div><span>What changed</span><p>{item.changed}</p></div>
-        <div><span>Why it matters</span><p>{item.matters}</p></div>
+      <div className={styles.announcementBody}>
+        <div className={styles.announcementMeta}>
+          <span>{item.source_name || item.tag || "Market source"}</span><b aria-hidden="true" /><time>{item.time}</time>
+        </div>
+        <h2>{item.title}</h2>
+        <div className={styles.announcementLead}>
+          <div><h3>What changed</h3><p>{item.changed}</p></div>
+          <div className={styles.researchAngle}><h3>Research angle</h3><p>{item.matters}</p></div>
+        </div>
+        <div className={styles.announcementContext}><h3>Context</h3><p>{item.about}</p></div>
+        <footer className={styles.announcementFooter}>
+          <div className={styles.announcementActions}>
+            <Link href={`/ticker/${item.ticker}/news`}>Open {item.ticker} research</Link>
+            {filingUrl ? <a href={filingUrl} rel="noreferrer" target="_blank">{sourceLabel}</a> : null}
+          </div>
+          <CitationLinks sources={item.sources} />
+        </footer>
       </div>
-      <div className={styles.cardActions}>
-        <Link href={`/ticker/${item.ticker}/news`}>View {item.ticker} news feed</Link>
-        {filingUrl ? <a href={filingUrl} rel="noreferrer" target="_blank">{sourceLabel}</a> : null}
-      </div>
-      <CitationLinks sources={item.sources} />
     </article>
   )
 }

@@ -5,6 +5,40 @@
   padding: 72px 26px 96px;
 }
 
+/* Replacement research-product styling. */
+.page { max-width: 1180px; padding: 88px 32px 104px; }
+.pageHeader { border-bottom: 1px solid var(--line); margin-bottom: 48px; max-width: none; padding-bottom: 42px; }
+.eyebrow,.statusLabel { color: var(--brand); font-size: 11px; font-weight: 650; letter-spacing: .08em; }
+.pageHeader h1 { font-size: clamp(44px,5vw,64px); font-weight: 550; letter-spacing: -.052em; line-height: .98; }
+.pageHeader>p:last-child { color: var(--ink-secondary); font-size: 18px; max-width: 680px; }
+.settingsGrid { gap: 22px; grid-template-columns: minmax(0,1.6fr) minmax(280px,.72fr); }
+.settingsCard,.statusCard,.loadingCard,.featureBanner,.errorBanner { border-radius: 12px; box-shadow: none; }
+.settingsCard,.statusCard { padding: 28px; }
+.featureBanner { background: var(--warning-soft); border-color: rgba(154,103,0,.2); color: var(--warning); }
+.errorBanner { background: var(--negative-soft); border-color: rgba(180,35,59,.2); color: var(--negative); }
+.toggleRow h2,.statusCard h2 { font-size: 21px; font-weight: 560; letter-spacing: -.025em; }
+.toggleRow p,.ruleGroup>p { color: var(--ink-secondary); }
+.switchTrack { background: var(--line-strong); border-radius: 8px; height: 30px; width: 52px; }
+.switchTrack::after { border-radius: 6px; box-shadow: 0 1px 4px rgba(16,18,20,.2); height: 22px; width: 22px; }
+.switch input:checked+.switchTrack { background: var(--brand); }
+.switch input:checked+.switchTrack::after { transform: translateX(22px); }
+.switch input:focus-visible+.switchTrack { outline: 2px solid var(--focus); outline-offset: 3px; }
+.ruleGroup legend { font-size: 16px; font-weight: 600; }
+.rangeHeader output { background: var(--brand-soft); border-radius: 6px; color: var(--brand); font-family: ui-monospace,Consolas,monospace; font-weight: 600; }
+.ruleGroup input[type="range"],.sentimentOption input { accent-color: var(--brand); }
+.sentimentOption { background: var(--canvas-subtle); border-color: var(--line); border-radius: 8px; font-size: 14px; font-weight: 550; }
+.sentimentOption:has(input:checked) { background: var(--brand-soft); border-color: var(--brand); }
+.saveButton,.resendButton { border-radius: 8px; font-size: 14px; font-weight: 600; }
+.saveButton { background: var(--ink); }
+.statusCard { top: 88px; }
+.verificationState { border-radius: 8px; }
+.attention { background: var(--warning-soft); color: var(--warning); }
+.success { background: var(--positive-soft); color: var(--positive); }
+.error { background: var(--negative-soft); color: var(--negative); }
+.resendButton { border-color: var(--line-strong); color: var(--ink); }
+@media(max-width:580px){.page{padding:56px 16px 72px}.settingsCard,.statusCard{padding:22px}.pageHeader{padding-bottom:32px}}
+
+@layer legacy {
 .pageHeader {
   margin-bottom: 34px;
   max-width: 720px;
@@ -424,4 +458,5 @@
   .toggleRow {
     align-items: flex-start;
   }
+}
 }

@@ -3,7 +3,8 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react"
 import { usePathname } from "next/navigation"
 import { fetchTickerBrief } from "../../lib/api"
-import styles from "../../page.module.css"
+import pageStyles from "../../page.module.css"
+import styles from "../research/ResearchSurface.module.css"
 import { BriefAside } from "./BriefAside"
 import { BriefTabs } from "./BriefTabs"
 import { TickerHeader } from "./TickerHeader"
@@ -62,34 +63,34 @@ export function TickerBriefShell({ children, symbol }) {
 
   return (
     <TickerBriefContext.Provider value={context}>
-      <section className={styles.contentPage} aria-busy={state.isLoading}>
-        <div className={styles.briefShell}>
-          <div className={styles.briefMain}>
-            {state.overview ? (
-              <TickerHeader data={state.overview} />
-            ) : state.isLoading ? (
-              <div className={styles.tickerHeaderSkeleton} aria-label={`Loading ${symbol} company details`} />
-            ) : (
-              <div className={styles.tickerHeaderFallback}>
-                <p>ASX ticker</p>
-                <h1>{symbol}</h1>
-                <p>Company details are temporarily unavailable.</p>
-              </div>
-            )}
-            <BriefTabs active={active} symbol={symbol} />
+      <section className={`${pageStyles.contentPage} ${styles.surface} ${styles.tickerWorkspace}`} aria-busy={state.isLoading}>
+        {state.overview ? (
+          <TickerHeader data={state.overview} />
+        ) : state.isLoading ? (
+          <div className={pageStyles.tickerHeaderSkeleton} aria-label={`Loading ${symbol} company details`} />
+        ) : (
+          <div className={styles.tickerFallback}>
+            <p>ASX ticker</p>
+            <h1>{symbol}</h1>
+            <p>Company details are temporarily unavailable.</p>
+          </div>
+        )}
+        <BriefTabs active={active} symbol={symbol} />
+        <div className={styles.briefLayout}>
+          <main className={styles.briefMain}>
             {state.error ? (
-              <div className={styles.inlineError} role="alert">
+              <div className={styles.statePanel} role="alert">
                 <h2>Some {symbol} details could not be loaded</h2>
                 <p>{state.error}</p>
                 <button className={styles.secondaryButton} onClick={context.retry} type="button">Try again</button>
               </div>
             ) : null}
             {children}
-          </div>
+          </main>
           {state.aside ? (
             <BriefAside data={state.aside} />
           ) : state.isLoading ? (
-            <aside className={styles.asideSkeleton} aria-label="Loading ticker details" />
+            <aside className={pageStyles.asideSkeleton} aria-label="Loading ticker details" />
           ) : (
             <aside className={styles.asideUnavailable} aria-label="Ticker details unavailable">
               <h2>Key details unavailable</h2>
