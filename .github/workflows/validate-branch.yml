@@ -8,9 +8,14 @@ on:
     branches:
       - "fix/**"
       - "feature/**"
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
@@ -62,6 +67,34 @@ jobs:
       - name: Run security scan
         run: python -m bandit -q -r backend/app backend/main.py
 
+  docker-image:
+    name: Backend Docker image build and test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create local .env for the test container
+        run: cp backend/.env.example backend/.env
+
+      - name: Run backend test suite in the built image
+        run: |
+          docker compose -f docker-compose-tests.yml up \
+            --build \
+            --exit-code-from backend \
+            db backend
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-output
+          path: backend/_test_output
+          if-no-files-found: ignore
+
+      - name: Stop remaining services
+        if: always()
+        run: docker compose -f docker-compose-tests.yml down -v
+
   frontend:
     name: Frontend tests and production build
     runs-on: ubuntu-latest
@@ -75,6 +108,9 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
       - name: Run tests
         working-directory: frontend
         run: npm test
