@@ -5,8 +5,10 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_admin_investor
@@ -16,11 +18,16 @@ from app.api.routes import (
     artifact_sentiment,
     artifact_summary,
     auth,
+    blog,
+    bluesky,
     category_sentiment,
     gemini,
     information_platform,
     investor,
+    mastodon,
     news,
+    notification_preferences,
+    public_discussion,
     reddit,
     scrape_run,
     ticker,
@@ -29,14 +36,13 @@ from app.api.routes import (
 )
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
-from app.database.connection import SessionLocal, get_db
+from app.database.connection import get_db
 from app.messages import QueueAMessage
 from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
 from app.services import scrape_queue
 from app.sources import source_for_ticker
 from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
-
 
 app = FastAPI(title="StonksInHand API")
 app.add_middleware(
@@ -61,10 +67,15 @@ for route_module in (
     information_platform,
     auth,
     news,
+    blog,
     reddit,
+    bluesky,
+    mastodon,
+    public_discussion,
     gemini,
     category_sentiment,
     announcement,
+    notification_preferences,
 ):
     app.include_router(route_module.router)
 
@@ -85,9 +96,33 @@ def root():
 
 
 @app.get("/health")
-def health() -> dict:
-    """Return the health status of the API process."""
+def health(db: Session = Depends(get_db)) -> dict:
+    """Return whether the API process can reach its database."""
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "detail": "database unreachable"},
+        )
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness(db: Session = Depends(get_db)) -> dict:
+    """Verify that the API can query the schema required by deployed routes."""
+    try:
+        db.execute(text("SELECT is_duplicate FROM artifacts LIMIT 0"))
+        db.execute(text("SELECT prompt_version FROM artifact_summaries LIMIT 0"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database schema is not ready",
+        ) from exc
+    return {
+        "status": "ready",
+        "checks": {"database": "ok", "artifact_schema": "ok"},
+    }
 
 
 @app.get("/viewer", response_class=HTMLResponse)

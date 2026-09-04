@@ -9,13 +9,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./backend/postgres-init.sql:/docker-entrypoint-initdb.d/10-supabase-roles.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d spike"]
       interval: 5s
       retries: 5
 
   backend:
-    # Contains api key for groq usage
+    # Use --env-file backend/.env to pass temporary AWS values into interpolation.
     env_file:
       - ./backend/.env
     build:
@@ -23,7 +24,19 @@ services:
       target: production
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/spike
-      SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL}
+      # Local Docker uses the existing Groq fallback unless explicitly overridden.
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL,COL,TLS,TCL,COH,WDS,MQG,ORG,RIO}
+      AWS_REGION: ap-southeast-2
+      AWS_DEFAULT_REGION: ap-southeast-2
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      NOTIFICATIONS_ENABLED: ${NOTIFICATIONS_ENABLED:-true}
+      NOTIFICATIONS_DRY_RUN: ${NOTIFICATIONS_DRY_RUN:-true}
+      ALERT_SENDER_EMAIL: ${ALERT_SENDER_EMAIL:-alerts@example.com}
+      BREVO_API_KEY: ${BREVO_API_KEY:-}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
     ports:
       - "8000:8000"
     command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
@@ -36,6 +49,38 @@ services:
       timeout: 1s
       retries: 3
       start_period: 10s
+    volumes:
+      - ./backend/_data:/data
+      - ./output:/app/output
+
+  content-bootstrap:
+    # One-shot, bounded development collector. It cannot block backend/frontend
+    # startup and the storage pipeline skips documents already in PostgreSQL.
+    env_file:
+      - ./backend/.env
+    build:
+      context: ./backend
+      target: production
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/spike
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      FINBERT_MODEL: /app/finbert
+    command:
+      - python
+      - -m
+      - scripts.populate_local_content
+      - --sources
+      - asx
+      - --tickers
+      - ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
+      - --lookback-days
+      - "365"
+      - --max-documents
+      - "3"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: "no"
     volumes:
       - ./backend/_data:/data
       - ./output:/app/output

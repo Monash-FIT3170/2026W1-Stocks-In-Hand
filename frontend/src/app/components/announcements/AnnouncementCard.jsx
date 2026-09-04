@@ -1,15 +1,14 @@
 import Link from "next/link"
 import styles from "../../page.module.css"
-import { BookmarkIcon } from "../icons"
 import { CitationLinks } from "../ticker/CitationLinks"
 
 // Shared announcement summary card.
-// Used by both the global announcements feed and the ticker news tab. Keep the data
+// Used by both the global market feed and the ticker news tab. Keep the data
 // shape simple here: each card expects an item with ticker, tag, time, title, about,
 // changed, matters, and url fields.
 export function AnnouncementCard({ item }) {
-  const filingUrl = item.url || "#"
-  const sourceLabel = item.source_label || "View original ASX filing"
+  const filingUrl = item.url || null
+  const sourceLabel = item.source_label || "View original source"
 
   return (
     <article className={styles.announcementCard}>
@@ -17,7 +16,6 @@ export function AnnouncementCard({ item }) {
         <span className={styles.tickerPill}>{item.ticker}</span>
         <span className={styles.redPill}>{item.tag}</span>
         <span>{item.time}</span>
-        <BookmarkIcon />
       </div>
       <h2>{item.title}</h2>
       <div className={styles.explainGrid}>
@@ -26,8 +24,8 @@ export function AnnouncementCard({ item }) {
         <div><span>Why it matters</span><p>{item.matters}</p></div>
       </div>
       <div className={styles.cardActions}>
-        <Link href={`/ticker/${item.ticker}/news`}>Read full summary</Link>
-        <a href={filingUrl}>{sourceLabel}</a>
+        <Link href={`/ticker/${item.ticker}/news`}>View {item.ticker} news feed</Link>
+        {filingUrl ? <a href={filingUrl} rel="noreferrer" target="_blank">{sourceLabel}</a> : null}
       </div>
       <CitationLinks sources={item.sources} />
     </article>

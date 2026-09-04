@@ -1,8 +1,8 @@
 """Focused tests for Queue A contracts and the API producer."""
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-import sys
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -14,9 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import main
 from app.api.deps import require_admin_investor
-from app.messages import QueueAMessage, QueueBMessage
+from app.messages import (
+    PublicDiscussionAnalysisMessage,
+    QueueAMessage,
+    QueueBMessage,
+)
 from app.schemas.investor import InvestorUpdate
-from app.services import scrape_queue
+from app.services import analysis_queue, scrape_queue
 from app.status import ScrapeRunStatus
 
 
@@ -82,6 +86,34 @@ def test_enqueue_discovery_sends_validated_json(monkeypatch: pytest.MonkeyPatch)
     call = client.send_message.call_args.kwargs
     assert call["QueueUrl"] == "queue-url"
     assert '"ticker":"CSL"' in call["MessageBody"]
+
+
+def test_public_discussion_analysis_message_contains_only_artifact_identity() -> None:
+    artifact_id = uuid4()
+    message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
+
+    assert message.message_type == "public_discussion_analysis"
+    assert message.artifact_id == artifact_id
+    assert "raw_text" not in message.model_dump_json()
+
+
+def test_enqueue_public_discussion_analysis_sends_validated_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MagicMock()
+    client.send_message.return_value = {"MessageId": "analysis-message-1"}
+    monkeypatch.setattr(analysis_queue.settings, "ANALYSIS_QUEUE_URL", "analysis-url")
+    monkeypatch.setattr(analysis_queue, "_sqs_client", lambda: client)
+    artifact_id = uuid4()
+
+    assert (
+        analysis_queue.enqueue_public_discussion_analysis(artifact_id)
+        == "analysis-message-1"
+    )
+    call = client.send_message.call_args.kwargs
+    assert call["QueueUrl"] == "analysis-url"
+    parsed = PublicDiscussionAnalysisMessage.model_validate_json(call["MessageBody"])
+    assert parsed.artifact_id == artifact_id
 
 
 def _run(status: str = ScrapeRunStatus.ENQUEUEING) -> MagicMock:

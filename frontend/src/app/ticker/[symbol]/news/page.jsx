@@ -2,23 +2,19 @@
 
 import { useEffect, useState } from "react"
 import { AnnouncementCard } from "../../../components/announcements/AnnouncementCard"
-import { AppFrame } from "../../../components/layout/AppFrame"
-import { BriefAside } from "../../../components/ticker/BriefAside"
-import { BriefTabs } from "../../../components/ticker/BriefTabs"
-import { TickerHeader } from "../../../components/ticker/TickerHeader"
-import { fetchTickerBriefAside, fetchTickerNews, fetchTickerOverview } from "../../../lib/api"
+import { useTickerBrief } from "../../../components/ticker/TickerBriefShell"
+import { fetchTickerNews } from "../../../lib/api"
 import styles from "../../../page.module.css"
 
 // Ticker brief news tab for "/ticker/[symbol]/news".
 // This reuses AnnouncementCard and renders only DB-backed ticker announcements.
-export default function TickerNewsRoute({ params }) {
-  const symbol = params.symbol.toUpperCase()
+export default function TickerNewsRoute() {
+  const { symbol } = useTickerBrief()
+  const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState({
-    aside: null,
-    error: false,
+    error: "",
     isLoading: true,
     news: [],
-    overview: null,
   })
 
   useEffect(() => {
@@ -26,17 +22,13 @@ export default function TickerNewsRoute({ params }) {
 
     async function loadNews() {
       try {
-        const [news, overview, aside] = await Promise.all([
-          fetchTickerNews(symbol),
-          fetchTickerOverview(symbol),
-          fetchTickerBriefAside(symbol),
-        ])
+        const news = await fetchTickerNews(symbol)
         if (!cancelled) {
-          setState({ aside, error: false, isLoading: false, news, overview })
+          setState({ error: "", isLoading: false, news })
         }
       } catch {
         if (!cancelled) {
-          setState({ aside: null, error: true, isLoading: false, news: [], overview: null })
+          setState({ error: "News is unavailable right now. Check your connection and try again.", isLoading: false, news: [] })
         }
       }
     }
@@ -45,49 +37,36 @@ export default function TickerNewsRoute({ params }) {
     return () => {
       cancelled = true
     }
-  }, [symbol])
+  }, [attempt, symbol])
 
   if (state.isLoading) {
     return (
-      <AppFrame active="home">
-        <section className={styles.contentPage}>
-          <div className={styles.emptyCard}><h3>Loading {symbol} news...</h3></div>
-        </section>
-      </AppFrame>
+      <div className={styles.contentSkeleton} aria-live="polite">Loading {symbol} news…</div>
     )
   }
 
   if (state.error) {
     return (
-      <AppFrame active="home">
-        <section className={styles.contentPage}>
-          <div className={styles.emptyCard}>
-            <h3>{symbol} not found</h3>
-            <p>This ticker is not in the database yet. It will appear once the data pipeline has run.</p>
-          </div>
-        </section>
-      </AppFrame>
+      <div className={styles.emptyCard} role="alert">
+        <h2>News could not be loaded</h2>
+        <p>{state.error}</p>
+        <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
+      </div>
     )
   }
 
-  const { news, overview, aside } = state
+  const { news } = state
 
   return (
-    <AppFrame active="home">
-      <section className={styles.contentPage}>
-        <div className={styles.briefShell}>
-          <div className={styles.briefMain}>
-            <TickerHeader data={overview} />
-            <BriefTabs active="news" symbol={symbol} />
-            <div className={styles.briefContent}>
-              {news.map((item) => (
-                <AnnouncementCard item={item} key={item.id} />
-              ))}
-            </div>
-          </div>
-          <BriefAside data={aside} />
+    <div className={styles.briefContent}>
+      {news.length > 0 ? news.map((item) => (
+        <AnnouncementCard item={item} key={item.id} />
+      )) : (
+        <div className={styles.emptyCard}>
+          <h2>No news available for {symbol}</h2>
+          <p>The pipeline has not stored any announcements or publisher articles for this ticker yet.</p>
         </div>
-      </section>
-    </AppFrame>
+      )}
+    </div>
   )
 }

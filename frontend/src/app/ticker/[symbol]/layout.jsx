@@ -1,4 +1,20 @@
-const DEPLOYED_TICKERS = ["ANZ", "CBA", "BHP", "WES", "CSL"]
+import { TickerBriefShell } from "../../components/ticker/TickerBriefShell"
+
+const DEPLOYED_TICKERS = [
+  "ANZ",
+  "BHP",
+  "CBA",
+  "COL",
+  "COH",
+  "CSL",
+  "MQG",
+  "ORG",
+  "RIO",
+  "TCL",
+  "TLS",
+  "WDS",
+  "WES",
+]
 
 export const dynamicParams = false
 
@@ -6,6 +22,12 @@ export function generateStaticParams() {
   return DEPLOYED_TICKERS.map((symbol) => ({ symbol }))
 }
 
-export default function TickerLayout({ children }) {
-  return children
+export async function generateMetadata({ params }) {
+  const { symbol } = await params
+  return { title: `${symbol.toUpperCase()} company brief | StonksInHand` }
+}
+
+export default async function TickerLayout({ children, params }) {
+  const { symbol } = await params
+  return <TickerBriefShell symbol={symbol.toUpperCase()}>{children}</TickerBriefShell>
 }

@@ -3,7 +3,21 @@
 from dataclasses import dataclass
 from typing import Literal
 
-SourceAdapter = Literal["anz", "bhp", "cba", "csl", "wes"]
+SourceAdapter = Literal[
+    "anz",
+    "bhp",
+    "cba",
+    "coh",
+    "col",
+    "csl",
+    "mqg",
+    "org",
+    "rio",
+    "tcl",
+    "tls",
+    "wds",
+    "wes",
+]
 
 
 @dataclass(frozen=True)
@@ -32,10 +46,60 @@ SOURCES: dict[str, SourceDefinition] = {
         adapter="cba",
         source_url="https://www.commbank.com.au/about-us/investors/asx-announcements.html",
     ),
+    "COH": SourceDefinition(
+        ticker="COH",
+        adapter="coh",
+        source_url=(
+            "https://www.cochlear.com/au/en/corporate/investors/"
+            "asx-announcements"
+        ),
+    ),
+    "COL": SourceDefinition(
+        ticker="COL",
+        adapter="col",
+        source_url=(
+            "https://www.colesgroup.com.au/investors/?page=asx-announcements"
+        ),
+    ),
     "CSL": SourceDefinition(
         ticker="CSL",
         adapter="csl",
         source_url="https://investors.csl.com/investors/asx-announcements",
+    ),
+    "MQG": SourceDefinition(
+        ticker="MQG",
+        adapter="mqg",
+        source_url="https://www.macquarie.com/au/en/investors/reports.html",
+    ),
+    "ORG": SourceDefinition(
+        ticker="ORG",
+        adapter="org",
+        source_url=(
+            "https://www.originenergy.com.au/about/investors-media/"
+            "media-releases/"
+        ),
+    ),
+    "RIO": SourceDefinition(
+        ticker="RIO",
+        adapter="rio",
+        source_url="https://www.riotinto.com/en/invest/exchange-releases",
+    ),
+    "TCL": SourceDefinition(
+        ticker="TCL",
+        adapter="tcl",
+        source_url=(
+            "https://www.transurban.com/investor-centre/asx-releases.html"
+        ),
+    ),
+    "TLS": SourceDefinition(
+        ticker="TLS",
+        adapter="tls",
+        source_url="https://www.telstra.com.au/aboutus/investors/announcements",
+    ),
+    "WDS": SourceDefinition(
+        ticker="WDS",
+        adapter="wds",
+        source_url="https://www.woodside.com/media-centre/announcements",
     ),
     "WES": SourceDefinition(
         ticker="WES",

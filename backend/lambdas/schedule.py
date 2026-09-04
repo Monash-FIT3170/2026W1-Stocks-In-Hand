@@ -1,4 +1,4 @@
-"""Disabled-by-default EventBridge producer for the five ASX sources."""
+"""Disabled-by-default EventBridge producer for configured ASX sources."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
 from lambdas.common import database_session, load_runtime_configuration, log_event
 
 STAGE = "schedule"
+MAX_MARKETAUX_TICKERS_PER_RUN = 5
+MAX_MARKETAUX_ITEMS_PER_TICKER = 25
 
 
 def _event_key(event: dict) -> str:
@@ -34,6 +36,67 @@ def _enabled_tickers() -> list[str]:
         if ticker.strip()
     }
     return [ticker for ticker in SOURCES if ticker in configured]
+
+
+def _marketaux_limit() -> int:
+    try:
+        configured = int(os.getenv("MARKETAUX_PER_TICKER_LIMIT", "10"))
+    except ValueError:
+        configured = 10
+    return max(1, min(configured, MAX_MARKETAUX_ITEMS_PER_TICKER))
+
+
+def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
+    """Collect a bounded Marketaux batch after SSM configuration is loaded."""
+    result = {
+        "marketaux_tickers": 0,
+        "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
+        "marketaux_errors": 0,
+    }
+    if os.getenv("MARKETAUX_ENABLED", "false").lower() != "true":
+        return result
+
+    # Import after load_runtime_configuration so settings sees the SSM token.
+    from app.services import marketaux
+
+    for ticker in tickers[:MAX_MARKETAUX_TICKERS_PER_RUN]:
+        result["marketaux_tickers"] += 1
+        try:
+            with database_session() as db:
+                collected = marketaux.fetch_and_store_news(
+                    ticker,
+                    _marketaux_limit(),
+                    db,
+                    summarise=False,
+                    enqueue_analysis=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            result["marketaux_errors"] += 1
+            log_event(
+                stage=STAGE,
+                event="marketaux_ticker_failed",
+                level=logging.ERROR,
+                ticker=ticker,
+                error_code=type(exc).__name__,
+            )
+            continue
+
+        result["marketaux_created"] += int(collected.get("created", 0))
+        result["marketaux_analysis_queued"] += int(
+            collected.get("analysis_queued", 0)
+        )
+        provider_errors = int(collected.get("errors", 0))
+        result["marketaux_errors"] += provider_errors
+        if provider_errors:
+            log_event(
+                stage=STAGE,
+                event="marketaux_ticker_partial",
+                level=logging.ERROR,
+                ticker=ticker,
+                errors=provider_errors,
+            )
+    return result
 
 
 def _enqueue_ticker(*, ticker: str, event_key: str, sqs, queue_url: str) -> bool:
@@ -93,9 +156,16 @@ def handler(event: dict, _context) -> dict:
     sqs = boto3.client("sqs")
     event_key = _event_key(event)
     queued = 0
+    marketaux_result = {
+        "marketaux_tickers": 0,
+        "marketaux_created": 0,
+        "marketaux_analysis_queued": 0,
+        "marketaux_errors": 0,
+    }
 
     try:
-        for ticker in _enabled_tickers():
+        tickers = _enabled_tickers()
+        for ticker in tickers:
             queued += int(
                 _enqueue_ticker(
                     ticker=ticker,
@@ -104,6 +174,9 @@ def handler(event: dict, _context) -> dict:
                     queue_url=queue_url,
                 )
             )
+        marketaux_result = _collect_marketaux_news(tickers)
+        if marketaux_result["marketaux_errors"]:
+            raise RuntimeError("Marketaux collection failed")
     except Exception as exc:
         log_event(
             stage=STAGE,
@@ -113,6 +186,7 @@ def handler(event: dict, _context) -> dict:
             error_code=type(exc).__name__,
             event_id=event_key,
             queued=queued,
+            **marketaux_result,
         )
         raise
 
@@ -122,5 +196,10 @@ def handler(event: dict, _context) -> dict:
         started_at=started_at,
         event_id=event_key,
         queued=queued,
+        **marketaux_result,
     )
-    return {"queued": queued, "event_id": event_key}
+    return {
+        "queued": queued,
+        "event_id": event_key,
+        **marketaux_result,
+    }

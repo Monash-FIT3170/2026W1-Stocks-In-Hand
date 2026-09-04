@@ -38,7 +38,7 @@ async def main() -> None:
     print("[2/3] Classifying, extracting, and storing...\n")
     for ann in announcements:
         report = process_announcement(ann)
-        category_name = report.category.name if report.category else "UNKNOWN"
+        category_name = report.category
         print(f"  {ann.title[:60]}")
         print(f"    category={category_name}  confidence={report.confidence:.2f}  method={report.method}")
         # if report.extracted_data:

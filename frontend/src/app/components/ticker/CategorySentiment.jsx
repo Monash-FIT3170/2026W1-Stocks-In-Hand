@@ -11,7 +11,7 @@ const CATEGORY_ORDER = [
 
 function formatLabel(value) {
   if (!value) {
-    return "Neutral"
+    return "Unavailable"
   }
   return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase()
 }
@@ -19,7 +19,7 @@ function formatLabel(value) {
 function percent(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) {
-    return "0%"
+    return null
   }
   return `${Math.round(number * 100)}%`
 }
@@ -35,15 +35,12 @@ function categoryRows(sentiment) {
 
 function emptyCategoryMessage(label) {
   if (label === "User discussion") {
-    return "No Reddit discussion summary has been stored for this ticker yet."
+    return "No public discussion summary has been stored for this ticker yet."
   }
   return `No ${label.toLowerCase()} evidence in the stored ASX announcements.`
 }
 
-function summaryText({ isUnavailable, key, label, result }) {
-  if (isUnavailable) {
-    return "Sentiment has not been returned by the API yet."
-  }
+function summaryText({ key, label, result }) {
   const summary = result?.summary?.trim()
   if (!summary) {
     return emptyCategoryMessage(label)
@@ -59,39 +56,49 @@ function summaryText({ isUnavailable, key, label, result }) {
 
 export function CategorySentiment({ sentiment }) {
   const rows = categoryRows(sentiment)
-  const isUnavailable = sentiment?.unavailable
+  const status = sentiment?.status || "unavailable"
+  const isUnavailable = status === "unavailable"
 
   return (
     <article className={styles.categorySentimentCard}>
       <div className={styles.categorySentimentHeader}>
-        <div>
-          <span>FinBERT category view</span>
-          <h2>Sentiment by signal</h2>
-        </div>
-        <strong>{isUnavailable ? "Unavailable" : sentiment?.model_used || "Starting up"}</strong>
+        <h2>Sentiment by signal</h2>
+        <strong>{status === "available" ? "Stored analysis" : status === "partial" ? "Partial coverage" : "Unavailable"}</strong>
       </div>
       {isUnavailable ? (
         <p className={styles.categorySentimentNotice}>
-          Sentiment analysis is waiting for the backend pipeline. Start the API on port 8000, then refresh this ticker.
+          No analysed category signals have been stored for this ticker yet. They will appear after the document analysis pipeline completes.
+        </p>
+      ) : status === "partial" ? (
+        <p className={styles.categorySentimentNotice}>
+          Some categories do not yet have analysed source material. Missing signals are shown as unavailable.
         </p>
       ) : null}
       <div className={styles.categorySentimentGrid}>
         {rows.map(({ key, label, result }) => {
-          const sentimentLabel = result?.sentiment_label || "neutral"
-          const confidence = result?.confidence_score || 0
+          const available = Boolean(result?.available)
+          const sentimentLabel = available ? result.sentiment_label : null
+          const confidence = available ? percent(result.confidence_score) : null
           return (
             <section className={styles.categorySentimentItem} key={key}>
               <div className={styles.categorySentimentTop}>
                 <h3>{label}</h3>
-                <span className={`${styles.sentimentPill} ${styles[`sentimentPill_${sentimentLabel}`] || ""}`}>
+                <span className={`${styles.sentimentPill} ${styles[`sentimentPill_${sentimentLabel || "unavailable"}`] || ""}`}>
                   {formatLabel(sentimentLabel)}
                 </span>
               </div>
-              <div className={styles.categorySentimentMeter}>
-                <span style={{ width: percent(confidence) }} />
+              <div
+                aria-label={`${label} average model confidence`}
+                aria-valuemax="100"
+                aria-valuemin="0"
+                aria-valuenow={available ? Math.round(Number(result.confidence_score) * 100) : undefined}
+                className={styles.categorySentimentMeter}
+                role={available ? "progressbar" : undefined}
+              >
+                <span style={{ width: confidence || "0%" }} />
               </div>
-              <p>{summaryText({ isUnavailable, key, label, result })}</p>
-              <strong>{isUnavailable ? "Waiting for API" : `${percent(confidence)} confidence`}</strong>
+              <p>{summaryText({ key, label, result })}</p>
+              <strong>{available ? `${confidence} average model confidence` : "No analysed signal"}</strong>
             </section>
           )
         })}

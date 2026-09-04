@@ -1,8 +1,8 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
-import { AppFrame } from "./components/layout/AppFrame"
 import { BadgeIcon, BellIcon, CalendarIcon, SearchIcon } from "./components/icons"
 import { fetchTickers } from "./lib/api"
 import styles from "./page.module.css"
@@ -16,28 +16,29 @@ const features = [
   {
     icon: "calendar",
     tone: "mint",
-    title: "Daily briefs in plain English",
-    body: "Complex regulatory filings translated into clear, actionable summaries every morning.",
+    title: "Briefs in plain English",
+    body: "Supported regulatory filings are organised into concise summaries with the original context kept close by.",
     featured: false,
   },
   {
     icon: "bell",
     tone: "amber",
-    title: "Alerts when it matters",
-    body: "Skip the noise. Get notified only when price-sensitive news or significant sentiment shifts occur.",
+    title: "Material updates in focus",
+    body: "Scan recent company filings and publisher reports without treating every update as an investment signal.",
     featured: false,
   },
   {
     icon: "badge",
     tone: "sage",
-    title: "Every claim is sourced",
-    body: "Zero hallucinations. Every insight includes direct links to official ASX announcements or verified data.",
+    title: "Source-aware by design",
+    body: "Insights show the linked ASX announcement or publisher record used to prepare the brief when that source is available.",
     featured: true,
   },
 ]
 
 export default function Home() {
-  const [query, setQuery] = useState("BHP")
+  const router = useRouter()
+  const [query, setQuery] = useState("")
   const [popularStocks, setPopularStocks] = useState(null)
 
   useEffect(() => {
@@ -62,21 +63,21 @@ export default function Home() {
 
   function handleSearch(event) {
     event.preventDefault()
-    window.location.href = `/search?q=${encodeURIComponent(query.trim() || "BHP")}`
+    const nextQuery = query.trim()
+    router.push(nextQuery ? `/search?q=${encodeURIComponent(nextQuery)}` : "/search")
   }
 
   const popularTickerLinks = popularStocks === null
     ? <span>Loading tickers</span>
     : popularStocks.length > 0
-      ? popularStocks.map((ticker) => <Link key={ticker} href={`/search?q=${ticker}`}>{ticker}</Link>)
+      ? popularStocks.map((ticker) => <Link key={ticker} href={`/ticker/${ticker}`}>{ticker}</Link>)
       : <span>No tickers loaded</span>
 
   return (
-    <AppFrame active="home">
-      <section className={styles.homePage}>
+    <section className={styles.homePage}>
         <div className={styles.hero}>
-          <h1>Understand any ASX stock<span>in <em>60 seconds</em></span></h1>
-          <p>We read every announcement, news article, and investor forum so you don&apos;t have to. Real-time clarity for the modern investor.</p>
+          <h1>Understand any ASX stock{" "}<span>in <em>60 seconds</em></span></h1>
+          <p>Explore supported ASX filings and publisher reports as concise, source-aware company briefs.</p>
           <form className={styles.heroSearch} onSubmit={handleSearch}>
             <SearchIcon />
             <input aria-label="Search a company or ticker" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a company or ticker - e.g. BHP, CSL, CBA" />
@@ -99,7 +100,6 @@ export default function Home() {
             )
           })}
         </div>
-      </section>
-    </AppFrame>
+    </section>
   )
 }

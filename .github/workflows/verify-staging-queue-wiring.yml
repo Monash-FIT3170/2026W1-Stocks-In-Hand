@@ -1,0 +1,214 @@
+name: Verify staging queue wiring
+
+# CD integration test for the Discovery -> Download -> Analysis queue
+# pipeline. Run this manually after "Execute approved staging change set"
+# to confirm every queue, dead-letter queue, consumer, alarm, and stack
+# output in the *deployed* stack reconciles with what the template
+# declares.
+#
+# Strictly read-only: it only calls cloudformation:DescribeStacks and
+# cloudformation:ListStackResources, both of which stocks-in-hand-github-
+# staging (the role behind AWS_DEPLOY_ROLE_ARN) already has for this stack.
+# No new IAM permissions, no template changes, and no other AWS
+# configuration are required to add or run this workflow. It never
+# creates, updates, deletes, or sends anything.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: stocks-in-hand-staging-verify-queues
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Reconcile deployed queue pipeline against the template
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-southeast-2
+      STACK_NAME: stocks-in-hand-staging
+
+    steps:
+      - name: Configure AWS credentials through OIDC
+        uses: aws-actions/configure-aws-credentials@v6.1.2
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: stocks-in-hand-verify-queues
+
+      - name: Confirm every queue-pipeline resource deployed cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          resources=(
+            DiscoveryQueue
+            DownloadQueue
+            AnalysisQueue
+            DiscoveryDeadLetterQueue
+            DownloadDeadLetterQueue
+            AnalysisDeadLetterQueue
+            AnalysisQueuePolicy
+            RawDocumentBucket
+            DiscoveryFunction
+            DownloadFunction
+            AnalysisFunction
+            SchedulerFunction
+            DiscoveryDlqAlarm
+            DownloadDlqAlarm
+            AnalysisDlqAlarm
+          )
+
+          {
+            echo "### Staging queue-wiring reconciliation"
+            echo ""
+            echo "| Resource | Status |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failures=0
+          for resource in "${resources[@]}"; do
+            status="$(aws cloudformation list-stack-resources \
+              --stack-name "$STACK_NAME" \
+              --query "StackResourceSummaries[?LogicalResourceId=='$resource'].ResourceStatus" \
+              --output text)"
+
+            echo "| $resource | ${status:-MISSING} |" >> "$GITHUB_STEP_SUMMARY"
+
+            case "$status" in
+              CREATE_COMPLETE|UPDATE_COMPLETE)
+                ;;
+              "")
+                echo "::error::$resource is missing from $STACK_NAME" >&2
+                failures=$((failures + 1))
+                ;;
+              *)
+                echo "::error::$resource is in unhealthy state: $status" >&2
+                failures=$((failures + 1))
+                ;;
+            esac
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures queue-pipeline resource(s) failed reconciliation" >&2
+            exit 1
+          fi
+
+      - name: Confirm queue and DLQ URLs are still exported
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          outputs=(
+            DiscoveryQueueUrl
+            DownloadQueueUrl
+            AnalysisQueueUrl
+            DiscoveryDeadLetterQueueUrl
+            DownloadDeadLetterQueueUrl
+            AnalysisDeadLetterQueueUrl
+          )
+
+          failures=0
+          for output in "${outputs[@]}"; do
+            value="$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$output'].OutputValue" \
+              --output text)"
+
+            if [ -z "$value" ] || [ "$value" = "None" ]; then
+              echo "::error::Stack output $output is missing or empty" >&2
+              failures=$((failures + 1))
+            else
+              echo "$output = $value" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures stack output(s) failed reconciliation" >&2
+            exit 1
+          fi
+
+      - name: Confirm deployed queue settings match the pipeline contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stack_output() {
+            aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" \
+              --output text
+          }
+
+          queue_checks=(
+            "DiscoveryQueueUrl:DiscoveryDeadLetterQueueUrl:1800"
+            "DownloadQueueUrl:DownloadDeadLetterQueueUrl:1800"
+            "AnalysisQueueUrl:AnalysisDeadLetterQueueUrl:4320"
+          )
+
+          {
+            echo ""
+            echo "### Deployed queue settings"
+            echo ""
+            echo "| Queue output | Visibility timeout | Retention | Redrive |"
+            echo "| --- | --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failures=0
+          for check in "${queue_checks[@]}"; do
+            IFS=: read -r queue_output dlq_output expected_visibility <<< "$check"
+            queue_url="$(stack_output "$queue_output")"
+            dlq_url="$(stack_output "$dlq_output")"
+            queue_arn="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names QueueArn \
+              --query 'Attributes.QueueArn' \
+              --output text)"
+            dlq_arn="$(aws sqs get-queue-attributes \
+              --queue-url "$dlq_url" \
+              --attribute-names QueueArn \
+              --query 'Attributes.QueueArn' \
+              --output text)"
+            visibility="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names VisibilityTimeout \
+              --query 'Attributes.VisibilityTimeout' \
+              --output text)"
+            retention="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names MessageRetentionPeriod \
+              --query 'Attributes.MessageRetentionPeriod' \
+              --output text)"
+            redrive="$(aws sqs get-queue-attributes \
+              --queue-url "$queue_url" \
+              --attribute-names RedrivePolicy \
+              --query 'Attributes.RedrivePolicy' \
+              --output text)"
+            dlq_retention="$(aws sqs get-queue-attributes \
+              --queue-url "$dlq_url" \
+              --attribute-names MessageRetentionPeriod \
+              --query 'Attributes.MessageRetentionPeriod' \
+              --output text)"
+
+            if [ "$visibility" != "$expected_visibility" ] \
+              || [ "$retention" != "345600" ] \
+              || [ "$dlq_retention" != "1209600" ] \
+              || [[ "$redrive" != *"$dlq_arn"* ]] \
+              || [[ "$redrive" != *'"maxReceiveCount":"5"'* ]]; then
+              echo "::error::$queue_output does not match its expected queue settings" >&2
+              failures=$((failures + 1))
+            fi
+
+            echo "| $queue_output ($queue_arn) | ${visibility}s | ${retention}s | $redrive |" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done
+
+          if [ "$failures" -gt 0 ]; then
+            echo "$failures queue setting check(s) failed" >&2
+            exit 1
+          fi

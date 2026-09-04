@@ -7,20 +7,23 @@
     "build": "next build",
     "start": "next start -p 3000",
     "preview": "next build && npx serve out",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
+    "aws-amplify": "6.20.0",
     "next": "15.5.21",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "overrides": {
-    "nanoid": "3.3.17",
+    "nanoid": "3.3.18",
     "postcss": "8.5.23",
     "sharp": "0.35.0"
   },
   "devDependencies": {
     "eslint": "^9.39.5",
-    "eslint-config-next": "^15.5.21"
+    "eslint-config-next": "^15.5.21",
+    "vitest": "4.1.11"
   }
 }

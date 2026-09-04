@@ -3,8 +3,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_investor
+from app.api.deps import get_cognito_principal, get_current_investor
 from app.core.config import settings
+from app.core.cognito import (
+    CognitoPrincipal,
+    CognitoServiceError,
+    CognitoTokenError,
+    get_verified_cognito_user,
+)
 from app.core.security import create_session_token, hash_session_token
 from app.crud import investor as investor_crud
 from app.database.connection import get_db
@@ -14,6 +20,17 @@ from app.schemas.auth import AuthResponse, SignInRequest, SignUpRequest
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _require_legacy_auth(*, allow_dual: bool = False) -> None:
+    legacy_enabled = settings.AUTH_PROVIDER == "legacy" or (
+        allow_dual and settings.AUTH_PROVIDER == "dual"
+    )
+    if not legacy_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Legacy authentication is disabled",
+        )
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -52,6 +69,7 @@ def _create_session(db: Session, investor: Investor) -> str:
 
 @router.post("/sign-up", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def sign_up(body: SignUpRequest, response: Response, db: Session = Depends(get_db)):
+    _require_legacy_auth()
     existing = investor_crud.get_auth_investor_by_email(db, email=body.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -69,6 +87,7 @@ def sign_up(body: SignUpRequest, response: Response, db: Session = Depends(get_d
 
 @router.post("/sign-in", response_model=AuthResponse)
 def sign_in(body: SignInRequest, response: Response, db: Session = Depends(get_db)):
+    _require_legacy_auth(allow_dual=True)
     investor = investor_crud.authenticate_investor(
         db=db,
         email=body.email,
@@ -87,8 +106,46 @@ def me(current_investor: Investor = Depends(get_current_investor)):
     return {"message": "Authenticated", "investor": current_investor}
 
 
+@router.post("/bootstrap", response_model=AuthResponse)
+def bootstrap_cognito_profile(
+    principal: CognitoPrincipal = Depends(get_cognito_principal),
+    db: Session = Depends(get_db),
+):
+    try:
+        cognito_user = get_verified_cognito_user(principal)
+    except CognitoTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        ) from exc
+    except CognitoServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cognito profile service is unavailable",
+        ) from exc
+
+    try:
+        investor, created = investor_crud.bootstrap_cognito_investor(
+            db,
+            cognito_sub=cognito_user.sub,
+            email=cognito_user.email,
+            username=cognito_user.name,
+            allow_existing_email_link=settings.COGNITO_LINK_EXISTING_BY_EMAIL,
+        )
+    except investor_crud.CognitoProfileConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return {
+        "message": "Cognito profile created" if created else "Cognito profile linked",
+        "investor": investor,
+    }
+
+
 @router.post("/sign-out")
 def sign_out(request: Request, response: Response, db: Session = Depends(get_db)):
+    _require_legacy_auth(allow_dual=True)
     session_token = request.cookies.get(settings.SESSION_COOKIE_NAME)
     if session_token:
         token_hash = hash_session_token(session_token)

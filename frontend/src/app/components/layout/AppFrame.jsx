@@ -1,8 +1,10 @@
 "use client"
 
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 import { apiFetch } from "../../lib/api"
+import { isCognitoAuthEnabled } from "../../../auth/cognito"
 import styles from "./AppFrame.module.css"
 
 const AUTH_STORAGE_KEY = "stonks_signed_in"
@@ -27,21 +29,50 @@ function storeSessionHint(isSignedIn) {
   }
 }
 
-// Shared app chrome for every prototype page.
-// Use this component when a page should have the standard StonksInHand nav and footer.
-// The active prop controls which nav item is underlined, and signedIn toggles the
-// watchlist/logout variant shown in the Figma prototype. Avoid placing page-specific
-// layout here, because changing this file affects every frontend route.
-export function AppFrame({
-  active,
-  signedIn = false,
-  children,
-}) {
-  const [hasSession, setHasSession] = useState(signedIn)
+function titleForPath(pathname) {
+  if (pathname === "/") return "Home"
+  if (pathname.startsWith("/ticker/")) {
+    const [, , rawSymbol, section] = pathname.split("/")
+    const symbol = (rawSymbol || "Ticker").toUpperCase()
+    const suffix = section === "news" ? "News" : section === "deep-dive" ? "Deep dive" : "Brief"
+    return `${symbol} ${suffix}`
+  }
+  if (pathname.startsWith("/announcements")) return "Announcements"
+  if (pathname.startsWith("/watchlist")) return "My watchlist"
+  if (pathname.startsWith("/settings/notifications")) return "Alert settings"
+  if (pathname.startsWith("/unsubscribe")) return "Unsubscribe"
+  if (pathname.startsWith("/search")) return "Company search"
+  if (pathname.startsWith("/sign-in")) return "Sign in"
+  if (pathname.startsWith("/sign-up")) return "Create account"
+  if (pathname.startsWith("/confirm-sign-up")) return "Confirm account"
+  if (pathname.startsWith("/forgot-password")) return "Reset password"
+  if (pathname.startsWith("/reset-password")) return "Choose a new password"
+  if (pathname.startsWith("/mfa-setup")) return "Authenticator setup"
+  if (pathname.startsWith("/about")) return "About"
+  if (pathname.startsWith("/terms")) return "Terms"
+  if (pathname.startsWith("/data-sources")) return "Data sources"
+  return "Page not found"
+}
+
+export function AppFrame({ children }) {
+  const pathname = usePathname() || "/"
+  const [hasSession, setHasSession] = useState(false)
+  const routeTitle = titleForPath(pathname)
+  const active = pathname.startsWith("/announcements")
+    ? "announcements"
+    : pathname.startsWith("/watchlist")
+      ? "watchlist"
+      : pathname.startsWith("/settings/notifications")
+        ? "alert-settings"
+      : pathname === "/"
+        ? "home"
+        : null
 
   useEffect(() => {
     let cancelled = false
-    setHasSession(signedIn || hasStoredSession())
+    setHasSession(hasStoredSession())
+    const updateSessionHint = () => setHasSession(hasStoredSession())
+    window.addEventListener("stonks-auth-changed", updateSessionHint)
 
     async function loadSession() {
       try {
@@ -79,34 +110,45 @@ export function AppFrame({
 
     return () => {
       cancelled = true
+      window.removeEventListener("stonks-auth-changed", updateSessionHint)
     }
-  }, [signedIn])
+  }, [])
+
+  useEffect(() => {
+    document.title = `${routeTitle} | StonksInHand`
+  }, [routeTitle])
 
   return (
-    <main className={styles.appShell}>
+    <div className={styles.appShell}>
+      <a className={styles.skipLink} href="#main-content">Skip to main content</a>
       <header className={styles.topNav}>
         <div className={styles.navInner}>
           <Link className={styles.brandButton} href="/">StonksInHand</Link>
           <nav className={styles.navLinks} aria-label="Primary">
-            <Link className={active === "home" ? styles.activeNavLink : styles.navLink} href="/">Home</Link>
-            <Link className={active === "announcements" ? styles.activeNavLink : styles.navLink} href="/announcements">Announcements</Link>
-            {hasSession && <Link className={active === "watchlist" ? styles.activeNavLink : styles.navLink} href="/watchlist">My Watchlist</Link>}
+            <Link aria-current={active === "home" ? "page" : undefined} className={active === "home" ? styles.activeNavLink : styles.navLink} href="/">Home</Link>
+            <Link aria-current={active === "announcements" ? "page" : undefined} className={active === "announcements" ? styles.activeNavLink : styles.navLink} href="/announcements">Announcements</Link>
+            {hasSession && <Link aria-current={active === "watchlist" ? "page" : undefined} className={active === "watchlist" ? styles.activeNavLink : styles.navLink} href="/watchlist">My Watchlist</Link>}
+            {hasSession && isCognitoAuthEnabled() ? <Link className={styles.navLink} href="/mfa-setup">Security</Link> : null}
+            {hasSession && <Link aria-current={active === "alert-settings" ? "page" : undefined} className={active === "alert-settings" ? styles.activeNavLink : styles.navLink} href="/settings/notifications">Alert settings</Link>}
           </nav>
           <Link className={styles.signInButton} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Logout" : "Sign In"}</Link>
         </div>
       </header>
-      {children}
+      <p className={styles.routeAnnouncer} aria-live="polite" aria-atomic="true">{routeTitle}</p>
+      <main className={styles.mainContent} id="main-content" tabIndex="-1">
+        {children}
+      </main>
       <footer className={styles.footer}>
         <div>
           <strong>StonksInHand</strong>
-          <p>2026 StonksInHand. Powered by AI, verified by sources.</p>
+          <p>2026 StonksInHand. AI-assisted briefs with linked source material.</p>
         </div>
         <nav aria-label="Footer">
-          <a href="#">About</a>
-          <a href="#">Terms</a>
-          <a href="#">Data Sources</a>
+          <Link href="/about">About</Link>
+          <Link href="/terms">Terms</Link>
+          <Link href="/data-sources">Data Sources</Link>
         </nav>
       </footer>
-    </main>
+    </div>
   )
 }

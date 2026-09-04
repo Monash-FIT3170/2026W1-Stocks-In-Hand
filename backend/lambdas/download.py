@@ -30,7 +30,15 @@ SUPPORTED_ADAPTERS = {
     "ANZ": "anz",
     "BHP": "bhp",
     "CBA": "cba",
+    "COH": "coh",
+    "COL": "col",
     "CSL": "csl",
+    "MQG": "mqg",
+    "ORG": "org",
+    "RIO": "rio",
+    "TCL": "tcl",
+    "TLS": "tls",
+    "WDS": "wds",
     "WES": "wes",
 }
 

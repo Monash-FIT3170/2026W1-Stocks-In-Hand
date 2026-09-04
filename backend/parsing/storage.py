@@ -19,7 +19,7 @@ from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.services import groq as groq_service
+from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
@@ -27,9 +27,14 @@ from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
 from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
 
+try:
+    from .classification_metadata import merge_classification_metadata
+except ImportError:  # Support direct CLI execution.
+    from classification_metadata import merge_classification_metadata
+
 if TYPE_CHECKING:
     from scrapers.base import Announcement
-    from categories.base import ReportCategory
+    from parsing.classification import ClassificationResult
 
 # Maps parsing category class names to typed ArtifactType enum values.
 # Categories not listed here are stored as ASX_ANNOUNCEMENT_OTHER.
@@ -126,7 +131,7 @@ def _summarise_and_store_artifact(
         return
 
     try:
-        summary = groq_service.summarise_announcement(
+        summary = llm_service.summarise_announcement(
             title=artifact.title or "Untitled ASX announcement",
             category=category_name,
             extracted_data=extracted_data,
@@ -154,7 +159,7 @@ def _summarise_and_store_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=groq_service.active_model_name(),
+        model_used=llm_service.active_model_name(),
     ))
     db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
@@ -213,7 +218,8 @@ def get_or_create_platform(db, platform_name: str = "ASX") -> InformationPlatfor
 
 def store(
     announcement: "Announcement",
-    category: "type[ReportCategory] | None",
+    *,
+    classification: "ClassificationResult",
     extracted_data: dict,
     raw_text: str,
 ) -> None:
@@ -233,24 +239,30 @@ def store(
         existing = db.query(Artifact).filter_by(content_hash=content_hash).first()
         if existing:
             print(f"[STORAGE] Duplicate found for: {clean_title[:50]}... Skipping storage.")
+            existing_metadata = (
+                existing.artifact_metadata
+                if isinstance(existing.artifact_metadata, dict)
+                else {}
+            )
+            next_metadata = merge_classification_metadata(
+                existing_metadata, classification
+            )
+            if classification.status == "classified":
+                next_metadata["extracted_data"] = extracted_data
+                next_metadata.pop("extracted_data_stale", None)
+            existing.artifact_metadata = next_metadata
             if should_replace_artifact_title(existing.title, clean_title):
                 existing.title = clean_title
-                db.add(existing)
-                db.commit()
                 print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
+            db.add(existing)
+            db.commit()
             if not _artifact_has_summary_fields(existing):
-                existing_metadata = (
-                    existing.artifact_metadata
-                    if isinstance(existing.artifact_metadata, dict)
-                    else {}
-                )
                 existing_category = str(
-                    existing_metadata.get("category")
-                    or (category.__name__ if category else "UNKNOWN")
+                    next_metadata.get("category") or "UNKNOWN"
                 )
                 existing_extracted_data = (
-                    existing_metadata.get("extracted_data")
-                    if isinstance(existing_metadata.get("extracted_data"), dict)
+                    next_metadata.get("extracted_data")
+                    if isinstance(next_metadata.get("extracted_data"), dict)
                     else extracted_data
                 )
                 _summarise_and_store_artifact(
@@ -268,18 +280,17 @@ def store(
                 )
             return
 
-        category_name = category.__name__ if category else "UNKNOWN"
+        category_name = classification.compatibility_category
         artifact_type = _CATEGORY_TO_ARTIFACT_TYPE.get(
             category_name, ArtifactType.ASX_ANNOUNCEMENT_OTHER
         )
 
-        metadata = {
+        metadata = merge_classification_metadata({
             "pdf_url": announcement.pdf_url,
             "source_url": announcement.source_url,
-            "category": category_name,
             "extracted_data": extracted_data,
             **announcement.metadata,
-        }
+        }, classification)
 
         artifact_data = ArtifactCreate(
             source_type=SourceType.ASX_ANNOUNCEMENT,

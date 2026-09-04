@@ -1,8 +1,14 @@
 import asyncio
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from lambda_api import handler
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from lambda_api import app, handler
+from main import get_db
 
 
 def test_api_gateway_base_path_routes_health() -> None:
@@ -48,6 +54,7 @@ def test_api_gateway_base_path_routes_health() -> None:
         log_stream_name="test",
     )
 
+    app.dependency_overrides[get_db] = lambda: MagicMock()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -55,6 +62,7 @@ def test_api_gateway_base_path_routes_health() -> None:
     finally:
         loop.close()
         asyncio.set_event_loop(None)
+        app.dependency_overrides.pop(get_db, None)
 
     assert response["statusCode"] == 200
     assert json.loads(response["body"]) == {"status": "ok"}

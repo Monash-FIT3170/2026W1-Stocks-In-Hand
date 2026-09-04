@@ -1,17 +1,21 @@
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import Integer, cast, or_
+from sqlalchemy import Integer, and_, cast, func, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from uuid import UUID
+
 from app.crud.artifact_sentiment import stage_artifact_sentiment
 from app.crud.artifact_summary import stage_artifact_summary
 from app.models.artifact import Artifact
+from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
-from datetime import datetime, timezone, timedelta
+from app.services.summary_metadata import normalise_summary_metadata
+
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
     db_artifact = Artifact(**artifact.model_dump())
@@ -55,9 +59,11 @@ def _stage_artifact_analysis(
         raise ValueError(f"Artifact {artifact_id} does not exist")
 
     artifact.raw_text = raw_text
+    summary_metadata = normalise_summary_metadata(summary)
     artifact.artifact_metadata = {
         **(artifact.artifact_metadata or {}),
         **(metadata or {}),
+        **summary_metadata,
     }
 
     if summary is not None:
@@ -204,16 +210,29 @@ def get_reddit_posts_for_ticker(
     limit: int = 50,
 ) -> list[Artifact]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    keyword = f"%{ticker_symbol.upper()}%"
+    ticker = (
+        db.query(Ticker)
+        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+        .first()
+    )
+    if not ticker:
+        return []
 
     return (
         db.query(Artifact)
+        .outerjoin(
+            ArtifactTickerMention,
+            and_(
+                ArtifactTickerMention.artifact_id == Artifact.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
+            ),
+        )
         .filter(Artifact.source_type == SourceType.REDDIT.value)
         .filter(Artifact.published_at >= cutoff)
         .filter(
             or_(
-                Artifact.title.ilike(keyword),
-                Artifact.raw_text.ilike(keyword),
+                Artifact.ticker_id == ticker.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
             )
         )
         .order_by(
@@ -222,3 +241,124 @@ def get_reddit_posts_for_ticker(
         .limit(limit)
         .all()
     )
+
+
+def _is_bluesky_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
+    text = " ".join((artifact.title or "", artifact.raw_text or ""))
+    if not re.search(rf"(?<![A-Za-z0-9]){re.escape(ticker_symbol)}(?![A-Za-z0-9])", text, re.IGNORECASE):
+        return False
+
+    company_terms = tuple(
+        term
+        for term in (company_name, company_name.replace(" Holdings Limited", ""))
+        if term.lower() != ticker_symbol.lower()
+    )
+    finance_terms = (
+        "asx",
+        "share",
+        "stock",
+        "dividend",
+        "earnings",
+        "profit",
+        "revenue",
+        "investor",
+        "market",
+        "bank",
+        "portfolio",
+    )
+    lower_text = text.lower()
+    return any(
+        term.lower() in lower_text
+        for term in (*company_terms, f"{ticker_symbol} bank", *finance_terms)
+        if term
+    )
+
+
+def get_bluesky_posts_for_ticker(
+    db: Session,
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+) -> list[Artifact]:
+    ticker = (
+        db.query(Ticker)
+        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+        .first()
+    )
+    if not ticker:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    candidates = (
+        db.query(Artifact)
+        .outerjoin(
+            ArtifactTickerMention,
+            and_(
+                ArtifactTickerMention.artifact_id == Artifact.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
+            ),
+        )
+        .filter(Artifact.source_type == SourceType.BLUESKY.value)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(
+            or_(
+                Artifact.ticker_id == ticker.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
+            )
+        )
+        .order_by(
+            Artifact.artifact_metadata["like_count"].as_integer().desc().nullslast()
+        )
+        .limit(limit * 3)
+        .all()
+    )
+    return candidates[:limit]
+
+
+def _is_mastodon_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
+    return _is_bluesky_ticker_post(artifact, ticker_symbol, company_name)
+
+
+def get_mastodon_posts_for_ticker(
+    db: Session,
+    ticker_symbol: str,
+    days: int = 30,
+    limit: int = 50,
+) -> list[Artifact]:
+    ticker = (
+        db.query(Ticker)
+        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
+        .first()
+    )
+    if not ticker:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    candidates = (
+        db.query(Artifact)
+        .outerjoin(
+            ArtifactTickerMention,
+            and_(
+                ArtifactTickerMention.artifact_id == Artifact.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
+            ),
+        )
+        .filter(Artifact.source_type == SourceType.MASTODON.value)
+        .filter(Artifact.published_at >= cutoff)
+        .filter(
+            or_(
+                Artifact.ticker_id == ticker.id,
+                ArtifactTickerMention.ticker_id == ticker.id,
+            )
+        )
+        .order_by(
+            (
+                Artifact.artifact_metadata["favourites_count"].as_integer()
+                + Artifact.artifact_metadata["reblogs_count"].as_integer()
+                + Artifact.artifact_metadata["replies_count"].as_integer()
+            ).desc().nullslast()
+        )
+        .limit(limit * 3)
+        .all()
+    )
+    return candidates[:limit]

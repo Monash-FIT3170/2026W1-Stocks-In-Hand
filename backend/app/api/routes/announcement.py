@@ -20,6 +20,7 @@ def list_trending_announcements(
     return crud.get_trending_announcements(db, days=days, limit=limit)
 
 
+@router.get("", response_model=list[AnnouncementResponse], include_in_schema=False)
 @router.get("/", response_model=list[AnnouncementResponse])
 def list_announcements(
     limit: int = 50,

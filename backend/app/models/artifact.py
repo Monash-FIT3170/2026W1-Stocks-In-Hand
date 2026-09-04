@@ -70,3 +70,8 @@ class Artifact(Base):
     ticker = relationship("Ticker", backref="artifacts")
     platform = relationship("InformationPlatform", backref="artifacts")
     scrape_run = relationship("ScrapeRun", back_populates="artifacts")
+    ticker_mentions = relationship(
+        "ArtifactTickerMention",
+        back_populates="artifact",
+        cascade="all, delete-orphan",
+    )

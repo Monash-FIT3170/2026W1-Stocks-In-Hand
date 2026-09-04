@@ -5,9 +5,11 @@ import { useSearchParams } from "next/navigation"
 import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
 import { AnnouncementFilters } from "../components/announcements/AnnouncementFilters"
 import { TrendingStocks } from "../components/announcements/TrendingStocks"
-import { AppFrame } from "../components/layout/AppFrame"
 import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
+import { appendAnnouncementPage } from "./pagination"
 import styles from "../page.module.css"
+
+const ANNOUNCEMENT_PAGE_SIZE = 6
 
 function formatAnnouncementTimestamp(value) {
   if (!value) {
@@ -41,11 +43,12 @@ function formatAnnouncementTimestamp(value) {
   return `${datePart}, ${timePart}`
 }
 
-// Announcements route for "/announcements".
-// This page renders only DB-backed announcement data so empty/error states expose
+// Market updates route for "/announcements".
+// This page renders only DB-backed source data so empty/error states expose
 // integration problems immediately.
 function AnnouncementsContent() {
   const searchParams = useSearchParams()
+  const [attempt, setAttempt] = useState(0)
   const query = searchParams.toString()
   const filters = useMemo(() => {
     const params = new URLSearchParams(query)
@@ -59,7 +62,11 @@ function AnnouncementsContent() {
   const [state, setState] = useState({
     announcementCards: [],
     errorMessage: "",
+    hasMore: false,
     isLoading: true,
+    isLoadingMore: false,
+    loadMoreError: "",
+    nextOffset: 0,
     trendingStocks: [],
   })
 
@@ -71,17 +78,23 @@ function AnnouncementsContent() {
 
       try {
         const [announcements, trendingStocks] = await Promise.all([
-          fetchAnnouncements(filters),
+          fetchAnnouncements({ ...filters, limit: ANNOUNCEMENT_PAGE_SIZE }),
           fetchTrendingAnnouncements({ days: 7, limit: 4 }),
         ])
         if (!cancelled) {
-          setState({
-            announcementCards: announcements.map((item) => ({
+          const firstPage = announcements.map((item) => ({
               ...item,
               time: formatAnnouncementTimestamp(item.published_at),
-            })),
+            }))
+          const page = appendAnnouncementPage([], firstPage, 0)
+          setState({
+            announcementCards: page.announcementCards,
             errorMessage: "",
+            hasMore: announcements.length === ANNOUNCEMENT_PAGE_SIZE,
             isLoading: false,
+            isLoadingMore: false,
+            loadMoreError: "",
+            nextOffset: page.nextOffset,
             trendingStocks,
           })
         }
@@ -89,8 +102,12 @@ function AnnouncementsContent() {
         if (!cancelled) {
           setState({
             announcementCards: [],
-            errorMessage: "Announcements are unavailable right now. Please try again once the backend is running.",
+            errorMessage: "Announcements are unavailable right now. Check your connection and try again.",
+            hasMore: false,
             isLoading: false,
+            isLoadingMore: false,
+            loadMoreError: "",
+            nextOffset: 0,
             trendingStocks: [],
           })
         }
@@ -101,23 +118,60 @@ function AnnouncementsContent() {
     return () => {
       cancelled = true
     }
-  }, [filters])
+  }, [attempt, filters])
+
+  async function loadMoreAnnouncements() {
+    setState((current) => ({ ...current, isLoadingMore: true, loadMoreError: "" }))
+    try {
+      const announcements = await fetchAnnouncements({
+        ...filters,
+        limit: ANNOUNCEMENT_PAGE_SIZE,
+        offset: state.nextOffset,
+      })
+      const nextCards = announcements.map((item) => ({
+        ...item,
+        time: formatAnnouncementTimestamp(item.published_at),
+      }))
+      setState((current) => {
+        const page = appendAnnouncementPage(
+          current.announcementCards,
+          nextCards,
+          current.nextOffset,
+        )
+        return {
+          ...current,
+          announcementCards: page.announcementCards,
+          hasMore: announcements.length === ANNOUNCEMENT_PAGE_SIZE,
+          isLoadingMore: false,
+          nextOffset: page.nextOffset,
+        }
+      })
+    } catch {
+      setState((current) => ({
+        ...current,
+        isLoadingMore: false,
+        loadMoreError: "More announcements could not be loaded. Try again.",
+      }))
+    }
+  }
 
   const {
     announcementCards,
     errorMessage,
+    hasMore,
     isLoading,
+    isLoadingMore,
+    loadMoreError,
     trendingStocks,
   } = state
   const { today, sector, startDate, endDate } = filters
 
   return (
-    <AppFrame active="announcements">
-      <section className={styles.contentPage}>
+    <section className={styles.contentPage}>
         <div className={styles.announcementsHero}>
           <div>
-            <h1>ASX Announcements</h1>
-            <p>Real-time intelligence from the Australian Securities Exchange. Decoded by AI to give you the signal within the noise.</p>
+            <h1>Market Updates</h1>
+            <p>Recent ASX filings, publisher news, and Reddit discussions with links back to the original sources.</p>
           </div>
           <div className={styles.announcementControls}>
             <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
@@ -125,19 +179,24 @@ function AnnouncementsContent() {
           </div>
         </div>
         <div className={styles.announcementList}>
-          {isLoading ? <div className={styles.emptyCard}><h3>Loading announcements...</h3></div> : null}
-          {errorMessage ? <div className={styles.emptyCard}><h3>{errorMessage}</h3></div> : null}
-          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.emptyCard}><h3>No ASX announcements found.</h3><p>New announcements will appear here after they are stored in the database.</p></div> : null}
+          {isLoading ? <div className={styles.contentSkeleton} aria-live="polite">Loading announcements…</div> : null}
+          {errorMessage ? <div className={styles.emptyCard} role="alert"><h2>Could not load announcements</h2><p>{errorMessage}</p><button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button></div> : null}
+          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.emptyCard}><h2>No market updates found</h2><p>Adjust the filters or collect new ASX, news, and Reddit content.</p></div> : null}
           {announcementCards.map((item) => <AnnouncementCard item={item} key={item.id} />)}
+          {loadMoreError ? <p className={styles.authError} role="alert">{loadMoreError}</p> : null}
+          {hasMore ? (
+            <button className={styles.loadMoreButton} disabled={isLoadingMore} onClick={loadMoreAnnouncements} type="button">
+              {isLoadingMore ? "Loading more…" : "Show more announcements"}
+            </button>
+          ) : null}
         </div>
-      </section>
-    </AppFrame>
+    </section>
   )
 }
 
 export default function AnnouncementsRoute() {
   return (
-    <Suspense fallback={<AppFrame active="announcements"><section className={styles.contentPage}>Loading announcements...</section></AppFrame>}>
+    <Suspense fallback={<section className={styles.contentPage}><div className={styles.contentSkeleton}>Loading announcements…</div></section>}>
       <AnnouncementsContent />
     </Suspense>
   )

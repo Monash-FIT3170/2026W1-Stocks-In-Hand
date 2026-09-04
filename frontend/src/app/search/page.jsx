@@ -1,9 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
-import { AppFrame } from "../components/layout/AppFrame"
+import { Suspense, useEffect, useMemo, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { SearchIcon } from "../components/icons"
 import { fetchTickers } from "../lib/api"
 import styles from "../page.module.css"
@@ -48,13 +47,16 @@ function normalizeTickers(data) {
   return []
 }
 
-export default function SearchPage() {
+function SearchContent() {
   const router = useRouter()
-  const [query, setQuery] = useState("BHP")
+  const searchParams = useSearchParams()
+  const routeQuery = searchParams.get("q")?.trim() || ""
+  const [query, setQuery] = useState(routeQuery)
   const [value, setValue] = useState(query)
   const [tickers, setTickers] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState("")
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -72,9 +74,9 @@ export default function SearchPage() {
             setError("No companies were returned by the database.")
           }
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) {
-          setError(err.message)
+          setError("Company search is unavailable right now. Check your connection and try again.")
           setTickers([])
         }
       } finally {
@@ -89,14 +91,12 @@ export default function SearchPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [attempt])
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const nextQuery = params.get("q") || "BHP"
-    setQuery(nextQuery)
-    setValue(nextQuery)
-  }, [])
+    setQuery(routeQuery)
+    setValue(routeQuery)
+  }, [routeQuery])
 
   const results = useMemo(
     () => normalizeTickers(tickers).filter((ticker) => matchesQuery(ticker, query)),
@@ -105,23 +105,32 @@ export default function SearchPage() {
 
   function handleSearch(event) {
     event.preventDefault()
-    const nextQuery = value.trim() || "BHP"
+    const nextQuery = value.trim()
     setQuery(nextQuery)
-    router.push(`/search?q=${encodeURIComponent(nextQuery)}`)
+    router.push(nextQuery ? `/search?q=${encodeURIComponent(nextQuery)}` : "/search")
   }
 
   return (
-    <AppFrame active="home">
-      <section className={styles.contentPage}>
+    <section className={styles.contentPage}>
         <form className={styles.pageSearchBar} onSubmit={handleSearch}>
           <SearchIcon />
           <input aria-label="Search company or ticker" value={value} onChange={(event) => setValue(event.target.value)} />
         </form>
         <div className={styles.searchHeader}>
-          <h1>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></h1>
-          <p>{isLoading ? "Loading companies from the database." : `We found ${results.length} companies matching your search.`}</p>
+          <h1>{query ? <>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></> : "Browse ASX companies"}</h1>
+          <p>{isLoading
+            ? "Loading companies from the database."
+            : error
+              ? "Company results could not be retrieved."
+              : `${results.length} ${results.length === 1 ? "company" : "companies"} ${query ? "matched your search" : "available"}.`}</p>
         </div>
-        {error ? <p className={styles.authError}>{error}</p> : null}
+        {error ? (
+          <div className={styles.emptyCard} role="alert">
+            <h2>Could not load company search</h2>
+            <p>{error}</p>
+            <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
+          </div>
+        ) : null}
         <div className={styles.resultsStack}>
           {results.map((result) => (
             <Link className={styles.resultCard} key={result.id} href={`/ticker/${result.symbol}`}>
@@ -136,9 +145,21 @@ export default function SearchPage() {
               </div>
             </Link>
           ))}
-          {!isLoading && results.length === 0 ? <p>No matching companies are currently in the database.</p> : null}
+          {!isLoading && !error && results.length === 0 ? (
+            <div className={styles.emptyCard}>
+              <h2>No matching companies</h2>
+              <p>Try a ticker such as CBA or a broader company name.</p>
+            </div>
+          ) : null}
         </div>
-      </section>
-    </AppFrame>
+    </section>
+  )
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<section className={styles.contentPage}><div className={styles.emptyCard}><p>Loading company search…</p></div></section>}>
+      <SearchContent />
+    </Suspense>
   )
 }

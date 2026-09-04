@@ -6,5 +6,9 @@ from .watchlist_ticker import WatchlistTicker
 from .information_platform import InformationPlatform
 from .scrape_run import ScrapeRun
 from .artifact import Artifact
+from .artifact_ticker_mention import ArtifactTickerMention
 from .artifact_sentiment import ArtifactSentiment
 from .artifact_summary import ArtifactSummary
+from .alert_subscription import AlertSubscription
+from .alert_rule import AlertRule
+from .alert_delivery import AlertDelivery

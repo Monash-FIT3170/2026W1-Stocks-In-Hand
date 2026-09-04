@@ -59,6 +59,14 @@ jobs:
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
+          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+            --output text)"
+          if [ -z "$FRONTEND_BASE_URL" ] || [ "$FRONTEND_BASE_URL" = "None" ]; then
+            echo "The existing stack does not expose FrontendUrl" >&2
+            exit 1
+          fi
           for image in api scraper analysis; do
             aws ecr describe-images \
               --repository-name "stocks-in-hand-$image" \
@@ -68,6 +76,7 @@ jobs:
             echo "ECR_REGISTRY=$ECR_REGISTRY"
             echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
             echo "RELEASE_SHA=$RELEASE_SHA"
+            echo "FRONTEND_BASE_URL=$FRONTEND_BASE_URL"
           } >> "$GITHUB_ENV"
 
       - name: Set up AWS SAM
@@ -88,6 +97,7 @@ jobs:
             --role-arn "$CFN_ROLE_ARN" \
             --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
+            --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
@@ -98,10 +108,17 @@ jobs:
               "Environment=staging" \
               "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
               "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
+              "FrontendBaseUrl=$FRONTEND_BASE_URL" \
+              "AuthProvider=legacy" \
               "ScheduleEnabled=false" \
+              "PublicDiscussionScheduleEnabled=false" \
+              "MarketauxEnabled=false" \
+              "MarketauxPerTickerLimit=10" \
               "AnalysisEnabled=true" \
               "BedrockEnabled=false" \
               "ScheduledTickers=ANZ,BHP,CBA,CSL,WES" \
+              "ScheduledPublicDiscussionSources=bluesky,mastodon" \
+              "PublicDiscussionPerSourceLimit=10" \
               "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
               "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
               "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"

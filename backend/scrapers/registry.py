@@ -7,7 +7,15 @@ from .companies.anz import ANZScraper
 from .companies.csl import CSLScraper
 from .companies.bhp import BHPScraper
 from .companies.cba import CBAScraper
+from .companies.col import COLScraper
+from .companies.coh import COHScraper
+from .companies.tcl import TCLScraper
+from .companies.tls import TLSScraper
 from .companies.wes import WESScraper
+from .companies.wds import WDSScraper
+from .companies.rio import RIOScraper
+from .companies.org import ORGScraper
+from .companies.mqg import MQGScraper
 
 # Add one import and one line here each time a new company is onboarded, and
 # add a matching entry to app.sources.SOURCES (the ticker catalog the AWS
@@ -18,8 +26,16 @@ REGISTRY: dict[str, type[BaseScraper]] = {
     "ANZ": ANZScraper,
     "BHP": BHPScraper,
     "CBA": CBAScraper,
+    "COL": COLScraper,
+    "COH": COHScraper,
+    "TCL": TCLScraper,
+    "TLS": TLSScraper,
     "CSL": CSLScraper,
     "WES": WESScraper,
+    "WDS": WDSScraper,
+    "RIO": RIOScraper,
+    "ORG": ORGScraper,
+    "MQG": MQGScraper,
 }
 
 _missing_scraper = set(SOURCES) - set(REGISTRY)

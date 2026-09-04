@@ -4,6 +4,7 @@ import re
 from playwright.async_api import async_playwright
 
 from ..base import BaseScraper, Announcement
+from ..browser import chromium_launch_options
 
 YOURIR_BASE = "https://yourir.info/resources/e381e7bfa5abbe55/announcements"
 
@@ -22,10 +23,7 @@ class CBAScraper(BaseScraper):
         announcements = []
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+            browser = await p.chromium.launch(**chromium_launch_options())
             page = await browser.new_page()
 
             try:

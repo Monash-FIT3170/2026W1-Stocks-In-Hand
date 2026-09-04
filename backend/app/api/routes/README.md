@@ -103,7 +103,7 @@ Analysis routes:
 
 - `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
-- `gemini.py`: Groq-backed summarisation and categorisation.
+- `gemini.py`: Legacy route name for provider-routed summarisation and categorisation.
 
 Operational routes:
 
