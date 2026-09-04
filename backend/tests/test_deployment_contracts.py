@@ -43,7 +43,7 @@ def test_all_canonical_tickers_are_deployable_but_schedule_stays_conservative() 
 
 def test_local_backend_installs_cognito_jwt_dependency() -> None:
     requirements = (
-        REPOSITORY_ROOT / "backend" / "requirements.txt"
+        REPOSITORY_ROOT / "backend" / "requirements-api.txt"
     ).read_text(encoding="utf-8")
 
     assert "PyJWT[crypto]==2.13.0" in requirements.splitlines()

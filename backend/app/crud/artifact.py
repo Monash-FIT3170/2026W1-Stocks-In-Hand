@@ -3,12 +3,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import Integer, and_, cast, func, or_
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.crud.artifact_sentiment import stage_artifact_sentiment
+from app.crud.artifact_summary import stage_artifact_summary
 from app.models.artifact import Artifact
-from app.models.artifact_sentiment import ArtifactSentiment
-from app.models.artifact_summary import ArtifactSummary
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
@@ -38,16 +40,15 @@ def get_artifact_by_hash(db: Session, content_hash: str):
     return db.query(Artifact).filter(Artifact.content_hash == content_hash).first()
 
 
-def store_artifact_analysis(
+def _stage_artifact_analysis(
     db: Session,
     *,
     artifact_id: UUID,
     raw_text: str,
-    metadata: dict[str, Any] | None = None,
-    summary: dict[str, Any] | None = None,
-    sentiment: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None,
+    summary: dict[str, Any] | None,
+    sentiment: dict[str, Any] | None,
 ) -> Artifact:
-    """Atomically store extracted text and the single analysis result rows."""
     artifact = (
         db.query(Artifact)
         .filter(Artifact.id == artifact_id)
@@ -66,40 +67,69 @@ def store_artifact_analysis(
     }
 
     if summary is not None:
-        summary_row = (
-            db.query(ArtifactSummary)
-            .filter(ArtifactSummary.artifact_id == artifact_id)
-            .first()
+        stage_artifact_summary(
+            db,
+            artifact_id=artifact_id,
+            summary_text=str(summary["summary_text"]),
+            model_used=summary.get("model_used"),
+            prompt_version=summary.get("prompt_version"),
+            confidence_score=summary.get("confidence_score"),
         )
-        if summary_row is None:
-            summary_row = ArtifactSummary(
-                artifact_id=artifact_id,
-                summary_text=str(summary["summary_text"]),
-            )
-            db.add(summary_row)
-        summary_row.summary_text = str(summary["summary_text"])
-        summary_row.model_used = summary.get("model_used")
-        summary_row.prompt_version = summary.get("prompt_version")
-        summary_row.confidence_score = summary.get("confidence_score")
 
     if sentiment is not None:
-        sentiment_row = (
-            db.query(ArtifactSentiment)
-            .filter(ArtifactSentiment.artifact_id == artifact_id)
-            .first()
+        stage_artifact_sentiment(
+            db,
+            artifact_id=artifact_id,
+            sentiment_label=str(sentiment["sentiment_label"]),
+            stance=sentiment.get("stance"),
+            confidence_score=sentiment.get("confidence_score"),
+            model_used=sentiment.get("model_used"),
         )
-        if sentiment_row is None:
-            sentiment_row = ArtifactSentiment(
-                artifact_id=artifact_id,
-                sentiment_label=str(sentiment["sentiment_label"]),
-            )
-            db.add(sentiment_row)
-        sentiment_row.sentiment_label = str(sentiment["sentiment_label"])
-        sentiment_row.stance = sentiment.get("stance")
-        sentiment_row.confidence_score = sentiment.get("confidence_score")
-        sentiment_row.model_used = sentiment.get("model_used")
 
-    db.commit()
+    return artifact
+
+
+def store_artifact_analysis(
+    db: Session,
+    *,
+    artifact_id: UUID,
+    raw_text: str,
+    metadata: dict[str, Any] | None = None,
+    summary: dict[str, Any] | None = None,
+    sentiment: dict[str, Any] | None = None,
+) -> Artifact:
+    """Atomically store extracted text and the single analysis result rows.
+
+    The artifact row is locked (`with_for_update`) for the duration of the
+    transaction, which serializes concurrent `store_artifact_analysis` calls
+    for the same artifact. That lock does not cover the admin API's
+    unlocked `upsert_artifact_summary`/`upsert_artifact_sentiment` routes
+    (`app/api/routes/gemini.py`), so a summary/sentiment insert can still
+    race a concurrent writer between our lookup and commit — retried once
+    below, the same way the standalone upsert functions retry.
+    """
+    artifact = _stage_artifact_analysis(
+        db,
+        artifact_id=artifact_id,
+        raw_text=raw_text,
+        metadata=metadata,
+        summary=summary,
+        sentiment=sentiment,
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        artifact = _stage_artifact_analysis(
+            db,
+            artifact_id=artifact_id,
+            raw_text=raw_text,
+            metadata=metadata,
+            summary=summary,
+            sentiment=sentiment,
+        )
+        db.commit()
+
     db.refresh(artifact)
     return artifact
 

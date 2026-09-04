@@ -8,6 +8,7 @@ import pytest
 from app.crud import scrape_run as scrape_run_crud
 from app.messages import QueueAMessage
 from app.services import marketaux
+from app.status import ScrapeRunStatus
 from lambdas import schedule
 
 
@@ -22,7 +23,7 @@ def test_schedule_enqueues_each_enabled_ticker_once(monkeypatch) -> None:
     sqs = MagicMock()
 
     def create_run(_db, *, ticker, **_kwargs):
-        return SimpleNamespace(id=uuid4(), status="enqueueing", ticker=ticker), True
+        return SimpleNamespace(id=uuid4(), status=ScrapeRunStatus.ENQUEUEING, ticker=ticker), True
 
     with (
         patch.object(schedule, "load_runtime_configuration"),
@@ -66,7 +67,7 @@ def test_schedule_enqueues_each_enabled_ticker_once(monkeypatch) -> None:
 
 def test_schedule_duplicate_completed_run_is_not_queued() -> None:
     sqs = MagicMock()
-    run = SimpleNamespace(id=uuid4(), status="completed")
+    run = SimpleNamespace(id=uuid4(), status=ScrapeRunStatus.COMPLETED)
 
     with (
         patch.object(schedule, "database_session", _database_session),

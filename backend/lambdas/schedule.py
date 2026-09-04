@@ -14,19 +14,12 @@ from pydantic import HttpUrl
 
 from app.messages import QueueAMessage
 from app.sources import SOURCES
+from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
 from lambdas.common import database_session, load_runtime_configuration, log_event
 
 STAGE = "schedule"
 MAX_MARKETAUX_TICKERS_PER_RUN = 5
 MAX_MARKETAUX_ITEMS_PER_TICKER = 25
-_ACTIVE_OR_FINISHED = {
-    "queued",
-    "discovering",
-    "downloading",
-    "analyzing",
-    "partial",
-    "completed",
-}
 
 
 def _event_key(event: dict) -> str:
@@ -118,10 +111,10 @@ def _enqueue_ticker(*, ticker: str, event_key: str, sqs, queue_url: str) -> bool
             idempotency_key=f"schedule:{ticker}:{event_key}",
             trigger_type="scheduled",
         )
-        if not created and run.status in _ACTIVE_OR_FINISHED:
+        if not created and run.status in RUN_ACTIVE_OR_FINISHED:
             return False
         run_id = cast(UUID, run.id)
-        if not created and run.status == "failed":
+        if not created and run.status == ScrapeRunStatus.FAILED:
             run = scrape_run_crud.mark_run_enqueueing(db, run_id)
         run_id = cast(UUID, run.id)
 

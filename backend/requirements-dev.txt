@@ -1,0 +1,15 @@
+# Local development / docker-compose dependency set.
+#
+# This exists so local dev installs the *same* pinned versions the Lambda
+# images ship (see requirements-api.txt, requirements-analysis.txt,
+# requirements-scraper.txt, requirements-runtime.txt) instead of a separately
+# drifting set. If you're bumping a shared package's version, bump it in the
+# relevant split file below, not here.
+-r requirements-api.txt
+-r requirements-analysis.txt
+-r requirements-scraper.txt
+
+# Local-only extras: not needed in any Lambda image, but required to run the
+# backend as a standalone dev server / run migrations outside the pipeline.
+uvicorn==0.29.0
+alembic==1.13.1

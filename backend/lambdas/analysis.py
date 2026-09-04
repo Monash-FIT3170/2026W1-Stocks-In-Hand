@@ -35,6 +35,7 @@ from lambdas.common import (
     log_event,
     receive_attempt,
 )
+from app.status import AnalysisStatus, DownloadStatus
 from lambdas.download_validation import (
     DOCUMENT_CONTENT_TYPES,
     DocumentFormat,
@@ -192,7 +193,7 @@ def _artifact_state(
                 code="artifact_identity_mismatch",
             )
         state = {
-            "completed": artifact.analysis_status == "completed",
+            "completed": artifact.analysis_status == AnalysisStatus.COMPLETED,
             "run_id": artifact.scrape_run_id,
             "title": artifact.title or "Untitled ASX announcement",
             "download_status": artifact.download_status,
@@ -204,7 +205,7 @@ def _artifact_state(
             "filename": _artifact_filename(artifact),
         }
 
-    if state["download_status"] == "stored":
+    if state["download_status"] == DownloadStatus.STORED:
         if (
             state["s3_bucket"] != bucket
             or state["s3_key"] != key

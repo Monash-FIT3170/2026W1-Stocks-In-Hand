@@ -13,8 +13,7 @@ from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.schemas.scrape_run import ScrapeRunCreate
-
-_DOWNSTREAM_RUN_STATUSES = {"downloading", "analyzing", "partial", "completed"}
+from app.status import AnalysisStatus, DownloadStatus, RUN_DOWNSTREAM_OF_DISCOVERY, ScrapeRunStatus
 
 
 def _utcnow() -> datetime:
@@ -217,7 +216,7 @@ def get_or_create_queued_run(
     run = ScrapeRun(
         platform_id=platform.id,
         ticker_id=ticker_row.id,
-        status="enqueueing",
+        status=ScrapeRunStatus.ENQUEUEING,
         source_url=source_url,
         idempotency_key=idempotency_key,
         trigger_type=trigger_type,
@@ -249,9 +248,9 @@ def mark_run_enqueueing(db: Session, scrape_run_id: UUID) -> ScrapeRun | None:
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    if run.status != "failed":
+    if run.status != ScrapeRunStatus.FAILED:
         return run
-    run.status = "enqueueing"
+    run.status = ScrapeRunStatus.ENQUEUEING
     run.finished_at = None
     run.error_message = None
     return _commit(db, run)
@@ -265,9 +264,9 @@ def mark_run_queued_if_enqueueing(
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    if run.status != "enqueueing":
+    if run.status != ScrapeRunStatus.ENQUEUEING:
         return run
-    run.status = "queued"
+    run.status = ScrapeRunStatus.QUEUED
     run.queued_at = _utcnow()
     return _commit(db, run)
 
@@ -276,9 +275,9 @@ def mark_run_discovery_started(db: Session, scrape_run_id: UUID) -> ScrapeRun | 
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    if run.status in _DOWNSTREAM_RUN_STATUSES:
+    if run.status in RUN_DOWNSTREAM_OF_DISCOVERY:
         return run
-    run.status = "discovering"
+    run.status = ScrapeRunStatus.DISCOVERING
     run.started_at = run.started_at or _utcnow()
     run.finished_at = None
     run.error_message = None
@@ -296,11 +295,11 @@ def mark_run_discovery_completed(
         return None
     run.items_found = max(items_found, run.items_found or 0)
     if run.items_found == 0:
-        if run.status not in _DOWNSTREAM_RUN_STATUSES:
-            run.status = "completed"
+        if run.status not in RUN_DOWNSTREAM_OF_DISCOVERY:
+            run.status = ScrapeRunStatus.COMPLETED
             run.finished_at = _utcnow()
-    elif run.status not in _DOWNSTREAM_RUN_STATUSES:
-        run.status = "downloading"
+    elif run.status not in RUN_DOWNSTREAM_OF_DISCOVERY:
+        run.status = ScrapeRunStatus.DOWNLOADING
     _finish_run_if_terminal(run)
     run.error_message = None
     return _commit(db, run)
@@ -315,9 +314,9 @@ def mark_run_discovery_failed(
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    if run.status in _DOWNSTREAM_RUN_STATUSES:
+    if run.status in RUN_DOWNSTREAM_OF_DISCOVERY:
         return run
-    run.status = "failed"
+    run.status = ScrapeRunStatus.FAILED
     run.finished_at = _utcnow()
     run.error_message = error[:8000]
     return _commit(db, run)
@@ -369,8 +368,8 @@ def get_or_create_artifact(
         title=title,
         published_at=published_at,
         artifact_metadata=metadata or {},
-        download_status="pending",
-        analysis_status="pending",
+        download_status=DownloadStatus.PENDING,
+        analysis_status=AnalysisStatus.PENDING,
     )
     db.add(artifact)
     try:
@@ -403,11 +402,11 @@ def _finish_run_if_terminal(run: ScrapeRun) -> None:
     if (run.items_found or 0) > 0 and terminal >= run.items_found:
         run.finished_at = _utcnow()
         if (run.items_analyzed or 0) == 0:
-            run.status = "failed"
+            run.status = ScrapeRunStatus.FAILED
         elif (run.items_failed or 0) > 0:
-            run.status = "partial"
+            run.status = ScrapeRunStatus.PARTIAL
         else:
-            run.status = "completed"
+            run.status = ScrapeRunStatus.COMPLETED
 
 
 def mark_artifact_download_started(
@@ -415,15 +414,15 @@ def mark_artifact_download_started(
     artifact_id: UUID,
 ) -> Artifact | None:
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.download_status == "stored":
+    if artifact is None or artifact.download_status == DownloadStatus.STORED:
         return artifact
     run = _lock_run(db, artifact.scrape_run_id) if artifact.scrape_run_id else None
-    if artifact.download_status == "failed" and run:
+    if artifact.download_status == DownloadStatus.FAILED and run:
         run.items_failed = max((run.items_failed or 0) - 1, 0)
-    artifact.download_status = "downloading"
+    artifact.download_status = DownloadStatus.DOWNLOADING
     artifact.last_error = None
-    if run and run.status != "completed":
-        run.status = "downloading"
+    if run and run.status != ScrapeRunStatus.COMPLETED:
+        run.status = ScrapeRunStatus.DOWNLOADING
         run.finished_at = None
     return _commit(db, artifact)
 
@@ -442,15 +441,15 @@ def mark_artifact_stored(
     if artifact is None:
         return None
     previous_download_status = artifact.download_status
-    first_store = artifact.download_status != "stored"
+    first_store = artifact.download_status != DownloadStatus.STORED
     run = (
         _lock_run(db, artifact.scrape_run_id)
         if first_store and artifact.scrape_run_id
         else None
     )
-    artifact.download_status = "stored"
-    if artifact.analysis_status == "skipped":
-        artifact.analysis_status = "pending"
+    artifact.download_status = DownloadStatus.STORED
+    if artifact.analysis_status == AnalysisStatus.SKIPPED:
+        artifact.analysis_status = AnalysisStatus.PENDING
     artifact.checksum_sha256 = checksum_sha256
     artifact.s3_bucket = s3_bucket
     artifact.s3_key = s3_key
@@ -459,11 +458,11 @@ def mark_artifact_stored(
     artifact.downloaded_at = artifact.downloaded_at or _utcnow()
     artifact.last_error = None
     if first_store and run:
-        if previous_download_status == "failed":
+        if previous_download_status == DownloadStatus.FAILED:
             run.items_failed = max((run.items_failed or 0) - 1, 0)
         run.items_downloaded = (run.items_downloaded or 0) + 1
         run.items_saved = (run.items_saved or 0) + 1
-        run.status = "analyzing"
+        run.status = ScrapeRunStatus.ANALYZING
         run.finished_at = None
     return _commit(db, artifact)
 
@@ -477,16 +476,16 @@ def mark_artifact_download_failed(
     artifact = _lock_artifact(db, artifact_id)
     if artifact is None:
         return None
-    if artifact.download_status == "stored":
+    if artifact.download_status == DownloadStatus.STORED:
         return artifact
-    first_failure = artifact.download_status != "failed"
+    first_failure = artifact.download_status != DownloadStatus.FAILED
     run = (
         _lock_run(db, artifact.scrape_run_id)
         if first_failure and artifact.scrape_run_id
         else None
     )
-    artifact.download_status = "failed"
-    artifact.analysis_status = "skipped"
+    artifact.download_status = DownloadStatus.FAILED
+    artifact.analysis_status = AnalysisStatus.SKIPPED
     artifact.last_error = error[:8000]
     if first_failure and run:
         run.items_failed = (run.items_failed or 0) + 1
@@ -499,17 +498,17 @@ def mark_artifact_analysis_started(
     artifact_id: UUID,
 ) -> Artifact | None:
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status == "completed":
+    if artifact is None or artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
-    if artifact.download_status != "stored":
+    if artifact.download_status != DownloadStatus.STORED:
         raise ValueError(f"Artifact {artifact_id} has not been stored")
     run = _lock_run(db, artifact.scrape_run_id) if artifact.scrape_run_id else None
-    if artifact.analysis_status == "failed" and run:
+    if artifact.analysis_status == AnalysisStatus.FAILED and run:
         run.items_failed = max((run.items_failed or 0) - 1, 0)
-    artifact.analysis_status = "analyzing"
+    artifact.analysis_status = AnalysisStatus.ANALYZING
     artifact.last_error = None
     if run:
-        run.status = "analyzing"
+        run.status = ScrapeRunStatus.ANALYZING
         run.finished_at = None
     return _commit(db, artifact)
 
@@ -521,13 +520,13 @@ def mark_artifact_analysis_completed(
     artifact = _lock_artifact(db, artifact_id)
     if artifact is None:
         return None
-    first_completion = artifact.analysis_status != "completed"
+    first_completion = artifact.analysis_status != AnalysisStatus.COMPLETED
     run = (
         _lock_run(db, artifact.scrape_run_id)
         if first_completion and artifact.scrape_run_id
         else None
     )
-    artifact.analysis_status = "completed"
+    artifact.analysis_status = AnalysisStatus.COMPLETED
     artifact.analyzed_at = artifact.analyzed_at or _utcnow()
     artifact.last_error = None
     if first_completion and run:
@@ -545,15 +544,15 @@ def mark_artifact_analysis_failed(
     artifact = _lock_artifact(db, artifact_id)
     if artifact is None:
         return None
-    if artifact.analysis_status == "completed":
+    if artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
-    first_failure = artifact.analysis_status != "failed"
+    first_failure = artifact.analysis_status != AnalysisStatus.FAILED
     run = (
         _lock_run(db, artifact.scrape_run_id)
         if first_failure and artifact.scrape_run_id
         else None
     )
-    artifact.analysis_status = "failed"
+    artifact.analysis_status = AnalysisStatus.FAILED
     artifact.last_error = error[:8000]
     if first_failure and run:
         run.items_failed = (run.items_failed or 0) + 1
