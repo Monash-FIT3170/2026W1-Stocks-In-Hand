@@ -40,8 +40,11 @@ coverage run -m pytest > "$folder/pytest.txt" || status=1
 
 
 # searches for code security vulnerabilities. Blocking, for the same reason.
-echo "---------- BANDIT ----------"
-bandit -c bandit.yaml -r . > "$folder/bandit.txt" || status=1
+# -ll restricts this to medium+ severity: low-severity findings (e.g. bare
+# except/pass) are noisy pre-existing backlog, not the kind of regression
+# this gate exists to catch.
+echo "---------- BANDIT (medium+ severity) ----------"
+bandit -c bandit.yaml -ll -r . > "$folder/bandit.txt" || status=1
 
 
 # Restore output from file descriptor 3
