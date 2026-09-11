@@ -297,9 +297,18 @@ def _source_from_values(label, title, url, published_at=None, evidence_text=None
     cleaned_url = _clean_text(url)
     if not cleaned_url:
         return None
+    cleaned_title = _clean_text(title)
+    if not cleaned_title:
+        # Fall back to something more specific than the bare category label
+        # (e.g. "Asx Announcement — 12 Aug 2026") so citations without a
+        # stored document title are still distinguishable from one another.
+        dated_label = (
+            f"{label} — {published_at.strftime('%d %b %Y')}" if published_at else label
+        )
+        cleaned_title = dated_label
     return {
         "label": label,
-        "title": _clean_text(title) or label,
+        "title": cleaned_title,
         "url": cleaned_url,
         "published_at": published_at.isoformat() if published_at else None,
         "evidence_text": _preview(evidence_text, 180),
