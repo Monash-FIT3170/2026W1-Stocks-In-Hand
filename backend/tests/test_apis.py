@@ -888,6 +888,8 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
     artifact.source_type = "asx_announcement"
     artifact.title = "ANZ update"
     artifact.url = "https://example.test/anz-update"
+    artifact.document_url = "https://example.test/anz-update.pdf"
+    artifact.canonical_url = "https://example.test/anz-update"
     artifact.published_at = datetime(2040, 1, 2, tzinfo=timezone.utc)
     artifact.created_at = artifact.published_at
 
@@ -910,6 +912,30 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
         "is_classified": True,
         "confirmed_facts": ["Net profit was $1 billion."],
         "speculation": ["Management expects costs to fall."],
+        "traceable_claims": [
+            {
+                "text": "Net profit was $1 billion.",
+                "kind": "confirmed_fact",
+                "source": {
+                    "label": "Asx Announcement",
+                    "title": "ANZ update",
+                    "url": "https://example.test/anz-update.pdf",
+                    "published_at": "2040-01-02T00:00:00+00:00",
+                    "evidence_text": None,
+                },
+            },
+            {
+                "text": "Management expects costs to fall.",
+                "kind": "speculation",
+                "source": {
+                    "label": "Asx Announcement",
+                    "title": "ANZ update",
+                    "url": "https://example.test/anz-update.pdf",
+                    "published_at": "2040-01-02T00:00:00+00:00",
+                    "evidence_text": None,
+                },
+            },
+        ],
     }
 
 
@@ -926,4 +952,80 @@ def test_clarity_contract_marks_legacy_metadata_as_unclassified() -> None:
         "is_classified": False,
         "confirmed_facts": [],
         "speculation": [],
+        "traceable_claims": [],
     }
+
+
+def test_claim_traceability_only_labels_a_verbatim_document_passage_as_exact() -> None:
+    """Paraphrased claims must not be presented as exact source quotations."""
+    from datetime import datetime, timezone
+
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": ["Revenue increased by 12%."],
+        "speculation": ["Revenue may continue growing."],
+    }
+    artifact.raw_text = "Results update: Revenue increased by 12%. Outlook remains uncertain."
+    artifact.source_type = "asx_announcement"
+    artifact.title = "Results update"
+    artifact.document_url = "https://example.test/results.pdf"
+    artifact.canonical_url = "https://example.test/results"
+    artifact.url = "https://example.test/legacy"
+    artifact.published_at = datetime(2040, 2, 3, tzinfo=timezone.utc)
+
+    result = _clarity_for_artifact(artifact)
+
+    exact_source = result["traceable_claims"][0]["source"]
+    paraphrase_source = result["traceable_claims"][1]["source"]
+    assert exact_source["url"] == "https://example.test/results.pdf"
+    assert exact_source["published_at"] == "2040-02-03T00:00:00+00:00"
+    assert exact_source["evidence_text"] == "Revenue increased by 12%."
+    assert paraphrase_source["evidence_text"] is None
+
+
+def test_claim_traceability_rejects_unsafe_source_urls() -> None:
+    """Unsafe source schemes must never become clickable frontend citations."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": ["A claim."],
+        "speculation": [],
+    }
+    artifact.raw_text = "A claim."
+    artifact.source_type = "news"
+    artifact.title = "Unsafe source"
+    artifact.document_url = "javascript:alert(1)"
+    artifact.canonical_url = None
+    artifact.url = None
+    artifact.published_at = None
+
+    result = _clarity_for_artifact(artifact)
+
+    assert result["traceable_claims"][0]["source"] is None
+
+
+def test_claim_traceability_falls_back_to_the_next_safe_source_url() -> None:
+    """A bad direct-document URL should not hide a valid canonical source."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.artifact_metadata = {
+        "confirmed_facts": ["A claim."],
+        "speculation": [],
+    }
+    artifact.raw_text = "A claim."
+    artifact.source_type = "news"
+    artifact.title = "Safe fallback"
+    artifact.document_url = "javascript:alert(1)"
+    artifact.canonical_url = "https://example.test/safe"
+    artifact.url = "https://example.test/legacy"
+    artifact.published_at = None
+
+    result = _clarity_for_artifact(artifact)
+
+    assert result["traceable_claims"][0]["source"]["url"] == (
+        "https://example.test/safe"
+    )

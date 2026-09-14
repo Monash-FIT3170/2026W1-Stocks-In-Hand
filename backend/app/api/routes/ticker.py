@@ -1,5 +1,6 @@
 import re
 import time
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -195,14 +196,14 @@ def _sentiment_label(value: str | None) -> str:
     return labels.get((value or "").lower(), "Unavailable")
 
 
-def _clean_text(value):
+def _clean_text(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     cleaned = " ".join(value.split())
     return cleaned or None
 
 
-def _preview(value, max_length=220):
+def _preview(value: object, max_length: int = 220) -> str | None:
     cleaned = _clean_text(value)
     if not cleaned:
         return None
@@ -254,10 +255,17 @@ def _clarity_for_artifact(artifact: Artifact | None) -> dict:
         else {}
     )
     clarity_keys = ("confirmed_facts", "speculation")
+    confirmed_facts = _metadata_text_list(metadata, "confirmed_facts")
+    speculation = _metadata_text_list(metadata, "speculation")
     return {
         "is_classified": all(isinstance(metadata.get(key), list) for key in clarity_keys),
-        "confirmed_facts": _metadata_text_list(metadata, "confirmed_facts"),
-        "speculation": _metadata_text_list(metadata, "speculation"),
+        "confirmed_facts": confirmed_facts,
+        "speculation": speculation,
+        "traceable_claims": _traceable_claims_for_artifact(
+            artifact,
+            confirmed_facts=confirmed_facts,
+            speculation=speculation,
+        ),
     }
 
 
@@ -295,7 +303,7 @@ def _format_key_date(value):
 
 def _source_from_values(label, title, url, published_at=None, evidence_text=None):
     cleaned_url = _clean_text(url)
-    if not cleaned_url:
+    if not _is_safe_source_url(cleaned_url):
         return None
     return {
         "label": label,
@@ -303,14 +311,79 @@ def _source_from_values(label, title, url, published_at=None, evidence_text=None
         "url": cleaned_url,
         "published_at": published_at.isoformat() if published_at else None,
         "evidence_text": _preview(evidence_text, 180),
-    }
+}
+
+
+def _is_safe_source_url(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed_url = urlparse(value)
+    return parsed_url.scheme in {"http", "https"} and bool(parsed_url.netloc)
+
+
+def _artifact_source_url(artifact: Artifact) -> str | None:
+    for value in (artifact.document_url, artifact.canonical_url, artifact.url):
+        cleaned = _clean_text(value)
+        if _is_safe_source_url(cleaned):
+            return cleaned
+    return None
+
+
+def _exact_source_passage(raw_text: object, claim: object) -> str | None:
+    """Return the claim only when it is a verbatim passage in the document."""
+    document = _clean_text(raw_text)
+    cleaned_claim = _clean_text(claim)
+    if not isinstance(document, str) or not isinstance(cleaned_claim, str):
+        return None
+
+    match = re.search(re.escape(cleaned_claim), document, flags=re.IGNORECASE)
+    return match.group(0) if match else None
+
+
+def _source_for_claim(artifact: Artifact, claim: str) -> dict | None:
+    exact_passage = _exact_source_passage(artifact.raw_text, claim)
+    source = _source_from_values(
+        label=_format_label(artifact.source_type, "Source"),
+        title=artifact.title,
+        url=_artifact_source_url(artifact),
+        published_at=artifact.published_at,
+        evidence_text=exact_passage,
+    )
+    if source and exact_passage:
+        # Claim strings are capped by the summary contract, so keep the complete
+        # verified passage rather than converting it into a generic preview.
+        source["evidence_text"] = exact_passage
+    return source
+
+
+def _traceable_claims_for_artifact(
+    artifact: Artifact | None,
+    *,
+    confirmed_facts: list[str],
+    speculation: list[str],
+) -> list[dict]:
+    if not artifact:
+        return []
+
+    return [
+        {
+            "text": claim,
+            "kind": kind,
+            "source": _source_for_claim(artifact, claim),
+        }
+        for kind, claims in (
+            ("confirmed_fact", confirmed_facts),
+            ("speculation", speculation),
+        )
+        for claim in claims
+    ]
 
 
 def _sources_for_artifact(artifact: Artifact):
     source = _source_from_values(
         label=_format_label(artifact.source_type, "Source"),
         title=artifact.title,
-        url=artifact.url,
+        url=_artifact_source_url(artifact),
         published_at=artifact.published_at or artifact.created_at,
         evidence_text=artifact.raw_text,
     )

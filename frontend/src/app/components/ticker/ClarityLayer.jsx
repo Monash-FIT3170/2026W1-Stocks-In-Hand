@@ -2,14 +2,41 @@ import { BadgeIcon, SparkIcon } from "../icons"
 import styles from "../../page.module.css"
 import { CitationLinks } from "./CitationLinks"
 
-function ClaimList({ emptyMessage, items }) {
+function ClaimList({ emptyMessage, items, kind, traceableClaims }) {
   if (items.length === 0) {
     return <p className={styles.clarityEmpty}>{emptyMessage}</p>
   }
 
+  const hasTraceability = Array.isArray(traceableClaims)
+
   return (
     <ul className={styles.clarityClaims}>
-      {items.map((item) => <li key={item}>{item}</li>)}
+      {items.map((item) => {
+        const traceableClaim = hasTraceability
+          ? traceableClaims.find((claim) => claim?.kind === kind && claim?.text === item)
+          : null
+        const source = traceableClaim?.source
+
+        return (
+          <li key={item}>
+            <span className={styles.claimText}>{item}</span>
+            {hasTraceability && source && (
+              <>
+                {source.evidence_text && (
+                  <blockquote className={styles.claimEvidence}>
+                    <strong>Exact passage</strong>
+                    {source.evidence_text}
+                  </blockquote>
+                )}
+                <CitationLinks compact sources={[source]} />
+              </>
+            )}
+            {hasTraceability && !source && (
+              <span className={styles.claimSourceUnavailable}>Source unavailable</span>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -17,6 +44,8 @@ function ClaimList({ emptyMessage, items }) {
 export function ClarityLayer({ clarity = {}, sources = [] }) {
   const confirmedFacts = clarity.confirmed_facts || []
   const speculation = clarity.speculation || []
+  const traceableClaims = clarity.traceable_claims
+  const hasTraceability = Array.isArray(traceableClaims)
 
   if (!clarity.is_classified) {
     return (
@@ -63,8 +92,10 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
           <ClaimList
             emptyMessage="No confirmed factual claims were identified."
             items={confirmedFacts}
+            kind="confirmed_fact"
+            traceableClaims={traceableClaims}
           />
-          <CitationLinks sources={sources} />
+          {!hasTraceability && <CitationLinks sources={sources} />}
         </section>
 
         <section className={`${styles.clarityGroup} ${styles.claritySpeculation}`}>
@@ -78,6 +109,8 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
           <ClaimList
             emptyMessage="No speculative or forward-looking claims were identified."
             items={speculation}
+            kind="speculation"
+            traceableClaims={traceableClaims}
           />
         </section>
       </div>

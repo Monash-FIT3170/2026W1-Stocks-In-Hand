@@ -905,6 +905,34 @@
   position: relative;
 }
 
+.claimText {
+  display: block;
+}
+
+.claimEvidence {
+  border-left: 2px solid rgba(10, 82, 60, 0.24);
+  color: var(--muted);
+  font-size: 13px;
+  margin: 10px 0 0;
+  padding-left: 10px;
+}
+
+.claimEvidence strong {
+  color: var(--green);
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  margin-bottom: 3px;
+  text-transform: uppercase;
+}
+
+.claimSourceUnavailable {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 7px;
+}
+
 .clarityClaims li::before {
   border-radius: 50%;
   content: "";
@@ -934,6 +962,17 @@
   flex-direction: column;
   margin-top: 20px;
   padding-top: 16px;
+}
+
+.clarityGroup .compactCitationList {
+  border-top: 0;
+  flex-direction: row;
+  margin-top: 8px;
+  padding-top: 0;
+}
+
+.compactCitationList a {
+  padding: 6px 10px;
 }
 
 .sentimentCard {
