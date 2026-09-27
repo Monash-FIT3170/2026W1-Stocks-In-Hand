@@ -194,7 +194,6 @@ def validate_document_content(
     content: bytes,
     *,
     declared_content_type: str,
-    final_url: str,
     expected_format: DocumentFormat | None = None,
     max_docx_uncompressed_bytes: int | None = None,
 ) -> DocumentFormat:
@@ -335,7 +334,6 @@ def download_document(
                 document_format = validate_document_content(
                     content,
                     declared_content_type=content_type,
-                    final_url=current_url,
                 )
                 return DownloadedDocument(
                     content=content,

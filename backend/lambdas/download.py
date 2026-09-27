@@ -190,7 +190,6 @@ def _handle_record(record: dict) -> None:
         validate_document_content(
             downloaded.content,
             declared_content_type=downloaded.content_type,
-            final_url=downloaded.final_url,
             expected_format=downloaded.document_format,
         )
         if downloaded.content_type != DOCUMENT_CONTENT_TYPES[downloaded.document_format]:

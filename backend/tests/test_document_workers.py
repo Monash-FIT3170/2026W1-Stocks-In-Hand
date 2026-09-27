@@ -310,7 +310,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
         validate_document_content(
             b"<!doctype html><html></html>",
             declared_content_type="application/pdf",
-            final_url="https://investors.csl.com/report.pdf",
         )
     assert mismatch.value.code == "content_type_mismatch"
 
@@ -321,7 +320,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
             ),
-            final_url="https://investors.csl.com/report.docx",
             max_docx_uncompressed_bytes=1_000,
         )
     assert expanded.value.code == "document_too_large"
