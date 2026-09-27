@@ -1,33 +1,10 @@
 """Regression tests for security-critical Cognito template settings."""
 
-from pathlib import Path
-
-import yaml
-
-
-ROOT = Path(__file__).resolve().parents[2]
-
-
-class CloudFormationLoader(yaml.SafeLoader):
-    """Load CloudFormation YAML while preserving intrinsic values as data."""
-
-
-def _construct_intrinsic(loader, _tag_suffix, node):
-    if isinstance(node, yaml.ScalarNode):
-        return loader.construct_scalar(node)
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node)
-    return loader.construct_mapping(node)
-
-
-CloudFormationLoader.add_multi_constructor("!", _construct_intrinsic)
+from cloudformation_template import load_template
 
 
 def _template() -> dict:
-    return yaml.load(
-        (ROOT / "infra" / "template.yaml").read_text(encoding="utf-8"),
-        Loader=CloudFormationLoader,
-    )
+    return load_template()
 
 
 def test_cognito_browser_client_has_no_secret() -> None:

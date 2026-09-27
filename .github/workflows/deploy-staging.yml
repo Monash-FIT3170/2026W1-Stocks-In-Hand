@@ -334,14 +334,22 @@ jobs:
       - name: Resolve immutable release values
         id: values
         shell: bash
+        env:
+          SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}
         run: |
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
-          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
-            --output text)"
+          # Alert and verification emails link here, so prefer the custom
+          # domain this change set deploys (the stack's SiteUrl output).
+          if [ -n "$SITE_DOMAIN_NAME" ]; then
+            FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"
+          else
+            FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
+              --output text)"
+          fi
           if [ -z "$FRONTEND_BASE_URL" ] || [ "$FRONTEND_BASE_URL" = "None" ]; then
             echo "The existing stack does not expose FrontendUrl" >&2
             exit 1

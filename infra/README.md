@@ -580,7 +580,9 @@ earlier successful stages.
 ## Rollback
 
 ECR keeps the two newest image versions. Use **Prepare staging backend rollback**
-with the previous full SHA. Person 1 reviews that change set before Person 2
+with the previous full SHA. The change set keeps every parameter the live stack
+runs with (auth provider, feature switches, custom domain, alert sender) and
+swaps only the three image URIs. Person 1 reviews that change set before Person 2
 executes it. Each Lambda publishes through its `live` alias. Use **Roll back
 staging frontend** to restore the matching S3 release snapshot and invalidate
 CloudFront. Do not downgrade the database automatically. Use a forward-fix
