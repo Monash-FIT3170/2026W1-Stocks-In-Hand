@@ -65,10 +65,6 @@ class DownloadedDocument:
         return DOCUMENT_EXTENSIONS[self.document_format]
 
 
-# Kept as a source-compatible name for existing worker tests and callers.
-DownloadedPdf = DownloadedDocument
-
-
 def allowed_hosts() -> frozenset[str]:
     configured = os.getenv("DOWNLOAD_ALLOWED_HOSTS", "")
     hosts = configured.split(",") if configured else DEFAULT_ALLOWED_HOSTS
@@ -352,25 +348,3 @@ def download_document(
     finally:
         if owned_client:
             http_client.close()
-
-
-def download_pdf(
-    url: str,
-    *,
-    max_bytes: int,
-    client: httpx.Client | None = None,
-    resolve_hosts: bool = True,
-) -> DownloadedDocument:
-    """Compatibility wrapper retained for callers that require PDF specifically."""
-    downloaded = download_document(
-        url,
-        max_bytes=max_bytes,
-        client=client,
-        resolve_hosts=resolve_hosts,
-    )
-    if downloaded.document_format != "pdf":
-        raise PermanentDocumentError(
-            "Document does not contain a PDF header",
-            code="invalid_pdf",
-        )
-    return downloaded

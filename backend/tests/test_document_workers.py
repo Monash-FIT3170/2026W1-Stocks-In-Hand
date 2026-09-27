@@ -27,7 +27,6 @@ from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
     download_document,
-    download_pdf,
     validate_document_content,
     validate_download_url,
 )
@@ -200,7 +199,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         )
 
     with httpx.Client(transport=httpx.MockTransport(valid_response)) as client:
-        result = download_pdf(
+        result = download_document(
             "https://investors.csl.com/report.pdf",
             max_bytes=1024,
             client=client,
@@ -218,7 +217,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(unsafe_redirect)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
@@ -236,7 +235,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(oversized)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
@@ -254,7 +253,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(wrong_magic)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
