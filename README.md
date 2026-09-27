@@ -353,7 +353,9 @@ deployment to validate anything AWS-specific (IAM, throttling, budgets).
 ### Verifying it's working
 
 **1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session,
-so sign up, promote yourself in Postgres, then sign back in:
+like every other write route except sign-up, sign-in, sign-out, email
+verification and unsubscribe. Sign up, promote yourself in Postgres, then sign
+back in:
 
 ```bash
 curl -c cookies.txt -X POST http://localhost:8000/auth/sign-up \

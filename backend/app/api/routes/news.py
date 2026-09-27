@@ -3,8 +3,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin_investor
 from app.core.config import settings
 from app.database.connection import get_db
+from app.models.investor import Investor
 from app.services import marketaux
 from app.services import news_sentiment
 from app.services import news_summary
@@ -18,6 +20,7 @@ def fetch_symbol_news(
     symbol: str,
     limit: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     """Fetch recent Marketaux stories for an ASX ticker and store new rows."""
     fetch_limit = limit if limit is not None else settings.NEWS_FETCH_LIMIT
@@ -34,6 +37,7 @@ def summarise_symbol_news(
     symbol: str,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     """Summarise stored news artifacts for an ASX ticker."""
     try:
@@ -49,6 +53,7 @@ def analyse_symbol_news_sentiment(
     symbol: str,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
 ):
     """Analyse stored news artifact sentiment for an ASX ticker."""
     try:
