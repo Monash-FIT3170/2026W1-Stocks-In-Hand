@@ -15,6 +15,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.sql import func, true
 
+from app.alert_vocabulary import DEFAULT_ALERT_SENTIMENT_LABELS
 from app.database.base import Base
 
 
@@ -63,7 +64,7 @@ class AlertRule(Base):
     sentiment_labels = Column(
         ARRAY(String),
         nullable=False,
-        default=lambda: ["negative"],
+        default=lambda: list(DEFAULT_ALERT_SENTIMENT_LABELS),
         server_default=text("ARRAY['negative']::varchar[]"),
     )
     min_confidence = Column(

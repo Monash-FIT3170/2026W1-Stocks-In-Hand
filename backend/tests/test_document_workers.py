@@ -889,7 +889,7 @@ def test_analysis_notification_matches_consumer_contract(monkeypatch):
 
 @pytest.mark.parametrize(
     ("enabled", "label"),
-    [("false", "positive"), ("true", "neutral")],
+    [("false", "positive"), ("true", "unknown"), ("true", None)],
 )
 def test_analysis_notification_prefilter_skips_publish(monkeypatch, enabled, label):
     publish = MagicMock()

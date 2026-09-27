@@ -5,8 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.alert_vocabulary import AlertSentimentLabel, DEFAULT_ALERT_SENTIMENT_LABELS
 
-SentimentLabel = Literal["positive", "neutral", "negative"]
+
+SentimentLabel = AlertSentimentLabel
 VerificationStatus = Literal["unverified", "pending", "verified", "failed"]
 
 
@@ -16,7 +18,7 @@ class NotificationPreferencesUpdate(BaseModel):
     enabled: bool
     min_confidence: float = Field(default=0.75, ge=0, le=1)
     sentiment_labels: list[SentimentLabel] = Field(
-        default_factory=lambda: ["negative"],
+        default_factory=lambda: list(DEFAULT_ALERT_SENTIMENT_LABELS),
         min_length=1,
         max_length=3,
     )
