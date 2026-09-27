@@ -445,35 +445,6 @@ def test_public_discussion_collectors_require_admin_dependency(
     }
 
 
-def test_no_public_discussion_does_not_report_neutral_sentiment() -> None:
-    from app.api.routes import category_sentiment
-
-    with patch.object(
-        category_sentiment.artifact_crud,
-        "get_reddit_posts_for_ticker",
-        return_value=[],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_bluesky_posts_for_ticker",
-        return_value=[],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_mastodon_posts_for_ticker",
-        return_value=[],
-    ):
-        result = category_sentiment._summarise_recent_public_discussion(
-            ticker="BHP",
-            db=MagicMock(),
-            days=30,
-            reddit_limit=20,
-            bluesky_limit=20,
-            mastodon_limit=20,
-        )
-
-    assert result["dominant_sentiment"] is None
-    assert "No public discussion" in result["summary"]
-
-
 def test_blog_adapter_parses_rss_and_atom_entries() -> None:
     from app.api.routes import blog
 

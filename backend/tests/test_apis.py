@@ -456,76 +456,6 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
     assert result[0]["tags"] == ["ASX"]
 
 
-def test_public_discussion_summary_combines_all_sources() -> None:
-    """All public discussion sources are included in one summary request."""
-    from app.api.routes import category_sentiment
-
-    reddit_post = MagicMock(
-        title="ANZ earnings discussion",
-        raw_text="Investors are watching the result.",
-        url="https://reddit.com/example",
-        artifact_metadata={"score": 7},
-    )
-    bluesky_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="ASX investors are positive.",
-        url="https://bsky.app/example",
-        artifact_metadata={
-            "like_count": 3,
-            "repost_count": 2,
-            "reply_count": 1,
-            "quote_count": 0,
-        },
-    )
-    mastodon_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="Investors are positive about the result.",
-        url="https://aus.social/example",
-        artifact_metadata={
-            "favourites_count": 4,
-            "reblogs_count": 2,
-            "replies_count": 1,
-        },
-    )
-    captured_posts = []
-
-    def fake_summary(**kwargs):
-        captured_posts.extend(kwargs["posts"])
-        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
-
-    with patch.object(
-        category_sentiment.artifact_crud,
-        "get_reddit_posts_for_ticker",
-        return_value=[reddit_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_bluesky_posts_for_ticker",
-        return_value=[bluesky_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_mastodon_posts_for_ticker",
-        return_value=[mastodon_post],
-    ), patch.object(
-        category_sentiment.reddit_route,
-        "_summarise_reddit_posts",
-        side_effect=fake_summary,
-    ):
-        result = category_sentiment._summarise_recent_public_discussion(
-            ticker="ANZ",
-            db=MagicMock(),
-            days=30,
-            reddit_limit=50,
-            bluesky_limit=50,
-            mastodon_limit=50,
-        )
-
-    assert result["summary"] == "Discussion is positive."
-    assert len(captured_posts) == 3
-    assert captured_posts[0]["score"] == 7
-    assert captured_posts[1]["score"] == 6
-    assert captured_posts[2]["score"] == 7
-
-
 def test_summarise_reddit_posts_uses_provider_routing() -> None:
     """Reddit summaries should use the shared provider boundary."""
     from app.api.routes import reddit
@@ -598,10 +528,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
         category_sentiment,
         "_stored_sentiment_rows",
         return_value=[(revenue_artifact, positive), (reddit_artifact, neutral)],
-    ), patch.object(
-        category_sentiment.sentiment_service,
-        "analyse_categories",
-    ) as analyse_categories:
+    ), patch("app.services.sentiment.analyse_text") as analyse_text:
         result = category_sentiment.get_ticker_category_sentiments("anz", db=db)
 
     assert result["ticker"] == "ANZ"
@@ -623,7 +550,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
     validated = CategorySentimentResponse.model_validate(result)
     assert validated.status == "partial"
     assert validated.categories["risk"].sentiment_label is None
-    analyse_categories.assert_not_called()
+    analyse_text.assert_not_called()
 
 
 def test_sentiment_route_reports_unavailable_without_stored_analysis() -> None:
