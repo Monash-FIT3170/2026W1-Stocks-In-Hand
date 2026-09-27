@@ -97,7 +97,7 @@ def test_public_discussion_analysis_message_contains_only_artifact_identity() ->
     assert "raw_text" not in message.model_dump_json()
 
 
-def test_enqueue_public_discussion_analysis_sends_validated_json(
+def test_enqueue_stored_artifact_analysis_sends_validated_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = MagicMock()
@@ -107,7 +107,7 @@ def test_enqueue_public_discussion_analysis_sends_validated_json(
     artifact_id = uuid4()
 
     assert (
-        analysis_queue.enqueue_public_discussion_analysis(artifact_id)
+        analysis_queue.enqueue_stored_artifact_analysis(artifact_id)
         == "analysis-message-1"
     )
     call = client.send_message.call_args.kwargs
