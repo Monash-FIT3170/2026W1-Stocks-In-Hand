@@ -132,14 +132,6 @@ export async function fetchTickers({ limit = 100, skip = 0 } = {}) {
   return fetchJson(`/tickers/?${params.toString()}`)
 }
 
-export async function fetchTickerOverview(symbol) {
-  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/overview`)
-}
-
-export async function fetchTickerBriefAside(symbol) {
-  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/brief-aside`)
-}
-
 export async function fetchTickerBrief(symbol) {
   return fetchJsonCoalesced(`/tickers/symbol/${encodeURIComponent(symbol)}/brief`)
 }
