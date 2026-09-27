@@ -1,4 +1,3 @@
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -243,37 +242,6 @@ def get_reddit_posts_for_ticker(
     )
 
 
-def _is_bluesky_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
-    text = " ".join((artifact.title or "", artifact.raw_text or ""))
-    if not re.search(rf"(?<![A-Za-z0-9]){re.escape(ticker_symbol)}(?![A-Za-z0-9])", text, re.IGNORECASE):
-        return False
-
-    company_terms = tuple(
-        term
-        for term in (company_name, company_name.replace(" Holdings Limited", ""))
-        if term.lower() != ticker_symbol.lower()
-    )
-    finance_terms = (
-        "asx",
-        "share",
-        "stock",
-        "dividend",
-        "earnings",
-        "profit",
-        "revenue",
-        "investor",
-        "market",
-        "bank",
-        "portfolio",
-    )
-    lower_text = text.lower()
-    return any(
-        term.lower() in lower_text
-        for term in (*company_terms, f"{ticker_symbol} bank", *finance_terms)
-        if term
-    )
-
-
 def get_bluesky_posts_for_ticker(
     db: Session,
     ticker_symbol: str,
@@ -313,10 +281,6 @@ def get_bluesky_posts_for_ticker(
         .all()
     )
     return candidates[:limit]
-
-
-def _is_mastodon_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
-    return _is_bluesky_ticker_post(artifact, ticker_symbol, company_name)
 
 
 def get_mastodon_posts_for_ticker(

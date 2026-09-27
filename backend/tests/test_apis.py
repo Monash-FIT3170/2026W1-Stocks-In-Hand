@@ -393,28 +393,6 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
     assert result[0]["tags"] == ["ASX"]
 
 
-def test_bluesky_ticker_filter_requires_financial_context() -> None:
-    """Posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_bluesky_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
-
-
-def test_mastodon_ticker_filter_requires_financial_context() -> None:
-    """Mastodon posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_mastodon_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
-
-
 def test_stored_sentiment_groups_forum_sources_as_public_discussion() -> None:
     """All supported forum sources should share the public discussion category."""
     from app.api.routes.category_sentiment import _categories_for_stored_artifact
