@@ -13,6 +13,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import settings
+from app.services.llm_errors import LLMUnavailableError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def _message_text(data: dict[str, Any]) -> str:
 def invoke_text(prompt: str, *, temperature: float = 0.2) -> str:
     """Invoke the configured Bedrock model without logging prompt content."""
     if not settings.BEDROCK_ENABLED:
-        raise RuntimeError("Amazon Bedrock is disabled")
+        raise LLMUnavailableError("Amazon Bedrock is disabled")
     if not prompt.strip():
         raise ValueError("Bedrock prompt must not be empty")
     if len(prompt) > settings.BEDROCK_MAX_PROMPT_CHARS:
