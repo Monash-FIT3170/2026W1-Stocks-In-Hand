@@ -93,6 +93,13 @@ Two properties make it safe under SQS's at-least-once delivery:
   `_lock_artifact` via `with_for_update()`) plus the `RUN_DOWNSTREAM_OF_DISCOVERY`
   check (from `app.status`) stop an out-of-order retry from moving a run's
   status *backwards* once a later stage has already advanced it.
+- **Terminal only when SQS gives up.** A retryable worker error calls
+  `record_run_discovery_retry` / `record_artifact_download_retry` /
+  `record_artifact_analysis_retry`, which store the error but keep the stage
+  open. Only the receive that equals the queues' `maxReceiveCount`
+  (`lambdas.common.MAX_RECEIVE_COUNT`) or a permanent error calls the
+  `mark_*_failed` transition, so a run is never reported finished, or
+  re-enqueued by the API or scheduler, while a message is still being retried.
 
 Status values themselves (`ScrapeRunStatus`, `DownloadStatus`, `AnalysisStatus`)
 live in `app/status.py`, not here — that module is shared by this file,
