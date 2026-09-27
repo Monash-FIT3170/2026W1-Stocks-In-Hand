@@ -26,21 +26,6 @@ from lambdas.download_validation import (
 )
 
 STAGE = "download"
-SUPPORTED_ADAPTERS = {
-    "ANZ": "anz",
-    "BHP": "bhp",
-    "CBA": "cba",
-    "COH": "coh",
-    "COL": "col",
-    "CSL": "csl",
-    "MQG": "mqg",
-    "ORG": "org",
-    "RIO": "rio",
-    "TCL": "tcl",
-    "TLS": "tls",
-    "WDS": "wds",
-    "WES": "wes",
-}
 
 
 def _parse_message(record: dict) -> QueueBMessage:
@@ -51,11 +36,6 @@ def _parse_message(record: dict) -> QueueBMessage:
             "Queue B message does not match schema version 1",
             code="invalid_message",
         ) from exc
-    if SUPPORTED_ADAPTERS.get(message.ticker) != message.source_adapter:
-        raise PermanentDocumentError(
-            "Ticker and source adapter are not a supported pair",
-            code="unsupported_source",
-        )
     return message
 
 
@@ -210,7 +190,6 @@ def _handle_record(record: dict) -> None:
         validate_document_content(
             downloaded.content,
             declared_content_type=downloaded.content_type,
-            final_url=downloaded.final_url,
             expected_format=downloaded.document_format,
         )
         if downloaded.content_type != DOCUMENT_CONTENT_TYPES[downloaded.document_format]:

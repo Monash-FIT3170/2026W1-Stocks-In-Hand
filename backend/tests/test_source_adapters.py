@@ -107,6 +107,27 @@ def test_download_worker_accepts_each_canonical_pair(ticker, source) -> None:
     assert parsed.source_adapter == source.adapter
 
 
+def test_download_worker_rejects_mismatched_ticker_and_adapter() -> None:
+    source = SOURCES["ANZ"]
+    body = json.dumps(
+        {
+            "schema_version": 1,
+            "scrape_run_id": str(uuid4()),
+            "artifact_id": str(uuid4()),
+            "ticker": "ANZ",
+            "source_url": source.source_url,
+            "document_url": source.source_url,
+            "canonical_url": source.source_url,
+            "source_adapter": "csl",
+        }
+    )
+
+    with pytest.raises(PermanentDocumentError) as error:
+        download._parse_message(_sqs_record(body))
+
+    assert error.value.code == "invalid_message"
+
+
 @pytest.mark.parametrize(("_ticker", "source"), SOURCES.items())
 def test_each_canonical_source_has_an_adapter_scoped_host(_ticker, source) -> None:
     assert source.adapter in source_download._ADAPTER_HOSTS

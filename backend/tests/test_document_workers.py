@@ -27,7 +27,6 @@ from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
     download_document,
-    download_pdf,
     validate_document_content,
     validate_download_url,
 )
@@ -200,7 +199,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         )
 
     with httpx.Client(transport=httpx.MockTransport(valid_response)) as client:
-        result = download_pdf(
+        result = download_document(
             "https://investors.csl.com/report.pdf",
             max_bytes=1024,
             client=client,
@@ -218,7 +217,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(unsafe_redirect)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
@@ -236,7 +235,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(oversized)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
@@ -254,7 +253,7 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(wrong_magic)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
                 max_bytes=1024,
                 client=client,
@@ -311,7 +310,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
         validate_document_content(
             b"<!doctype html><html></html>",
             declared_content_type="application/pdf",
-            final_url="https://investors.csl.com/report.pdf",
         )
     assert mismatch.value.code == "content_type_mismatch"
 
@@ -322,7 +320,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
             ),
-            final_url="https://investors.csl.com/report.docx",
             max_docx_uncompressed_bytes=1_000,
         )
     assert expanded.value.code == "document_too_large"

@@ -1,5 +1,4 @@
 import re
-from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -338,27 +337,3 @@ class ORGScraper(BaseScraper):
             return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         except ValueError:
             return None
-
-    async def _download_via_browser(self, context: BrowserContext, announcement: Announcement) -> Path:
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", " ".join(announcement.title.split()))
-        clean_title = clean_title[:120].strip("_") or "announcement"
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
-
-        response = await context.request.get(
-            announcement.pdf_url,
-            headers={"Referer": self.LISTING_BASE_URL},
-        )
-
-        if not response.ok:
-            raise RuntimeError(f"HTTP {response.status} for {announcement.pdf_url}")
-
-        body = await response.body()
-
-        if body[:4] != b"%PDF":
-            raise ValueError(f"Downloaded file is not a PDF: {announcement.pdf_url}")
-
-        dest.write_bytes(body)
-        print(f"[ORG] Saved: {dest}")
-        return dest
