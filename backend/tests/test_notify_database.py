@@ -85,10 +85,15 @@ def _cleanup(engine, *, ids: dict[str, uuid.UUID]) -> None:
         db.commit()
 
 
+@pytest.mark.parametrize("label", ["negative", "neutral"])
 def test_worker_sends_and_deduplicates_against_postgres(
     monkeypatch: pytest.MonkeyPatch,
+    label: str,
 ) -> None:
-    """A canonical artifact should send once and persist both D17 outcomes."""
+    """A canonical artifact should send once and persist both D17 outcomes.
+
+    Neutral runs the same path: a neutral-only rule must fire end to end.
+    """
     engine = _engine_or_skip()
     suffix = uuid.uuid4().hex
     ids: dict[str, uuid.UUID] = {}
@@ -137,7 +142,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
                 [
                     ArtifactSentiment(
                         artifact_id=artifact.id,
-                        sentiment_label="negative",
+                        sentiment_label=label,
                         confidence_score=Decimal("0.8200"),
                     ),
                     ArtifactSummary(
@@ -161,7 +166,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
                         investor_id=investor.id,
                         ticker_id=None,
                         rule_type="sentiment_threshold",
-                        sentiment_labels=["negative"],
+                        sentiment_labels=[label],
                         min_confidence=Decimal("0.7500"),
                         enabled=True,
                     ),
@@ -181,7 +186,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
                 "artifact_id": str(artifact.id),
                 "ticker": ticker.symbol,
                 "scrape_run_id": str(scrape_run.id),
-                "sentiment_label": "negative",
+                "sentiment_label": label,
                 "confidence_score": "0.8200",
             }
 
