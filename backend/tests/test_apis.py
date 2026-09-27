@@ -831,7 +831,7 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
         "_latest_sentiment_for_ticker",
         return_value=None,
     ), patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+        result = ticker_route.get_ticker_brief("anz", db=MagicMock())["overview"]
 
     assert result["clarity"] == {
         "is_classified": True,
