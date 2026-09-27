@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 from app.sources import SOURCES
+from cloudformation_template import image_functions, template_parameters
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,7 +135,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
     )[0]
 
     assert 'NotificationsEnabled:' in template
-    assert 'Default: "false"' in template.split("  NotificationsEnabled:", 1)[1]
+    assert template_parameters()["NotificationsEnabled"]["Default"] == "false"
     assert (
         'IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]'
         in template
@@ -337,7 +338,7 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
         "  NotificationFunction:", 1
     )[0]
 
-    assert 'Default: "false"' in template.split("  BedrockEnabled:", 1)[1]
+    assert template_parameters()["BedrockEnabled"]["Default"] == "false"
     for function in (api_function, analysis_function):
         assert "LLM_PROVIDER: bedrock" in function
         assert "BEDROCK_ENABLED: !Ref BedrockEnabled" in function
@@ -405,14 +406,11 @@ def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None
         encoding="utf-8"
     )
 
-    parameter = template.split("  PublicDiscussionScheduleEnabled:", 1)[1].split(
-        "  AnalysisEnabled:", 1
-    )[0]
     function = template.split("  PublicDiscussionSchedulerFunction:", 1)[1].split(
         "  SchedulerInvokeRole:", 1
     )[0]
 
-    assert 'Default: "false"' in parameter
+    assert template_parameters()["PublicDiscussionScheduleEnabled"]["Default"] == "false"
     assert "ReservedConcurrentExecutions" not in function
     assert "PublicDiscussionPerSourceLimit" in function
     assert "MaximumRetryAttempts: 2" in template
@@ -435,10 +433,89 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert "PublicDiscussionPerSourceLimit=" in deploy
     assert "OutputKey=='FrontendUrl'" in deploy
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in deploy
-    assert '"PublicDiscussionScheduleEnabled=false"' in rollback
     assert "PublicDiscussionSchedulerFunction=" in rollback
-    assert "OutputKey=='FrontendUrl'" in rollback
-    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
+
+
+IMAGE_URI_PARAMETERS = {"ApiImageUri", "ScraperImageUri", "AnalysisImageUri"}
+
+
+def _workflow(name: str) -> str:
+    return (REPOSITORY_ROOT / ".github" / "workflows" / name).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_release_workflows_map_every_image_function_to_a_repository() -> None:
+    functions = image_functions()
+
+    assert "NotificationFunction" in functions
+    for workflow in ("deploy-staging.yml", "prepare-staging-backend-rollback.yml"):
+        text = _workflow(workflow)
+        missing = [
+            function
+            for function in functions
+            if f'--image-repositories "{function}=' not in text
+        ]
+        assert missing == [], workflow
+
+
+def test_deploy_supplies_every_parameter_without_a_default() -> None:
+    deploy = _workflow("deploy-staging.yml")
+    required = [
+        name
+        for name, parameter in template_parameters().items()
+        if "Default" not in parameter
+    ]
+
+    assert required
+    for name in required:
+        assert f'"{name}=' in deploy, name
+
+
+def test_rollback_keeps_live_parameters_and_swaps_only_images() -> None:
+    rollback = _workflow("prepare-staging-backend-rollback.yml")
+
+    assert '--query "Stacks[0].Parameters"' in rollback
+    assert '--parameter-overrides "${PARAMETER_OVERRIDES[@]}"' in rollback
+    for name in IMAGE_URI_PARAMETERS:
+        assert f'"{name}=$ECR_REGISTRY/' in rollback
+    # Any other literal override would replace the live value, as the old
+    # hard-coded AuthProvider=legacy and feature switches did.
+    hard_coded = [
+        name
+        for name in template_parameters()
+        if name not in IMAGE_URI_PARAMETERS and f'"{name}=' in rollback
+    ]
+    assert hard_coded == []
+
+
+def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:
+    deploy = _workflow("deploy-staging.yml")
+    values = deploy.split("      - name: Resolve immutable release values", 1)[1].split(
+        "      - name:", 1
+    )[0]
+
+    assert "SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}" in values
+    assert 'FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"' in values
+    assert template_parameters()["SiteDomainName"]["Default"] == ""
+    assert (
+        values.index('FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"')
+        < values.index("OutputKey=='FrontendUrl'")
+    )
+
+
+def test_feature_switches_default_to_off() -> None:
+    switches = {
+        name: parameter["Default"]
+        for name, parameter in template_parameters().items()
+        if sorted(parameter.get("AllowedValues", [])) == ["false", "true"]
+    }
+
+    assert {"NotificationsEnabled", "PublicDiscussionScheduleEnabled"} <= set(switches)
+    # AnalysisEnabled is a kill switch for work already paid for, so it is on.
+    assert {name for name, default in switches.items() if default != "false"} == {
+        "AnalysisEnabled"
+    }
 
 
 def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
