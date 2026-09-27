@@ -32,6 +32,7 @@ from lambdas.common import (
     PermanentDocumentError,
     correlation_id,
     database_session,
+    is_final_attempt,
     log_event,
     receive_attempt,
 )
@@ -550,6 +551,23 @@ def _mark_public_discussion_failed(artifact_id: UUID, error: str) -> None:
         raise
 
 
+def _record_retry(artifact_id: UUID, error: str) -> None:
+    # Best effort: the message is retried whether or not this is recorded.
+    try:
+        with database_session() as db:
+            from app.crud.scrape_run import record_artifact_analysis_retry
+
+            record_artifact_analysis_retry(db, artifact_id, error=error)
+    except Exception:  # pylint: disable=broad-exception-caught
+        log_event(
+            stage=STAGE,
+            event="state_update_failed",
+            level=logging.ERROR,
+            artifact_id=artifact_id,
+            error_code="database_error",
+        )
+
+
 def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
     """Load a stored-text artifact for the legacy inline-analysis queue contract."""
     with database_session() as db:
@@ -843,13 +861,13 @@ def _handle_record(record: dict) -> None:
         )
     except Exception as exc:
         if artifact_id is not None:
-            if public_discussion_message is not None:
-                _mark_public_discussion_failed(
-                    artifact_id,
-                    f"{type(exc).__name__}: {exc}",
-                )
+            error = f"{type(exc).__name__}: {exc}"
+            if not is_final_attempt(attempt):
+                _record_retry(artifact_id, error)
+            elif public_discussion_message is not None:
+                _mark_public_discussion_failed(artifact_id, error)
             else:
-                _mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
+                _mark_failed(artifact_id, error)
         log_event(
             stage=STAGE,
             event="retryable_failure",
