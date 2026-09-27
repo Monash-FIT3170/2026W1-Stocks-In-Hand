@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.crud.artifact_summary import upsert_artifact_summary
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
@@ -52,16 +53,15 @@ def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
             next_metadata[key] = value
     artifact.artifact_metadata = next_metadata
 
-    db_summary = ArtifactSummary(
+    # Upsert: artifact_summaries allows one row per artifact, and the analysis
+    # worker may already have written it.
+    return upsert_artifact_summary(
+        db,
         artifact_id=artifact.id,
         summary_text=summary_text(title, summary),
         model_used=summary_service.active_model_name(),
         prompt_version=summary_service.NEWS_SUMMARY_PROMPT_VERSION,
     )
-    db.add(db_summary)
-    db.commit()
-    db.refresh(db_summary)
-    return db_summary
 
 
 def _ticker_for_symbol(db: Session, symbol: str) -> Ticker:

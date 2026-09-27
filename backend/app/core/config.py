@@ -94,11 +94,6 @@ class Settings:
     NOTIFICATIONS_DRY_RUN: bool = (
         os.getenv("NOTIFICATIONS_DRY_RUN", "false").lower() == "true"
     )
-    ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED: bool = (
-        os.getenv("ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED", "false").lower()
-        == "true"
-    )
-    NOTIFICATION_QUEUE_URL: str = os.getenv("NOTIFICATION_QUEUE_URL", "")
     ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
     ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
     BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")

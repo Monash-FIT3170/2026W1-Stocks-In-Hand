@@ -1,4 +1,4 @@
-"""Tests for raw-text news sentiment analysis."""
+"""Tests for source-text news sentiment analysis."""
 
 import uuid
 from unittest.mock import MagicMock, patch
@@ -25,7 +25,7 @@ def _artifact(**overrides):
     return artifact
 
 
-def test_analyse_news_artifact_sentiment_uses_raw_text_only() -> None:
+def test_analyse_news_artifact_sentiment_uses_title_and_source_text_only() -> None:
     db = MagicMock()
     artifact = _artifact()
 
@@ -41,7 +41,9 @@ def test_analyse_news_artifact_sentiment_uses_raw_text_only() -> None:
     ) as analyse_text:
         sentiment = news_sentiment.analyse_news_artifact_sentiment(db, artifact)
 
+    # Same input as the analysis worker; the generated summary is ignored.
     analyse_text.assert_called_once_with(
+        "BHP reports stronger copper production\n\n"
         "BHP reported stronger copper production in its quarterly update."
     )
     assert sentiment.artifact_id == artifact.id

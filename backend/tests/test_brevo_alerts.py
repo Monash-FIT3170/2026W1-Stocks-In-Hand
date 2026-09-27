@@ -28,12 +28,6 @@ def _reset_provider(monkeypatch: pytest.MonkeyPatch) -> None:
         "https://api.brevo.com/v3",
         raising=False,
     )
-    monkeypatch.setattr(
-        settings,
-        "ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED",
-        True,
-        raising=False,
-    )
     brevo_alerts._client.cache_clear()  # pylint: disable=protected-access
 
 
@@ -81,10 +75,9 @@ def test_send_email_posts_brevo_transactional_payload(
     assert payload["to"] == [{"email": RECIPIENT}]
     assert payload["htmlContent"] == "<p>html</p>"
     assert payload["textContent"] == "plain text"
-    assert payload["headers"] == {
-        "List-Unsubscribe": f"<{UNSUBSCRIBE_URL}>",
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-    }
+    # The unsubscribe page is served by CloudFront from S3 and allows only
+    # GET, so the message must not invite a one-click POST to it.
+    assert payload["headers"] == {"List-Unsubscribe": f"<{UNSUBSCRIBE_URL}>"}
 
 
 def test_confirmation_email_omits_unsubscribe_headers(

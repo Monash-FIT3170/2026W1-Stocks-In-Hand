@@ -26,7 +26,9 @@ def analyse_news_artifact_sentiment(db: Session, artifact: Artifact) -> Artifact
     if not raw_text:
         raise ValueError("News artifact has no text to analyse")
 
-    result = sentiment_service.analyse_text(raw_text)
+    result = sentiment_service.analyse_text(
+        sentiment_service.sentiment_input(artifact.title, raw_text)
+    )
     db_sentiment = ArtifactSentiment(
         artifact_id=artifact.id,
         sentiment_label=result["sentiment_label"],
