@@ -354,8 +354,10 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
 
     assert "BEDROCK_SERVICE_TIER: default" in api_function
     assert "BEDROCK_SERVICE_TIER: flex" in analysis_function
-    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "1024"' in api_function
-    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "4096"' in analysis_function
+    # Admin summary routes and the analysis worker produce the same summary
+    # shapes, so a smaller API budget truncates the JSON they parse.
+    for function in (api_function, analysis_function):
+        assert 'BEDROCK_MAX_OUTPUT_TOKENS: "4096"' in function
 
     runtime_requirements = (
         REPOSITORY_ROOT / "backend" / "requirements-api.txt"
