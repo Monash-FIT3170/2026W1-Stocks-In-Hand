@@ -1,9 +1,8 @@
 import re
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import urljoin
 
-from playwright.async_api import BrowserContext, async_playwright
+from playwright.async_api import async_playwright
 
 from ..base import Announcement, BaseScraper
 from ..browser import chromium_launch_options
@@ -179,28 +178,3 @@ class COLScraper(BaseScraper):
             result.append(ann)
 
         return result
-
-    async def _download_via_browser(self, context: BrowserContext, announcement: Announcement) -> Path:
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w-]", "_", " ".join(announcement.title.split()))
-        clean_title = clean_title[:120].strip("_") or "announcement"
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
-
-        response = await context.request.get(
-            announcement.pdf_url,
-            headers={"Referer": self.source_url},
-        )
-
-        if not response.ok:
-            raise RuntimeError(f"HTTP {response.status} for {announcement.pdf_url}")
-
-        body = await response.body()
-        dest.write_bytes(body)
-
-        # Basic safeguard to catch HTML error pages saved as .pdf.
-        if not body.startswith(b"%PDF"):
-            raise ValueError(f"Downloaded file is not a PDF: {announcement.pdf_url}")
-
-        print(f"[COL] Saved: {dest}")
-        return dest
