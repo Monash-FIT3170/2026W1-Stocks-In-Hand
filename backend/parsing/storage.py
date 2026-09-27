@@ -66,18 +66,11 @@ def _artifact_has_summary_fields(artifact: Artifact) -> bool:
 
 
 def _artifact_sentiment_text(artifact: Artifact, raw_text: str) -> str:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    parts = [
+    # Same input as the analysis worker, never the LLM summary.
+    return sentiment_service.sentiment_input(
         artifact.title,
-        metadata.get("summary"),
-        metadata.get("about"),
-        metadata.get("changed"),
-        metadata.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    if cleaned:
-        return "\n\n".join(cleaned)
-    return raw_text or artifact.raw_text or ""
+        raw_text or artifact.raw_text,
+    )
 
 
 def _artifact_has_sentiment(db, artifact: Artifact) -> bool:
