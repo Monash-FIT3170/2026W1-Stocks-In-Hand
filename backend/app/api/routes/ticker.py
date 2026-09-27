@@ -6,13 +6,15 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_admin_investor
 from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.models.investor import Investor
 from app.models.ticker import Ticker
-from app.schemas.ticker import TickerCreate, TickerResponse
+from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -444,7 +446,11 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
 
 
 @router.post("/", response_model=TickerResponse)
-def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
+def create_ticker(
+    ticker: TickerCreate,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
     if existing:
         raise HTTPException(status_code=400, detail="Ticker symbol already exists")
@@ -475,11 +481,20 @@ def get_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{ticker_id}", response_model=TickerResponse)
-def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
+def update_ticker(
+    ticker_id: UUID,
+    data: TickerUpdate,
+    db: Session = Depends(get_db),
+    _admin: Investor = Depends(require_admin_investor),
+):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    return crud.update_ticker(db=db, ticker_id=ticker_id, data=data)
+    return crud.update_ticker(
+        db=db,
+        ticker_id=ticker_id,
+        data=data.model_dump(exclude_unset=True),
+    )
 
 
 @router.get("/symbol/{symbol}/overview")
