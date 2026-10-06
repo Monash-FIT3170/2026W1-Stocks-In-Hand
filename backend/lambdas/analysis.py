@@ -316,7 +316,6 @@ def _read_s3_document(
     validate_document_content(
         content,
         declared_content_type=DOCUMENT_CONTENT_TYPES[document_format],
-        final_url=key,
         expected_format=document_format,
     )
     return content

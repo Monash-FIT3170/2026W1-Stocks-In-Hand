@@ -1,6 +1,5 @@
 import re
 from datetime import datetime
-from pathlib import Path
 
 from playwright.async_api import BrowserContext, async_playwright
 
@@ -172,32 +171,3 @@ class TCLScraper(BaseScraper):
             result.append(ann)
 
         return result
-
-    async def _download_via_browser(self, context: BrowserContext, announcement: Announcement) -> Path:
-        file_id = (announcement.metadata or {}).get("file_id")
-        if not file_id:
-            raise ValueError("Missing file_id for TCL announcement")
-
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w-]", "_", " ".join(announcement.title.split()))
-        clean_title = clean_title[:120].strip("_") or "announcement"
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
-
-        response = await context.request.get(
-            announcement.pdf_url,
-            params={"appID": self.APP_ID, "liveness": "live"},
-            headers={"Referer": self.source_url},
-        )
-
-        if not response.ok:
-            raise RuntimeError(f"HTTP {response.status} for {announcement.pdf_url}")
-
-        body = await response.body()
-        dest.write_bytes(body)
-
-        if not body.startswith(b"%PDF"):
-            raise ValueError(f"Downloaded file is not a PDF: {announcement.pdf_url}")
-
-        print(f"[TCL] Saved: {dest}")
-        return dest

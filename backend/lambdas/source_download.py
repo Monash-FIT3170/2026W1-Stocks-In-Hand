@@ -125,7 +125,6 @@ def _build_downloaded_document(
     document_format = validate_document_content(
         content,
         declared_content_type=declared_content_type,
-        final_url=final_url,
     )
     return DownloadedDocument(
         content=content,
