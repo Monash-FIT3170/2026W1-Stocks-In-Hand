@@ -5,16 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import cast
-from uuid import UUID
 
 import boto3
-from pydantic import HttpUrl
 
 from app.messages import QueueAMessage
 from app.sources import SOURCES, scheduled_tickers
-from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
 from lambdas.common import database_session, load_runtime_configuration, log_event
 
 STAGE = "schedule"
@@ -101,53 +98,26 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
     return result
 
 
-def _enqueue_ticker(*, ticker: str, event_key: str, sqs, queue_url: str) -> bool:
-    source = SOURCES[ticker]
+def _request_run(
+    *,
+    ticker: str,
+    event_key: str,
+    send: Callable[[QueueAMessage], object],
+) -> bool:
+    """Request one scheduled run; False when this event already queued it."""
     with database_session() as db:
-        from app.crud import scrape_run as scrape_run_crud
+        # Imported after load_runtime_configuration so settings sees the SSM values.
+        from app.services.scrape_runs import request_scrape_run
 
-        run, created = scrape_run_crud.get_or_create_queued_run(
+        requested = request_scrape_run(
             db,
             ticker=ticker,
-            source_url=source.source_url,
             idempotency_key=f"schedule:{ticker}:{event_key}",
+            send=send,
             trigger_type="scheduled",
+            metadata={"trigger": "eventbridge"},
         )
-        if not created and run.status in RUN_ACTIVE_OR_FINISHED:
-            return False
-        run_id = cast(UUID, run.id)
-        if not created and run.status == ScrapeRunStatus.FAILED:
-            run = scrape_run_crud.mark_run_enqueueing(db, run_id)
-        run_id = cast(UUID, run.id)
-
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker=ticker,
-        source_url=HttpUrl(source.source_url),
-        source_adapter=source.adapter,
-        metadata={"trigger": "eventbridge"},
-    )
-    try:
-        sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=message.model_dump_json(),
-        )
-    except Exception:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_run_discovery_failed
-
-            mark_run_discovery_failed(
-                db,
-                run_id,
-                error="EventBridge producer could not enqueue discovery",
-            )
-        raise
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_run_queued_if_enqueueing
-
-        mark_run_queued_if_enqueueing(db, run_id)
-    return True
+    return requested.enqueued
 
 
 def handler(event: dict, _context) -> dict:
@@ -156,6 +126,10 @@ def handler(event: dict, _context) -> dict:
     load_runtime_configuration()
     queue_url = os.environ["DISCOVERY_QUEUE_URL"]
     sqs = boto3.client("sqs")
+
+    def send(message: QueueAMessage) -> None:
+        sqs.send_message(QueueUrl=queue_url, MessageBody=message.model_dump_json())
+
     event_key = _event_key(event)
     queued = 0
     marketaux_result = {
@@ -169,12 +143,7 @@ def handler(event: dict, _context) -> dict:
         tickers = _enabled_tickers()
         for ticker in tickers:
             queued += int(
-                _enqueue_ticker(
-                    ticker=ticker,
-                    event_key=event_key,
-                    sqs=sqs,
-                    queue_url=queue_url,
-                )
+                _request_run(ticker=ticker, event_key=event_key, send=send)
             )
         marketaux_result = _collect_marketaux_news(tickers)
         if marketaux_result["marketaux_errors"]:

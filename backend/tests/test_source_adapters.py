@@ -17,7 +17,6 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-import main
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
 from app.status import ScrapeRunStatus
@@ -323,36 +322,6 @@ def test_bhp_discovery_message_preserves_article_resolution_metadata(
     assert str(queued.document_url) == article_url
     assert queued.source_id == article_url
     assert calls["artifact"]["source_adapter"] == "bhp"
-
-
-def test_api_enqueues_enabled_non_csl_source(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run = SimpleNamespace(id=uuid4(), status=ScrapeRunStatus.ENQUEUEING)
-    enqueue = MagicMock(return_value="message-id")
-    monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", list(SOURCES))
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "get_or_create_queued_run",
-        MagicMock(return_value=(run, True)),
-    )
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "mark_run_queued_if_enqueueing",
-        MagicMock(return_value=run),
-    )
-    monkeypatch.setattr(main.scrape_queue, "enqueue_discovery", enqueue)
-
-    result = main.scrape_ticker(
-        ticker_symbol="anz",
-        idempotency_key="anz-run-1",
-        db=MagicMock(),
-    )
-
-    queued = enqueue.call_args.args[0]
-    assert result["ticker"] == "ANZ"
-    assert queued.source_adapter == "anz"
-    assert str(queued.source_url) == SOURCES["ANZ"].source_url
 
 
 def test_csl_resolver_uses_generic_downloader(

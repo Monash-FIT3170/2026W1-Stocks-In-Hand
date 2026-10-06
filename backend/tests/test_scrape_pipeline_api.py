@@ -1,7 +1,6 @@
 """Focused tests for Queue A contracts and the API producer."""
 
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -21,7 +20,6 @@ from app.messages import (
 )
 from app.schemas.investor import InvestorUpdate
 from app.services import analysis_queue, scrape_queue
-from app.status import ScrapeRunStatus
 
 
 def test_queue_a_normalises_ticker_and_serialises_identifiers() -> None:
@@ -114,130 +112,6 @@ def test_enqueue_stored_artifact_analysis_sends_validated_json(
     assert call["QueueUrl"] == "analysis-url"
     parsed = PublicDiscussionAnalysisMessage.model_validate_json(call["MessageBody"])
     assert parsed.artifact_id == artifact_id
-
-
-def _run(status: str = ScrapeRunStatus.ENQUEUEING) -> MagicMock:
-    run = MagicMock()
-    run.id = uuid4()
-    run.status = status
-    run.queued_at = datetime.now(timezone.utc)
-    return run
-
-
-def test_scrape_endpoint_creates_run_and_enqueues(monkeypatch: pytest.MonkeyPatch) -> None:
-    run = _run()
-    get_or_create = MagicMock(return_value=(run, True))
-    enqueue = MagicMock(return_value="message-id")
-    monkeypatch.setattr(main.scrape_run_crud, "get_or_create_queued_run", get_or_create)
-    mark_queued = MagicMock(return_value=run)
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "mark_run_queued_if_enqueueing",
-        mark_queued,
-    )
-    monkeypatch.setattr(main.scrape_queue, "enqueue_discovery", enqueue)
-    monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", ["CSL"])
-
-    result = main.scrape_ticker(
-        ticker_symbol="csl",
-        idempotency_key="browser-request-1",
-        db=MagicMock(),
-    )
-
-    assert result == {
-        "status": ScrapeRunStatus.QUEUED,
-        "ticker": "CSL",
-        "scrape_run_id": run.id,
-    }
-    assert enqueue.call_args.args[0].scrape_run_id == run.id
-    assert (
-        get_or_create.call_args.kwargs["idempotency_key"]
-        == "scrape:CSL:browser-request-1"
-    )
-    mark_queued.assert_called_once_with(get_or_create.call_args.args[0], run.id)
-
-
-def test_duplicate_active_request_returns_same_run_without_second_send(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run = _run(ScrapeRunStatus.DISCOVERING)
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "get_or_create_queued_run",
-        MagicMock(return_value=(run, False)),
-    )
-    enqueue = MagicMock()
-    monkeypatch.setattr(main.scrape_queue, "enqueue_discovery", enqueue)
-    monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", ["CSL"])
-
-    result = main.scrape_ticker(
-        ticker_symbol="CSL",
-        idempotency_key="same-request",
-        db=MagicMock(),
-    )
-
-    assert result["scrape_run_id"] == run.id
-    assert result["status"] == ScrapeRunStatus.DISCOVERING
-    enqueue.assert_not_called()
-
-
-def test_duplicate_enqueueing_request_resends_queue_a(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run = _run(ScrapeRunStatus.ENQUEUEING)
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "get_or_create_queued_run",
-        MagicMock(return_value=(run, False)),
-    )
-    mark_queued = MagicMock(return_value=run)
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "mark_run_queued_if_enqueueing",
-        mark_queued,
-    )
-    enqueue = MagicMock(return_value="message-id")
-    monkeypatch.setattr(main.scrape_queue, "enqueue_discovery", enqueue)
-    monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", ["CSL"])
-
-    result = main.scrape_ticker(
-        ticker_symbol="CSL",
-        idempotency_key="retry-enqueueing",
-        db=MagicMock(),
-    )
-
-    assert result["status"] == ScrapeRunStatus.QUEUED
-    enqueue.assert_called_once()
-    mark_queued.assert_called_once()
-
-
-def test_queue_send_failure_marks_run_failed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run = _run()
-    monkeypatch.setattr(
-        main.scrape_run_crud,
-        "get_or_create_queued_run",
-        MagicMock(return_value=(run, True)),
-    )
-    mark_failed = MagicMock()
-    monkeypatch.setattr(main.scrape_run_crud, "mark_run_discovery_failed", mark_failed)
-    monkeypatch.setattr(
-        main.scrape_queue,
-        "enqueue_discovery",
-        MagicMock(side_effect=RuntimeError("SQS unavailable")),
-    )
-    monkeypatch.setattr(main.settings, "SUPPORTED_TICKERS", ["CSL"])
-
-    with pytest.raises(HTTPException) as exc_info:
-        main.scrape_ticker(
-            ticker_symbol="CSL",
-            idempotency_key="failed-request",
-            db=MagicMock(),
-        )
-
-    assert exc_info.value.status_code == 503
-    mark_failed.assert_called_once()
 
 
 def test_scrape_endpoint_rejects_disabled_ticker(

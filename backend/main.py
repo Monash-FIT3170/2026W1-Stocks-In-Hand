@@ -39,14 +39,11 @@ from app.api.routes import (
     watchlist_ticker,
 )
 from app.core.config import settings
-from app.crud import scrape_run as scrape_run_crud
 from app.database.connection import get_db
-from app.messages import QueueAMessage
 from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeEnqueueResponse
-from app.services import scrape_queue
-from app.sources import source_for_ticker
-from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
+from app.services import scrape_queue, scrape_runs
+from app.sources import normalise_symbol, source_for_ticker
 
 app = FastAPI(title="StonksInHand API")
 app.add_middleware(
@@ -221,9 +218,8 @@ def scrape_ticker(
     _admin: Investor = Depends(require_admin_investor),
 ):
     """Create durable run state and enqueue website discovery."""
-    symbol = ticker_symbol.strip().upper()
-    source = source_for_ticker(symbol)
-    if source is None or symbol not in settings.SUPPORTED_TICKERS:
+    symbol = normalise_symbol(ticker_symbol)
+    if source_for_ticker(symbol) is None or symbol not in settings.SUPPORTED_TICKERS:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -231,7 +227,6 @@ def scrape_ticker(
                 f"Enabled: {settings.SUPPORTED_TICKERS}"
             ),
         )
-    source_url = settings.SOURCE_URLS.get(symbol, source.source_url)
     if idempotency_key is not None:
         idempotency_key = idempotency_key.strip()
         if not idempotency_key:
@@ -240,47 +235,19 @@ def scrape_ticker(
             raise HTTPException(status_code=400, detail="Idempotency-Key is too long")
 
     request_key = idempotency_key or uuid4().hex
-    run, created = scrape_run_crud.get_or_create_queued_run(
-        db,
-        ticker=symbol,
-        source_url=source_url,
-        idempotency_key=f"scrape:{symbol}:{request_key}",
-    )
-
-    if not created and run.status in RUN_ACTIVE_OR_FINISHED:
-        return {
-            "status": run.status,
-            "ticker": symbol,
-            "scrape_run_id": run.id,
-        }
-
-    if not created and run.status == ScrapeRunStatus.FAILED:
-        run = scrape_run_crud.mark_run_enqueueing(db, run.id)
-
-    message = QueueAMessage(
-        scrape_run_id=run.id,
-        ticker=symbol,
-        source_url=source_url,
-        source_adapter=source.adapter,
-    )
     try:
-        scrape_queue.enqueue_discovery(message)
-    except Exception as exc:
-        scrape_run_crud.mark_run_discovery_failed(
+        requested = scrape_runs.request_scrape_run(
             db,
-            run.id,
-            error="Could not enqueue website discovery",
+            ticker=symbol,
+            idempotency_key=f"scrape:{symbol}:{request_key}",
+            send=scrape_queue.enqueue_discovery,
         )
-        raise HTTPException(
-            status_code=503,
-            detail="Could not enqueue website discovery",
-        ) from exc
-
-    scrape_run_crud.mark_run_queued_if_enqueueing(db, run.id)
+    except scrape_runs.DiscoveryEnqueueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {
-        "status": ScrapeRunStatus.QUEUED,
+        "status": requested.status,
         "ticker": symbol,
-        "scrape_run_id": run.id,
+        "scrape_run_id": requested.scrape_run_id,
     }
 
 @app.get("/tickers")

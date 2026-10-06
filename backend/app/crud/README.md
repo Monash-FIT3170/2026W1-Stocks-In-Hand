@@ -79,8 +79,9 @@ The largest module in this folder, and the one to read first to understand the
 discovery -> download -> analysis pipeline. It owns the `scrape_runs` state
 machine (`enqueueing -> queued -> discovering -> downloading -> analyzing ->
 completed/partial/failed`) and the per-artifact `download_status`/
-`analysis_status` sub-states, called from `main.py` (enqueueing a run) and from
-every `lambdas/*.py` worker (marking progress as a message is processed).
+`analysis_status` sub-states, called from `app/services/scrape_runs.py`
+(requesting a run, for both the API and the schedule) and from every
+`lambdas/*.py` worker (marking progress as a message is processed).
 
 Two properties make it safe under SQS's at-least-once delivery:
 

@@ -116,10 +116,6 @@ class Settings:
         "FRONTEND_BASE_URL",
         "http://localhost:3000",
     )
-    SOURCE_URLS: dict[str, str] = {
-        ticker: os.getenv(f"{ticker}_SOURCE_URL", str(source.source_url))
-        for ticker, source in SOURCES.items()
-    }
     SUPPORTED_TICKERS: list[str] = [
         ticker.strip().upper()
         for ticker in os.getenv(

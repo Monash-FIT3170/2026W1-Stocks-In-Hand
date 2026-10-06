@@ -43,8 +43,8 @@ class AnalysisStatus(StrEnum):
 
 # A run in one of these statuses already has forward progress from discovery
 # onward, so a new request for the same ticker should attach to the existing
-# run instead of enqueueing a duplicate. Shared by main.py's
-# POST /scrape/{ticker} route and lambdas/schedule.py's EventBridge producer.
+# run instead of enqueueing a duplicate. Used by app/services/scrape_runs.py,
+# which both the API and the EventBridge schedule request runs through.
 RUN_ACTIVE_OR_FINISHED = frozenset(
     {
         ScrapeRunStatus.QUEUED,
