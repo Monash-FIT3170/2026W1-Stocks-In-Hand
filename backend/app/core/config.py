@@ -73,19 +73,6 @@ class Settings:
     COGNITO_LINK_EXISTING_BY_EMAIL: bool = (
         os.getenv("COGNITO_LINK_EXISTING_BY_EMAIL", "false").lower() == "true"
     )
-    DATABASE_URL_PARAMETER: str = os.getenv("DATABASE_URL_PARAMETER", "")
-    REDDIT_CLIENT_ID_PARAMETER: str = os.getenv(
-        "REDDIT_CLIENT_ID_PARAMETER",
-        "",
-    )
-    REDDIT_CLIENT_SECRET_PARAMETER: str = os.getenv(
-        "REDDIT_CLIENT_SECRET_PARAMETER",
-        "",
-    )
-    PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: str = os.getenv(
-        "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-        "",
-    )
     DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
     ANALYSIS_QUEUE_URL: str = os.getenv("ANALYSIS_QUEUE_URL", "")
     NOTIFICATIONS_ENABLED: bool = (
@@ -97,7 +84,6 @@ class Settings:
     ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
     ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
     BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
-    BREVO_API_KEY_PARAMETER: str = os.getenv("BREVO_API_KEY_PARAMETER", "")
     BREVO_API_BASE_URL: str = os.getenv(
         "BREVO_API_BASE_URL",
         "https://api.brevo.com/v3",
@@ -142,28 +128,6 @@ class Settings:
         ).split(",")
         if ticker.strip()
     ]
-    SCHEDULED_TICKERS: list[str] = [
-        ticker.strip().upper()
-        for ticker in os.getenv(
-            "SCHEDULED_TICKERS",
-            ",".join(SOURCES),
-        ).split(",")
-        if ticker.strip()
-    ]
-    DISCOVERY_LOOKBACK_DAYS: int = int(
-        os.getenv("DISCOVERY_LOOKBACK_DAYS", "30")
-    )
-    MAX_DOCUMENTS_PER_RUN: int = int(
-        os.getenv("MAX_DOCUMENTS_PER_RUN", "3")
-    )
-    MAX_DOCUMENT_BYTES: int = int(
-        os.getenv("MAX_DOCUMENT_BYTES", "10485760")
-    )
-    MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "100"))
-    MAX_OCR_PAGES: int = int(os.getenv("MAX_OCR_PAGES", "5"))
-    MAX_ANALYSIS_CHARS: int = int(
-        os.getenv("MAX_ANALYSIS_CHARS", "50000")
-    )
     REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
     REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
     REDDIT_USER_AGENT: str = os.getenv(
@@ -229,9 +193,6 @@ class Settings:
     SESSION_EXPIRE_DAYS: int = int(os.getenv("SESSION_EXPIRE_DAYS", "7"))
     SESSION_COOKIE_SECURE: bool = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
     SESSION_COOKIE_SAMESITE: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax")
-
-    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "")
-    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
 
 settings = Settings()
 

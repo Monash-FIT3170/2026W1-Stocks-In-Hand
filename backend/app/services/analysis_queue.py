@@ -29,8 +29,3 @@ def enqueue_stored_artifact_analysis(artifact_id: UUID) -> str:
         MessageBody=message.model_dump_json(),
     )
     return str(response["MessageId"])
-
-
-def enqueue_public_discussion_analysis(artifact_id: UUID) -> str:
-    """Backward-compatible producer name for existing callers."""
-    return enqueue_stored_artifact_analysis(artifact_id)
