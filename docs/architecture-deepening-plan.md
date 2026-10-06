@@ -5,7 +5,8 @@
 - This plan makes the parts of the code that change most often easier to change and easier to test. Those parts are the announcement pipeline, LLM analysis and summaries, the ticker API, investor alerts and deployment.
 - The main idea is to take knowledge that is copied across many files and give it one home (a "module") with a small, clear interface. Tests then check that interface instead of private functions.
 - The work is split into 18 pieces of work called candidates, grouped into phases. Phase 0 fixes live bugs and deletes dead code first, so the later work starts from a smaller and correct codebase.
-- Phase 0 is written and in review as PRs #57 to #65. Phase 1 starts once those merge.
+- Phase 0 is written and in review as PRs #57 to #65.
+- Phase 1 (candidates 01, 15 and 11) is done in this PR, #56. It is built on the Phase 0 branches, which are merged into it, so #56 also shows the Phase 0 changes until #57 to #65 land on `main`. Merge #57 to #65 first so each keeps its own review.
 - Some choices belong to the team, not the engineer doing the work. They are listed under [Decisions still needed](#decisions-still-needed).
 
 ## What done looks like
@@ -24,9 +25,9 @@
 | # | Candidate | Phase or track | Strength | Size | Depends on | Status |
 |---|---|---|---|---|---|---|
 | 0 | Bug fixes and dead code | Phase 0 | Must do | L | none | In review (PRs #57 to #65) |
-| 01 | Ticker catalogue | Phase 1 | Strong | M | Phase 0 | Partly done in Phase 0 |
-| 15 | Template model | Phase 1 | Strong | M | Phase 0 | Partly done in Phase 0 |
-| 11 | Access policy | Phase 1 | Strong (security) | S | Phase 0 | Mostly done in Phase 0 |
+| 01 | Ticker catalogue | Phase 1 | Strong | M | Phase 0 | Done in #56 |
+| 15 | Template model | Phase 1 | Strong | M | Phase 0 | Done in #56 |
+| 11 | Access policy | Phase 1 | Strong (security) | S | Phase 0 | Done in #56 |
 | 04 | Scrape run lifecycle | Phase 2 | Strong | M | 01 | Partly done in Phase 0 |
 | 03 | Raw document store | Phase 2 | Strong | M | 01 | Partly done in Phase 0 |
 | 02 | Source adapter per company | Phase 2 | Strong | L | 01 | Partly done in Phase 0 |
@@ -50,11 +51,9 @@ The alerts track and the deploy track do not depend on the ingestion or analysis
 ## Order of work
 
 1. Merge the Phase 0 PRs #57 to #65. They were trial-merged together with no conflicts, and the combined result passed 639 backend tests.
-2. Merge the two citation branches that are still open, `feature/86d2ba6e6-claim_source_traceability` and `feature/86d4a0a1d-specific_report_sources`. Both touch `backend/app/api/routes/ticker.py` and `CitationLinks.jsx`, so candidates 07 and 10 will conflict with them if they are not merged first.
-3. Candidate 01, ticker catalogue, one PR per step.
-4. Candidate 15, template model, then its rule-based tests.
-5. Candidate 11, the remaining router-level access policy.
-6. After that, follow the "Depends on" column. Phase 2 before Phase 3 before Phase 4, with the alerts and deploy tracks in parallel.
+2. Merge #56, which holds this plan and Phase 1 (candidates 01, 15 and 11). With Phase 0 merged it passes 685 backend tests.
+3. Merge the two citation branches that are still open, `feature/86d2ba6e6-claim_source_traceability` and `feature/86d4a0a1d-specific_report_sources`. Both touch `backend/app/api/routes/ticker.py` and `CitationLinks.jsx`, so candidates 07 and 10 will conflict with them if they are not merged first.
+4. After that, follow the "Depends on" column. Phase 2 before Phase 3 before Phase 4, with the alerts and deploy tracks in parallel.
 
 ## How to work on a candidate
 
@@ -70,7 +69,7 @@ These rules apply to every candidate.
 - Branch off `main`. The hooks in `.githooks` only allow `feature/<9-character ClickUp id>-<description>`, `bugfix/<description>` or `admin/<description>`. Use underscores, not hyphens, inside the description.
 - Commit messages on `feature/` branches look like `3.2.3.86d2buamy - Description`. On `bugfix/` and `admin/` branches they look like `3.2.3 - Description`.
 - Run the backend tests from the repo root with `python -m pytest -q backend/tests`. Set `DATABASE_URL` to a Postgres database that has been migrated with `python -m alembic upgrade head` (run from `backend/`). Database tests skip themselves when Postgres is not reachable, so a run with no database can pass without testing much. On Windows, install `tzdata` so `ZoneInfo("Australia/Sydney")` works.
-- The "Queue wiring regression tests" CI job installs only pytest and PyYAML, and runs `test_queue_wiring.py` and `test_deployment_contracts.py`. Keep those two files, and anything they import, free of other dependencies.
+- The "Queue wiring regression tests" CI job installs only pytest and PyYAML, and runs `test_queue_wiring.py` and `test_deployment_contracts.py`. Keep those two files, and anything they import, free of other dependencies. Today that means `backend/app/sources.py`, `backend/tools/sync_tickers.py`, `backend/tools/template_model.py` and `backend/tools/verify_queue_wiring.py`.
 - Line references in this plan point at `main` commit `c6e7574`. Phase 0 moves some code, so if a line does not match, search for the function or symbol name instead.
 - If several agents work in separate git worktrees at the same time, do not use `git stash`. The stash is shared by every worktree of a repo, so two agents' changes can swap.
 
@@ -99,7 +98,7 @@ Each candidate also says how its tests should reach outside code:
 - The plan covers the areas that changed most in the 80 commits before `c6e7574`.
 - Four reviewers read the code in parallel without changing it. Their findings were combined, and every bug marked "verified" was checked again against the code.
 - The classification design is already decided in `docs/advanced-content-classification-implementation-plan.md`. `classify_document` stays the single external seam, with no provider ports. This plan builds on that and does not reopen it.
-- The repo had no `CONTEXT.md` and no ADRs when this plan was written.
+- The repo had no `CONTEXT.md` and no ADRs when this plan was written. #56 adds `CONTEXT.md` with the first project terms.
 
 ## Phase 0: fix live bugs and delete dead code
 
@@ -155,88 +154,90 @@ These were found or deferred during Phase 0. Each one is also noted in the candi
 
 ### 01 Ticker catalogue
 
-Strong, size M. Needs Phase 0. Unblocks 02, 03, 04, 05 and 10. Test approach: pure code.
+Strong, size M. Done in #56. Unblocks 02, 03, 04, 05 and 10. Test approach: pure code.
 
-What is wrong
-- The list of supported companies is copied into about 13 places. Commit `9bdc05c` touched 20 files to add eight tickers and still missed the CloudFront route regex, which `8a928c1` then had to fix.
-- Five different "get or create ticker" paths write different company names, so public-discussion mention matching depends on which route ran first.
-- `_ensure_default_tickers` runs up to 13 SELECTs on every read route.
+What was wrong
+- The list of supported companies was copied into about 13 places. Commit `9bdc05c` touched 20 files to add eight tickers and still missed the CloudFront route regex, which `8a928c1` then had to fix.
+- Five different "get or create ticker" paths wrote different company names, so public-discussion mention matching depended on which route ran first.
+- `_ensure_default_tickers` ran up to 13 SELECTs on every read route.
 
-What to build
+What was built
 
-One ticker catalogue module that owns each company's facts: symbol, name, sector, industry, source adapter, source URL and whether it is scheduled. Symbol normalisation and "make sure the ticker row exists" also live behind it. Every other list of tickers is generated from the catalogue.
+The ticker catalogue in `backend/app/sources.py`. Each `SourceDefinition` owns one company's facts: symbol, name, sector, industry, source adapter, source URL and whether the weekly schedule includes it by default. Every other list of tickers is generated from it or checked against it.
 
-Steps
-1. Extend `SourceDefinition` with company name, sector, industry and a scheduled flag. Move the `DEFAULT_TICKERS` data in `ticker.py` into it.
-2. Put symbol normalisation (strip, upper-case, drop `.AX`) and "make sure the ticker row exists" behind the catalogue. Switch all five get-or-create paths to it, including `_get_or_create_ticker` in `backend/app/crud/scrape_run.py`, which writes "CSL Limited" for CSL and the bare symbol for every other ticker.
-3. Seed the ticker rows once in an Alembic data migration, because the API Lambda runs with `lifespan="off"` and has no startup hook. Seeding is done in #62 (migration `86d9seedtickers`). Still to do: remove `_ensure_default_tickers` from the read routes.
-4. Generate the registry keys, the analysis worker's accepted set and the analysis `OBJECT_KEY` pattern from the catalogue. (`download.SUPPORTED_ADAPTERS` was already deleted in #63.)
-5. Generate `tickers.json` for the frontend's `generateStaticParams` and for the CloudFront route pattern, or make that pattern generic. CI fails if a generated file is out of date.
-6. Delete any remaining stale copies of the list. (`SEED_TICKERS` was already deleted in #65.)
+Done in #56
+1. `SourceDefinition` has the company name, sector, industry and a `scheduled` flag. `DEFAULT_TICKERS` is gone from `ticker.py`. The schedule falls back to `scheduled_tickers()` when `SCHEDULED_TICKERS` is unset, instead of every ticker. The seed migration test compares the snapshot's facts, not just the symbols.
+2. `normalise_symbol` (strip, upper-case, drop `.AX`) lives in the catalogue. `crud.ticker.ensure_ticker` is the one "make sure the ticker row exists" path: it writes the catalogue's facts, fills placeholders on existing rows, joins the caller's transaction and absorbs a concurrent insert. Scrape runs, Marketaux and the local loader use it, and `get_ticker_by_symbol` and `TickerCreate` normalise the symbol. The admin `POST /tickers` route still creates exactly what it is given.
+3. `_ensure_default_tickers` is removed from the read routes. Migration `86d9seedtickers` seeds the rows and deploy runs it.
+4. The scraper registry maps adapters to scrapers and takes its ticker keys from the catalogue. The analysis worker builds its `OBJECT_KEY` pattern from the catalogue and checks identity with `adapter_matches_ticker`, so its own `SUPPORTED_TICKERS` set is gone.
+5. `backend/tools/sync_tickers.py` rewrites the copies that cannot import Python: `frontend/src/app/ticker/tickers.json` (read by `generateStaticParams`), the CloudFront `tickerRoute` pattern, the `ScheduledTickers` default and both scheduled-ticker defaults in `deploy-staging.yml`. `test_ticker_list_copies_match_the_catalogue` fails when a copy is stale, and the queue-wiring CI job now runs on catalogue changes. The ApiFunction's `SUPPORTED_TICKERS` variable is removed because `Settings` already defaults to the catalogue.
+6. The ticker list in `docker-compose-dev.yml` and the ticker and source-URL lines in `backend/.env.example` are removed.
+
+To add an ASX ticker now: add a catalogue entry, add its scraper to `SCRAPERS` in `backend/scrapers/registry.py` and its resolver, write a seed migration for the row, update `test_migration_seeds_the_catalogue_facts` to read it, and run `python -m tools.sync_tickers` in `backend/`.
 
 Tests
-- Replace the text search in `test_deployment_contracts.py:9-41` and the AST check in `test_expanded_scraper_registry.py` with one test: the generated files equal the catalogue.
-- Delete the `_ensure_default_tickers` call-count tests in `test_apis.py:218-270`.
-- Add Postgres tests for "make sure the ticker row exists".
+- `test_ticker_catalogue.py`: normalisation, and Postgres tests for `ensure_ticker` (seeded row, catalogue facts, a repeat call, unknown symbol, placeholders filled and curated values kept).
+- The text search in `test_deployment_contracts.py` is replaced by the sync check, and the AST check in `test_expanded_scraper_registry.py` by catalogue-wide scraper and object-key tests.
+- The `_ensure_default_tickers` call-count tests in `test_apis.py` are deleted.
 
-Watch out for
-- The static frontend export needs the ticker list at build time.
-- The CloudFront inline function changes.
-- `SUPPORTED_TICKERS` means two things today: "manual scrape allowed" in `Settings`, and "accepted by analysis" in the worker. Settle which is which before merging them (see decisions).
-- Migration `86d9seedtickers` is a snapshot. A new ticker needs its own seed migration, and `test_migration_seeds_every_supported_ticker` in `test_ticker_seed_migration.py` compares that snapshot with `SOURCES`, so it must be updated at the same time.
+Left over
+- `infra/README.md` still shows `export SCHEDULED_TICKERS=ANZ,BHP,CBA,CSL,WES` in an example command. Candidate 16 replaces the README command copies.
+- Migration `86d9seedtickers` is a snapshot. A new ticker needs its own seed migration.
 
-Where the code is: `backend/app/sources.py:6-112`, `backend/scrapers/registry.py:20-48`, `backend/app/api/routes/ticker.py:20-119`, `backend/lambdas/analysis.py:47-76`, `frontend/src/app/ticker/[symbol]/layout.jsx:3-17`, `infra/template.yaml:469,1060`, `backend/app/crud/scrape_run.py:183-194`, `backend/app/services/marketaux.py:214-226`, `backend/parsing/storage.py:191-202`, `docker-compose*.yml`, `.github/workflows/deploy-staging.yml:253`.
+Where the code is: `backend/app/sources.py`, `backend/app/crud/ticker.py`, `backend/scrapers/registry.py`, `backend/lambdas/analysis.py`, `backend/lambdas/schedule.py`, `backend/tools/sync_tickers.py`, `frontend/src/app/ticker/tickers.json`.
 
 ### 15 Template model
 
-Strong, size M. Needs Phase 0. Unblocks 16 and 17. Test approach: pure code. Low risk, because only tests change.
+Strong, size M. Done in #56. Unblocks 16 and 17. Test approach: pure code.
 
-What is wrong
-- The tests read `infra/template.yaml` in three different ways: 19 text slices that depend on resource order, a regex, and a YAML loader.
-- They check exact values that someone remembered to check, and some could never fail.
-- The Notification queue is missing from the queue-wiring checks.
-- Nothing states that a queue's visibility timeout must be at least 6 times its consumer's timeout.
+What was wrong
+- The tests read `infra/template.yaml` in three different ways: 19 text slices that depended on resource order, a regex, and a YAML loader.
+- They checked exact values that someone remembered to check, and some could never fail.
+- The Notification queue was missing from the queue-wiring checks.
+- Nothing stated that a queue's visibility timeout must be at least 6 times its consumer's timeout.
 
-What to build
+What was built
 
-One template model that parses the file once and answers questions about it: the functions, which queue each function consumes, SendMessage targets, environment variables, readable SSM paths and queue settings. Tests check rules against it, and the deployed-stack check reads the same model. It must only need PyYAML (see the repo rules).
+`backend/tools/template_model.py` parses the template once and answers questions about it: functions, the queue each function consumes, SendMessage targets (including grants under `!If`), environment variables, readable SSM parameter names, queue settings, dead-letter queues, the alarms watching a queue and the outputs that export it. Intrinsic functions keep CloudFormation's JSON form, so `!Ref` and `!GetAtt` can be told apart. It needs only PyYAML.
 
-Done in Phase 0
-- `backend/tests/cloudformation_template.py` holds the CloudFormation-tag loader, shared by `test_infrastructure_security.py` and `test_deployment_contracts.py` (#59). Grow it into the template model.
-- Rules already checked: feature switches default to `"false"` except `AnalysisEnabled`, every image function is mapped in both release workflows, deploy supplies every parameter without a default, and rollback overrides only image URIs (#59). `maxReceiveCount` matches `MAX_RECEIVE_COUNT` (#61). Document size limits match the code (#62).
-- The queue-wiring CI job installs PyYAML (#59).
+Done in Phase 0 (#59, #61, #62): the shared loader, the feature-switch, image-mapping, parameter and rollback rules, the `maxReceiveCount` check and the document size check.
 
-Steps still to do
-1. Turn the shared loader into the template model with the queries listed above.
-2. Add the remaining rules, and check each one fails when the template is broken on purpose:
-   - Every consumed queue has a dead-letter queue, an alarm and an output.
+Done in #56
+1. The template model replaces `backend/tests/cloudformation_template.py`.
+2. `test_queue_wiring.py` checks rules against it, and runs each rule against a template broken on purpose (a test fails if a rule has no breakage):
+   - Every consumed queue has a dead-letter queue, a DLQ alarm and URL outputs.
    - The visibility timeout is at least 6 times the consumer's timeout.
-   - Every `*_QUEUE_URL` environment variable has a SendMessage grant.
-   - Every `*_PARAMETER` environment variable has an `ssm:GetParameter` grant.
-3. Delete the text-slice and regex checks these replace, including the test that the workflow contains the text `python -m pytest`.
-4. Replace the bash arrays in `verify-staging-queue-wiring.yml` with a script that reads the model.
+   - Every `*_QUEUE_URL` variable has a SendMessage grant, and every grant has a `*_QUEUE_URL` variable.
+   - Every `*_PARAMETER` variable has an `ssm:GetParameter` grant.
+   - Queues are encrypted, dead-letter queues keep messages longer than their sources, and DLQ alarms page the alarm topic.
+3. The text-slice checks these replace are deleted, and the remaining template slices in `test_deployment_contracts.py` (notification, Bedrock, Marketaux, Cognito, custom domain, CloudFront, public discussion) read the model. The test that the workflow contains `python -m pytest` is deleted.
+4. `backend/tools/verify_queue_wiring.py` replaces the bash arrays in `verify-staging-queue-wiring.yml`. It takes the resources, outputs and queue settings to check from the model, so the notification queue is now checked too. It is tested against a fake deployed stack built from the model.
 
-Where the code is: `backend/tests/test_deployment_contracts.py`, `backend/tests/test_queue_wiring.py`, `backend/tests/test_infrastructure_security.py`, `backend/tests/cloudformation_template.py`, `.github/workflows/verify-staging-queue-wiring.yml:49-202`, `.github/workflows/ci-infra-queue-wiring.yml`.
+Left over
+- Run "Verify staging queue wiring" once on staging. The script is tested offline only, and the workflow now checks out the repo and installs PyYAML.
+- The workflow text checks in `test_deployment_contracts.py` (deploy and rollback workflows) belong to candidate 16, and the `github-oidc.yaml` text checks to candidate 18.
+
+Where the code is: `backend/tools/template_model.py`, `backend/tools/verify_queue_wiring.py`, `backend/tests/test_queue_wiring.py`, `backend/tests/test_template_model.py`, `backend/tests/test_deployment_contracts.py`, `.github/workflows/verify-staging-queue-wiring.yml`.
 
 ### 11 Access policy
 
-Strong (security), size S. Needs Phase 0. Test approach: pure code.
+Strong (security), size S. Done in #57 and #56. Test approach: pure code.
 
 What was wrong
 
 `require_admin_investor` exists to protect cost-bearing routes, but each handler had to remember to use it, and ten did not. The same operation could have different rules: `/gemini/summarise` was admin-only while `/news/summarise` was open. `recommendations.md` §2.4 had already flagged the unbounded LLM spend.
 
 Done in Phase 0 (#57)
-- The ten routes need an admin session, and the two PATCH routes take schemas instead of a raw dict (steps 1 and 2 of the original plan).
-- `backend/tests/test_access_policy.py` sweeps every route and fails for any non-GET route without a login dependency, unless it is on the public allowlist: sign-up, sign-in, sign-out, verify and unsubscribe. FastAPI 0.139 keeps included routers nested instead of copying their routes onto `app.routes`, so the sweep walks them and also counts dependencies passed to `include_router`.
+- The ten routes need an admin session, and the two PATCH routes take schemas instead of a raw dict.
+- `backend/tests/test_access_policy.py` sweeps every route, walking the nested routers FastAPI 0.139 keeps.
 
-Steps still to do
-1. Group the routers in `main.py` by policy (public read, investor, admin) and attach the login dependency with `include_router(dependencies=...)`, so a new write route is admin-only by default.
-2. Fold the per-route admin tests (`test_scrape_pipeline_api.py:275-316`, `test_public_discussion_contracts.py:412-445`) into the sweep.
+Done in #56
+1. `main.py` includes every router in one policy group, and the include-level dependency decides access: public read (reads open unless the route asks for a login, every other method needs an admin through `require_admin_for_writes`), investor, admin, and self-managed (`auth` and `notification_preferences`, which choose per route). A write route added to a public-read or admin router is admin-only by default, so the 25 per-handler `_admin` dependencies are removed. No route's access changed.
+2. The sweep also fails when a write route is not admin-only and is not on the public or investor-owned allowlists, or when a router is included without a policy. The per-route admin tests in `test_scrape_pipeline_api.py`, `test_public_discussion_contracts.py` and `test_bedrock.py` are folded into it.
 
-Watch out for: any new public write route, such as a real one-click unsubscribe endpoint, must be added to the allowlist in `test_access_policy.py`.
+Watch out for: a new public write route, such as a real one-click unsubscribe endpoint, must go on `PUBLIC_WRITE_ROUTES` in `test_access_policy.py`, and a new investor-owned write route on `INVESTOR_WRITE_ROUTES`. A new router must join a group in `main.py`.
 
-Where the code is: `backend/main.py:58-80`, `backend/app/api/deps.py:125-144`, `backend/app/api/routes/`.
+Where the code is: `backend/main.py`, `backend/app/api/deps.py` (`require_admin_for_writes`), `backend/tests/test_access_policy.py`.
 
 ## Phase 2: ingestion
 
@@ -278,7 +279,7 @@ Where the code is: `backend/lambdas/discovery.py:28-238`, `backend/lambdas/downl
 Strong, size M. Needs 01. Unblocks 08. Test approach: real LocalStack, plus an in-memory store for worker tests.
 
 What is wrong
-- The S3 key is split between two workers. The download worker writes `raw/{ticker}/{artifact_id}/{sha256}.{ext}`. The analysis worker reads it back with a regex that hard-codes the 13 tickers.
+- The S3 key is split between two workers. The download worker writes `raw/{ticker}/{artifact_id}/{sha256}.{ext}`. The analysis worker reads it back with its own regex (#56 builds its ticker list from the catalogue).
 - Both workers mark the artifact as stored.
 - A `DownloadedDocument` does not prove it was validated, so it is validated again at four points.
 - `document_too_large` is raised in 7 places.
@@ -293,7 +294,7 @@ Done in Phase 0
 
 Steps still to do
 1. Make validation the only path that builds a `DownloadedDocument`, then remove the later re-checks one at a time.
-2. Move key building and parsing, the metadata headers, "put only if absent" and "read and verify" into the store. Take the ticker pattern from 01.
+2. Move key building and parsing, the metadata headers, "put only if absent" and "read and verify" into the store. The ticker pattern already comes from the catalogue (`OBJECT_KEY` in `lambdas/analysis.py`).
 3. Move the reconciliation for "the S3 event arrived before the database commit" (around `analysis.py:217-265`) into the store.
 4. Merge the HTTP status classification that is duplicated in `download_validation.py:293-306` and `source_download.py:98-110`.
 
@@ -616,7 +617,7 @@ What is wrong
 
 What to build
 
-One release module that produces the `sam deploy` command for a release or a rollback. Image functions come from the template model (15). Each parameter resolves in this order: explicit override, then the live stack's value, then the template default. A rollback is the live parameters with the image SHAs swapped.
+One release module that produces the `sam deploy` command for a release or a rollback. Image functions come from the template model (`TemplateModel.image_functions()` in `backend/tools/template_model.py`). Each parameter resolves in this order: explicit override, then the live stack's value, then the template default. A rollback is the live parameters with the image SHAs swapped.
 
 Done in Phase 0 (#59)
 - The rollback workflow reads the live stack's parameters, changes only the three image URIs, and maps NotificationFunction.
@@ -686,6 +687,6 @@ Where the code is: `infra/github-oidc.yaml:44-656`.
 | Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Open. #62 only fixed the keyword matching. The UI numbers will change when this is decided. |
 | Whether `source_url` on Queue A is authoritative | 04 | Open. Discovery ignores it today and download uses it. |
 | How to count a malformed public-discussion post: failure or duplicate | 05 | Open. |
-| Which meaning `SUPPORTED_TICKERS` keeps, and what the other meaning is renamed to | 01 | Open. |
+| Which meaning `SUPPORTED_TICKERS` keeps, and what the other meaning is renamed to | 01 | Decided in #56: it means "enabled for manual scraping" (the `Settings` field and env var). The analysis worker's copy is gone; it accepts catalogue tickers directly. Revisit if the team wants a different name. |
 | Whether to collapse the two summary stores after the views land | 07 | Open. |
 | Whether the deployment-test stack is still needed | 18 | Open. |

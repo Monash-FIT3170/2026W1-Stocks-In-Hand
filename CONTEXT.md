@@ -21,3 +21,13 @@ _Avoid_: scraper (for the whole concept), resolver
 **Scheduled ticker**:
 A ticker the weekly schedule scrapes when no override is configured.
 _Avoid_: enabled ticker, default ticker
+
+### People and access
+
+**Investor**:
+A person with an account who keeps watchlists and receives alerts.
+_Avoid_: user, customer, subscriber
+
+**Admin**:
+An investor allowed to manage accounts and run jobs that cost money, such as scrapes and LLM summaries.
+_Avoid_: superuser, operator
