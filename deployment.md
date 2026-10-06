@@ -75,7 +75,7 @@ The deployment starts with these fixed limits:
 | Bedrock output per request | 4,096 tokens |
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
-| Document size | 10 MiB |
+| Document size | 25 MiB |
 | PDF pages | 100 |
 | OCR pages | 5 |
 | Sentiment input | 50,000 characters |

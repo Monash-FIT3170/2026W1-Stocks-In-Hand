@@ -384,9 +384,9 @@ def analyse_document(
     # change the FinBERT input on message retries.
     from app.services import sentiment as sentiment_service
 
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
-    sentiment_text = f"{title}\n\n{parsed.raw_text}"[:max_chars]
-    sentiment = sentiment_service.analyse_text(sentiment_text)
+    sentiment = sentiment_service.analyse_text(
+        sentiment_service.sentiment_input(title, parsed.raw_text)
+    )
 
     from app.services import llm as llm_service
 
@@ -424,9 +424,8 @@ def analyse_public_discussion_text(
     parsed = _text_document(raw_text or title)
     from app.services import sentiment as sentiment_service
 
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
     sentiment = sentiment_service.analyse_text(
-        f"{title}\n\n{parsed.raw_text}"[:max_chars]
+        sentiment_service.sentiment_input(title, parsed.raw_text)
     )
 
     from app.services import llm as llm_service
@@ -477,9 +476,8 @@ def analyse_news_text(
     parsed = _text_document(raw_text or title)
     from app.services import sentiment as sentiment_service
 
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
     sentiment = sentiment_service.analyse_text(
-        f"{title}\n\n{parsed.raw_text}"[:max_chars]
+        sentiment_service.sentiment_input(title, parsed.raw_text)
     )
 
     from app.services import llm as llm_service

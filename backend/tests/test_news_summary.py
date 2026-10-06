@@ -43,6 +43,7 @@ def test_has_news_summary_metadata(metadata, expected) -> None:
 
 def test_summarise_news_artifact_stores_summary_metadata() -> None:
     db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
     artifact = _artifact()
 
     with patch.object(

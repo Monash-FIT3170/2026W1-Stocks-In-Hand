@@ -1,4 +1,5 @@
 import datetime as dt
+import re
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -402,6 +403,20 @@ def _stored_sentiment_rows(
     )
 
 
+# Keywords match whole words, with plural and simple verb endings. Stored
+# identifiers such as "SecurityNotification" or "security_notification" are
+# single words, so "security" no longer files Appendix 3G/3H share notices
+# under risk.
+_CATEGORY_KEYWORD_PATTERNS = {
+    category: re.compile(
+        r"(?<![a-z0-9_])(?:"
+        + "|".join(re.escape(keyword) for keyword in keywords)
+        + r")(?:s|es|d|ed|ing)?(?![a-z0-9_])"
+    )
+    for category, keywords in FALLBACK_CATEGORY_KEYWORDS.items()
+}
+
+
 def _categories_for_stored_artifact(artifact: Artifact) -> list[str]:
     source_type = str(artifact.source_type or "").lower()
     if source_type in {"reddit", "bluesky", "mastodon", "blog"}:
@@ -426,8 +441,8 @@ def _categories_for_stored_artifact(artifact: Artifact) -> list[str]:
     ).lower()
     matches = [
         category
-        for category, keywords in FALLBACK_CATEGORY_KEYWORDS.items()
-        if any(keyword in haystack for keyword in keywords)
+        for category, pattern in _CATEGORY_KEYWORD_PATTERNS.items()
+        if pattern.search(haystack)
     ]
     return matches or ["strategy"]
 
@@ -491,8 +506,13 @@ def _aggregate_stored_category(
 
     weights = {"positive": 0.0, "neutral": 0.0, "negative": 0.0}
     for _artifact, _sentiment, label, confidence in usable:
-        weights[label] += confidence or 1.0
+        weights[label] += confidence
     total_weight = sum(weights.values())
+    if total_weight == 0:
+        # No row carries any confidence, so count the labels instead.
+        for _artifact, _sentiment, label, _confidence in usable:
+            weights[label] += 1.0
+        total_weight = float(len(usable))
     distribution = {
         label: round(weight / total_weight, 4)
         for label, weight in weights.items()

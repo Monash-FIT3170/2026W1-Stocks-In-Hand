@@ -23,6 +23,7 @@ from lambdas.common import (
 from lambdas.download_validation import (
     DOCUMENT_CONTENT_TYPES,
     DownloadedDocument,
+    document_size_limit,
     validate_document_content,
 )
 
@@ -214,7 +215,7 @@ def _handle_record(record: dict) -> None:
 
             mark_artifact_download_started(db, message.artifact_id)
 
-        max_bytes = int(os.getenv("MAX_DOCUMENT_BYTES", "10485760"))
+        max_bytes = document_size_limit()
         downloaded = _resolve_download(message, max_bytes=max_bytes)
         if len(downloaded.content) > max_bytes:
             raise PermanentDocumentError(

@@ -50,6 +50,23 @@ FORMAT_CONTENT_TYPES: dict[DocumentFormat, frozenset[str]] = {
     ),
 }
 SUPPORTED_CONTENT_TYPES = frozenset().union(*FORMAT_CONTENT_TYPES.values())
+# Defaults match the Lambda environment in infra/template.yaml, so a worker
+# that runs without the variable enforces the same limits as the deployed one.
+DEFAULT_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_DOCX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+
+
+def document_size_limit() -> int:
+    return int(os.getenv("MAX_DOCUMENT_BYTES", str(DEFAULT_MAX_DOCUMENT_BYTES)))
+
+
+def docx_uncompressed_limit() -> int:
+    return int(
+        os.getenv(
+            "MAX_DOCX_UNCOMPRESSED_BYTES",
+            str(DEFAULT_MAX_DOCX_UNCOMPRESSED_BYTES),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -220,7 +237,7 @@ def validate_document_content(
         _validate_docx_archive(
             content,
             max_uncompressed_bytes=max_docx_uncompressed_bytes
-            or int(os.getenv("MAX_DOCX_UNCOMPRESSED_BYTES", "52428800")),
+            or docx_uncompressed_limit(),
         )
         detected = "docx"
     elif _looks_like_html(content):

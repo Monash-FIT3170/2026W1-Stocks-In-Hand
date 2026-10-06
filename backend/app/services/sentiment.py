@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from typing import Any, Mapping
 
@@ -8,6 +9,16 @@ OVERLAP_WORDS = 40
 FINBERT_BATCH_SIZE = 8
 SENTIMENT_LABELS = ("positive", "neutral", "negative")
 LABEL_ALIASES = {"label_0": "positive", "label_1": "negative", "label_2": "neutral"}
+
+
+def sentiment_input(title: str | None, raw_text: str | None) -> str:
+    """Return the one text FinBERT scores for an artifact: title plus source text.
+
+    Never an LLM summary: the input must be deterministic, so a retry or a
+    re-summarisation cannot change an artifact's sentiment.
+    """
+    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
+    return f"{title or ''}\n\n{raw_text or ''}"[:max_chars]
 
 
 def _normalise_label(label: str):

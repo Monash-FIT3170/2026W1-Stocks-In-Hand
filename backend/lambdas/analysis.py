@@ -41,6 +41,7 @@ from app.status import AnalysisStatus, DownloadStatus
 from lambdas.download_validation import (
     DOCUMENT_CONTENT_TYPES,
     DocumentFormat,
+    document_size_limit,
     validate_document_content,
 )
 from parsing.classification_metadata import merge_classification_metadata
@@ -245,7 +246,7 @@ def _artifact_state(
             "Stored object metadata does not match the S3 event",
             code="artifact_identity_mismatch",
         )
-    if content_length > int(os.getenv("MAX_DOCUMENT_BYTES", "10485760")):
+    if content_length > document_size_limit():
         raise PermanentDocumentError(
             "Stored document is larger than the configured limit",
             code="document_too_large",
@@ -279,7 +280,7 @@ def _read_s3_document(
     checksum: str,
     document_format: DocumentFormat,
 ) -> bytes:
-    max_bytes = int(os.getenv("MAX_DOCUMENT_BYTES", "10485760"))
+    max_bytes = document_size_limit()
     response = s3.get_object(Bucket=bucket, Key=key)
     content_type = (
         str(response.get("ContentType", ""))

@@ -18,11 +18,11 @@ from app.models.ticker import Ticker
 from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
-from app.models.artifact_summary import ArtifactSummary
 from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
+from app.crud.artifact_summary import upsert_artifact_summary
 from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
 from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
@@ -66,18 +66,11 @@ def _artifact_has_summary_fields(artifact: Artifact) -> bool:
 
 
 def _artifact_sentiment_text(artifact: Artifact, raw_text: str) -> str:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    parts = [
+    # Same input as the analysis worker, never the LLM summary.
+    return sentiment_service.sentiment_input(
         artifact.title,
-        metadata.get("summary"),
-        metadata.get("about"),
-        metadata.get("changed"),
-        metadata.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    if cleaned:
-        return "\n\n".join(cleaned)
-    return raw_text or artifact.raw_text or ""
+        raw_text or artifact.raw_text,
+    )
 
 
 def _artifact_has_sentiment(db, artifact: Artifact) -> bool:
@@ -153,15 +146,15 @@ def _summarise_and_store_artifact(
             metadata[key] = value
     artifact.artifact_metadata = metadata
 
-    db.add(ArtifactSummary(
+    upsert_artifact_summary(
+        db,
         artifact_id=artifact.id,
         summary_text=_fallback_summary_text(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
         model_used=llm_service.active_model_name(),
-    ))
-    db.commit()
+    )
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
     _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
     time.sleep(3)
