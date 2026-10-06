@@ -13,6 +13,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.public_discussion import ArtifactTickerMentionCreate
+from app.status import ANALYSIS_QUEUED_OR_DONE, AnalysisStatus
 
 PUBLIC_DISCUSSION_SOURCE_TYPES = frozenset(
     {"reddit", "bluesky", "mastodon", "blog"}
@@ -230,7 +231,7 @@ def queue_artifact_analysis(
     useful in the announcements feed even when it does not name a supported ticker.
     """
     if (
-        artifact.analysis_status in {"queued", "analyzing", "completed"}
+        artifact.analysis_status in ANALYSIS_QUEUED_OR_DONE
         or not settings.ANALYSIS_QUEUE_URL
     ):
         return False
@@ -444,7 +445,11 @@ def _pending_analysis_artifacts(
     query = (
         db.query(Artifact)
         .filter(Artifact.source_type.in_(tuple(PUBLIC_DISCUSSION_SOURCE_TYPES)))
-        .filter(Artifact.analysis_status.in_(("pending", "failed")))
+        .filter(
+            Artifact.analysis_status.in_(
+                (AnalysisStatus.PENDING, AnalysisStatus.FAILED)
+            )
+        )
         .filter(
             func.length(
                 func.trim(

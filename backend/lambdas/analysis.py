@@ -332,7 +332,7 @@ def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
             db.query(Artifact.id, Artifact.artifact_metadata)
             .join(ArtifactSummary, ArtifactSummary.artifact_id == Artifact.id)
             .filter(Artifact.source_type == "asx_announcement")
-            .filter(Artifact.analysis_status == "completed")
+            .filter(Artifact.analysis_status == AnalysisStatus.COMPLETED)
             .order_by(Artifact.created_at.asc(), Artifact.id.asc())
             .all()
         )
@@ -349,7 +349,7 @@ def _summary_input(artifact_id: UUID) -> dict:
         from app.crud.artifact import get_artifact
 
         artifact = get_artifact(db, artifact_id)
-        if artifact is None or artifact.analysis_status != "completed":
+        if artifact is None or artifact.analysis_status != AnalysisStatus.COMPLETED:
             raise RuntimeError("Completed artifact is no longer available")
         metadata = (
             artifact.artifact_metadata
@@ -536,7 +536,7 @@ def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
         )
         source_name = metadata.get("source_name") or metadata.get("provider")
         return {
-            "completed": artifact.analysis_status == "completed",
+            "completed": artifact.analysis_status == AnalysisStatus.COMPLETED,
             "run_id": artifact.scrape_run_id,
             "title": title or (
                 "Untitled news article"

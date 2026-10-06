@@ -12,11 +12,12 @@ from typing import Any, Callable, cast
 from urllib.parse import quote
 from uuid import UUID
 
+from app.status import ScrapeRunStatus
 from lambdas.common import database_session, load_runtime_configuration, log_event
 
 STAGE = "public_discussion_schedule"
 MAX_FEEDS = 5
-_FINISHED_STATUSES = {"completed", "partial"}
+_FINISHED_STATUSES = {ScrapeRunStatus.COMPLETED, ScrapeRunStatus.PARTIAL}
 
 
 @dataclass(frozen=True)
@@ -146,7 +147,7 @@ def _run_collector(spec: CollectorSpec, event_key: str) -> str:
         run = scrape_run_crud.get_scrape_run(db, run_id)
         if run is None:
             return "failed"
-        return "failed" if run.status == "failed" else "completed"
+        return "failed" if run.status == ScrapeRunStatus.FAILED else "completed"
 
 
 def handler(event: dict, _context) -> dict:

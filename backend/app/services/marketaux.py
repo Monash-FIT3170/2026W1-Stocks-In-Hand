@@ -19,6 +19,7 @@ from app.schemas.information_platform import InformationPlatformCreate
 from app.services import news_summary
 from app.services.title_normalization import normalise_title
 from app.sources import normalise_symbol
+from app.status import ANALYSIS_QUEUED_OR_DONE
 
 
 PROVIDER_NAME = "Marketaux"
@@ -33,7 +34,7 @@ def _queue_news_artifact_analysis(db: Session, artifact) -> bool:
     """Queue one unsummarised news artifact for the analysis worker."""
     if (
         news_summary.has_news_summary_metadata(artifact)
-        or artifact.analysis_status in {"queued", "analyzing", "completed"}
+        or artifact.analysis_status in ANALYSIS_QUEUED_OR_DONE
         or not settings.ANALYSIS_QUEUE_URL
         or not ((artifact.raw_text or "").strip() or (artifact.title or "").strip())
     ):

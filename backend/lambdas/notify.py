@@ -54,6 +54,7 @@ from app.services.alert_templates import (  # noqa: E402
 from app.services.unsubscribe_tokens import (  # noqa: E402
     create_signed_unsubscribe_token,
 )
+from app.status import AnalysisStatus  # noqa: E402
 
 
 STAGE = "notify"
@@ -191,7 +192,7 @@ def _load_context(message: NotificationMessage) -> NotificationContext:
             "Artifact is not visible yet",
             code="artifact_not_visible",
         )
-    if row["analysis_status"] != "completed":
+    if row["analysis_status"] != AnalysisStatus.COMPLETED:
         raise RetryableNotificationError(
             "Artifact analysis is not complete yet",
             code="analysis_not_complete",

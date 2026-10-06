@@ -13,7 +13,13 @@ from app.models.artifact import Artifact
 from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
 from app.schemas.scrape_run import ScrapeRunCreate
-from app.status import AnalysisStatus, DownloadStatus, RUN_DOWNSTREAM_OF_DISCOVERY, ScrapeRunStatus
+from app.status import (
+    ANALYSIS_QUEUED_OR_DONE,
+    RUN_DOWNSTREAM_OF_DISCOVERY,
+    AnalysisStatus,
+    DownloadStatus,
+    ScrapeRunStatus,
+)
 
 
 def _utcnow() -> datetime:
@@ -91,7 +97,7 @@ def get_or_create_public_discussion_run(
 
     run = ScrapeRun(
         platform_id=platform_id,
-        status="queued",
+        status=ScrapeRunStatus.QUEUED,
         source_url=source_url,
         idempotency_key=idempotency_key,
         trigger_type=trigger_type,
@@ -117,9 +123,12 @@ def mark_public_discussion_run_started(
     scrape_run_id: UUID,
 ) -> ScrapeRun | None:
     run = _lock_run(db, scrape_run_id)
-    if run is None or run.status in {"completed", "partial"}:
+    if run is None or run.status in {
+        ScrapeRunStatus.COMPLETED,
+        ScrapeRunStatus.PARTIAL,
+    }:
         return run
-    run.status = "running"
+    run.status = ScrapeRunStatus.RUNNING
     run.started_at = run.started_at or _utcnow()
     run.finished_at = None
     run.error_message = None
@@ -140,7 +149,9 @@ def mark_public_discussion_run_completed(
     run.items_found = max(items_found, 0)
     run.items_saved = max(items_saved, 0)
     run.items_failed = max(items_failed, 0)
-    run.status = "partial" if run.items_failed else "completed"
+    run.status = (
+        ScrapeRunStatus.PARTIAL if run.items_failed else ScrapeRunStatus.COMPLETED
+    )
     run.finished_at = _utcnow()
     run.error_message = None
     return _commit(db, run)
@@ -155,7 +166,7 @@ def mark_public_discussion_run_failed(
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    run.status = "failed"
+    run.status = ScrapeRunStatus.FAILED
     run.finished_at = _utcnow()
     run.error_message = error[:8000]
     return _commit(db, run)
@@ -610,11 +621,11 @@ def mark_inline_artifact_analysis_started(
 ) -> Artifact | None:
     """Start stored-text analysis without changing document-run counters."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status == "completed":
+    if artifact is None or artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
     if not (artifact.raw_text or artifact.title):
         raise ValueError(f"Artifact {artifact_id} has no stored text")
-    artifact.analysis_status = "analyzing"
+    artifact.analysis_status = AnalysisStatus.ANALYZING
     artifact.last_error = None
     return _commit(db, artifact)
 
@@ -625,13 +636,9 @@ def mark_inline_artifact_analysis_queued(
 ) -> Artifact | None:
     """Record a successful queue send while keeping retries idempotent."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status in {
-        "queued",
-        "analyzing",
-        "completed",
-    }:
+    if artifact is None or artifact.analysis_status in ANALYSIS_QUEUED_OR_DONE:
         return artifact
-    artifact.analysis_status = "queued"
+    artifact.analysis_status = AnalysisStatus.QUEUED
     artifact.last_error = None
     return _commit(db, artifact)
 
@@ -644,7 +651,7 @@ def mark_inline_artifact_analysis_completed(
     artifact = _lock_artifact(db, artifact_id)
     if artifact is None:
         return None
-    artifact.analysis_status = "completed"
+    artifact.analysis_status = AnalysisStatus.COMPLETED
     artifact.analyzed_at = artifact.analyzed_at or _utcnow()
     artifact.last_error = None
     return _commit(db, artifact)
@@ -658,8 +665,8 @@ def mark_inline_artifact_analysis_failed(
 ) -> Artifact | None:
     """Fail stored-text analysis without changing collection success state."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status == "completed":
+    if artifact is None or artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
-    artifact.analysis_status = "failed"
+    artifact.analysis_status = AnalysisStatus.FAILED
     artifact.last_error = error[:8000]
     return _commit(db, artifact)
