@@ -61,10 +61,16 @@ def db_session() -> Iterator[Session]:
         engine.dispose()
 
 
-def test_migration_seeds_every_supported_ticker() -> None:
-    seeded = {symbol for symbol, *_details in _migration().SUPPORTED_TICKERS}
+def test_migration_seeds_the_catalogue_facts() -> None:
+    seeded = {
+        symbol: (company_name, sector, industry)
+        for symbol, company_name, sector, industry in _migration().SUPPORTED_TICKERS
+    }
 
-    assert seeded == set(SOURCES)
+    assert seeded == {
+        symbol: (source.company_name, source.sector, source.industry)
+        for symbol, source in SOURCES.items()
+    }
 
 
 def test_migrated_database_has_named_rows_for_every_source(db_session: Session) -> None:

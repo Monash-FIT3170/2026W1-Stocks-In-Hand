@@ -15,96 +15,23 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
+from app.sources import SOURCES
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
-DEFAULT_TICKERS = {
-    "ANZ": {
-        "company_name": "ANZ Group Holdings Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "BHP": {
-        "company_name": "BHP Group Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-    "CBA": {
-        "company_name": "Commonwealth Bank of Australia",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "COL": {
-        "company_name": "Coles Group Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Staples",
-        "industry": "Food & Staples Retailing",
-    },
-    "COH": {
-        "company_name": "Cochlear Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Health Care Equipment & Supplies",
-    },
-    "CSL": {
-        "company_name": "CSL Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Biotechnology",
-    },
-    "TCL": {
-        "company_name": "Transurban Group",
-        "exchange": "ASX",
-        "sector": "Industrials",
-        "industry": "Highways & Railtracks",
-    },
-    "TLS": {
-        "company_name": "Telstra Group Limited",
-        "exchange": "ASX",
-        "sector": "Communication Services",
-        "industry": "Diversified Telecommunication Services",
-    },
-    "WES": {
-        "company_name": "Wesfarmers Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Discretionary",
-        "industry": "Consumer Staples Distribution & Retail",
-    },
-    "WDS": {
-        "company_name": "Woodside Energy Group Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "MQG": {
-        "company_name": "Macquarie Group Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Capital Markets",
-    },
-    "ORG": {
-        "company_name": "Origin Energy Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "RIO": {
-        "company_name": "Rio Tinto Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-}
 
 
 def _ensure_default_tickers(db: Session) -> None:
     changed = False
 
-    for symbol, defaults in DEFAULT_TICKERS.items():
+    for symbol, source in SOURCES.items():
+        defaults = {
+            "company_name": source.company_name,
+            "exchange": "ASX",
+            "sector": source.sector,
+            "industry": source.industry,
+        }
         ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
         if not ticker:
             db.add(Ticker(symbol=symbol, **defaults))

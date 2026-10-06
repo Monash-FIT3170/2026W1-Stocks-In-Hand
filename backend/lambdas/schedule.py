@@ -13,7 +13,7 @@ import boto3
 from pydantic import HttpUrl
 
 from app.messages import QueueAMessage
-from app.sources import SOURCES
+from app.sources import SOURCES, scheduled_tickers
 from app.status import RUN_ACTIVE_OR_FINISHED, ScrapeRunStatus
 from lambdas.common import database_session, load_runtime_configuration, log_event
 
@@ -32,7 +32,9 @@ def _event_key(event: dict) -> str:
 def _enabled_tickers() -> list[str]:
     configured = {
         ticker.strip().upper()
-        for ticker in os.getenv("SCHEDULED_TICKERS", ",".join(SOURCES)).split(",")
+        for ticker in os.getenv(
+            "SCHEDULED_TICKERS", ",".join(scheduled_tickers())
+        ).split(",")
         if ticker.strip()
     }
     return [ticker for ticker in SOURCES if ticker in configured]

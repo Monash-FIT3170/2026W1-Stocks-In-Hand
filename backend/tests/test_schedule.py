@@ -65,6 +65,18 @@ def test_schedule_enqueues_each_enabled_ticker_once(monkeypatch) -> None:
     assert all(message.metadata == {"trigger": "eventbridge"} for message in messages)
 
 
+def test_schedule_defaults_to_the_catalogue_scheduled_tickers(monkeypatch) -> None:
+    monkeypatch.delenv("SCHEDULED_TICKERS", raising=False)
+
+    assert schedule._enabled_tickers() == ["ANZ", "BHP", "CBA", "CSL", "WES"]
+
+
+def test_schedule_ignores_tickers_outside_the_catalogue(monkeypatch) -> None:
+    monkeypatch.setenv("SCHEDULED_TICKERS", "wes, XYZ,anz")
+
+    assert schedule._enabled_tickers() == ["ANZ", "WES"]
+
+
 def test_schedule_duplicate_completed_run_is_not_queued() -> None:
     sqs = MagicMock()
     run = SimpleNamespace(id=uuid4(), status=ScrapeRunStatus.COMPLETED)
