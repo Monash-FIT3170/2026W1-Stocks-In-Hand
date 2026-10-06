@@ -70,8 +70,6 @@ services:
       - scripts.populate_local_content
       - --sources
       - asx
-      - --tickers
-      - ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
       - --lookback-days
       - "365"
       - --max-documents
