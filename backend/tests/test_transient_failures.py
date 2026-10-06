@@ -10,7 +10,6 @@ These run the real handlers against Postgres with the network edges faked.
 """
 
 import json
-import re
 import sys
 import uuid
 from collections.abc import Iterator
@@ -32,8 +31,8 @@ from app.messages import QueueAMessage, QueueBMessage
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 from lambdas import analysis, discovery, download
 from lambdas.common import MAX_RECEIVE_COUNT
+from tools.template_model import template_model
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_URL = "https://investors.csl.com/investors/asx-announcements"
 
 
@@ -120,11 +119,12 @@ def _download(artifact, run, attempt: int, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_template_redrive_matches_the_final_attempt() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
-    counts = re.findall(r"maxReceiveCount: (\d+)", template)
+    model = template_model()
+    counts = {
+        queue_id: model.queue(queue_id).max_receive_count for queue_id in model.consumers()
+    }
 
-    assert len(counts) >= 3
-    assert {int(count) for count in counts} == {MAX_RECEIVE_COUNT}
+    assert counts and set(counts.values()) == {MAX_RECEIVE_COUNT}, counts
 
 
 def test_retryable_download_failure_leaves_artifact_and_run_open(
