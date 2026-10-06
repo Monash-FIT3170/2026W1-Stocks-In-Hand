@@ -1,45 +1,45 @@
 import re
 from pathlib import Path
 
-from app.sources import SOURCES
 from cloudformation_template import image_functions, template_parameters
+from tools import sync_tickers
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_all_canonical_tickers_are_deployable_but_schedule_stays_conservative() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
+def test_ticker_list_copies_match_the_catalogue() -> None:
+    """The frontend pages, CloudFront route and schedule defaults follow app.sources."""
+    stale = sync_tickers.stale_copies()
+
+    assert not stale, (
+        "Run `python -m tools.sync_tickers` in backend/ to update:\n" + "\n".join(stale)
     )
-    expected = "ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES"
 
-    assert set(SOURCES) == set(expected.split(","))
-    assert f"SUPPORTED_TICKERS: {expected}" in template
-    scheduled_parameter = template.split("  ScheduledTickers:", 1)[1].split(
-        "  ScheduledPublicDiscussionSources:", 1
-    )[0]
-    assert "Default: ANZ,BHP,CBA,CSL,WES" in scheduled_parameter
 
-    ticker_layout = (
-        REPOSITORY_ROOT
-        / "frontend"
-        / "src"
-        / "app"
-        / "ticker"
-        / "[symbol]"
-        / "layout.jsx"
+def test_ticker_sync_rewrites_a_stale_copy(tmp_path: Path) -> None:
+    for relative in (
+        sync_tickers.FRONTEND_TICKERS,
+        sync_tickers.TEMPLATE,
+        sync_tickers.DEPLOY_WORKFLOW,
+    ):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(
+            (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    template = tmp_path / sync_tickers.TEMPLATE
+    template.write_text(
+        template.read_text(encoding="utf-8").replace("|WDS|WES)", "|WDS)"),
+        encoding="utf-8",
+    )
+
+    [stale] = sync_tickers.stale_copies(tmp_path)
+    assert "CloudFront ticker route" in stale
+    assert sync_tickers.write_copies(tmp_path) == [sync_tickers.TEMPLATE]
+    assert sync_tickers.stale_copies(tmp_path) == []
+    assert template.read_text(encoding="utf-8") == (
+        REPOSITORY_ROOT / sync_tickers.TEMPLATE
     ).read_text(encoding="utf-8")
-    deployed_list = ticker_layout.split("const DEPLOYED_TICKERS = [", 1)[1].split(
-        "]", 1
-    )[0]
-    for ticker in SOURCES:
-        assert f'"{ticker}"' in deployed_list
-
-    cloudfront_ticker_pattern = template.split("var tickerRoute = ", 1)[1].split(
-        ";", 1
-    )[0]
-    for ticker in SOURCES:
-        assert ticker in cloudfront_ticker_pattern
 
 
 def test_local_backend_installs_cognito_jwt_dependency() -> None:
