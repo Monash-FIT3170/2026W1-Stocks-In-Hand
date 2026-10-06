@@ -6,12 +6,10 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_ticker_mention import ArtifactTickerMention
-from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.schemas.category_sentiment import (
     CategorySentimentRequest,
@@ -416,7 +414,6 @@ def analyse_ticker_category_sentiments(
     batch_size: int = 0,
     persist: bool = True,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     """Compatibility endpoint for clients that previously posted this request."""
     return build_ticker_category_sentiment(

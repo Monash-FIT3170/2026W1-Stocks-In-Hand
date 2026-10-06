@@ -6,7 +6,7 @@ import praw
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_investor, require_admin_investor
+from app.api.deps import get_current_investor
 from app.core.config import settings
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
@@ -198,7 +198,6 @@ def scrape_and_store(
     subreddit: str = "ASX",
     limit: int = 10,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     if not settings.REDDIT_CLIENT_ID or not settings.REDDIT_CLIENT_SECRET:
         raise HTTPException(

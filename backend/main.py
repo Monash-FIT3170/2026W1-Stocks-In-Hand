@@ -11,7 +11,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
+from app.api.deps import (
+    get_current_investor,
+    require_admin_for_writes,
+    require_admin_investor,
+)
 from app.api.routes import (
     announcement,
     artifact,
@@ -55,28 +59,39 @@ app.add_middleware(
 
 # Keep the API deployment small. Heavy scraping and analysis dependencies are
 # imported only by their worker or request path.
-for route_module in (
-    investor,
+#
+# Who may call a route is set here, once per router, so a route added to a
+# router gets its router's policy without remembering a dependency:
+# - public read: reads are open unless the route asks for a login, and every
+#   other method needs an admin;
+# - investor: every route needs a signed-in investor (their own data);
+# - admin: every route needs an admin (accounts and cost-bearing jobs);
+# - self-managed: routes that establish an identity or act on a signed token
+#   choose for themselves. test_access_policy.py holds their public routes
+#   to an allowlist.
+PUBLIC_READ_ROUTERS = (
     ticker,
-    watchlist,
-    watchlist_ticker,
     artifact,
     artifact_summary,
     artifact_sentiment,
     scrape_run,
     information_platform,
-    auth,
-    news,
-    blog,
     reddit,
-    bluesky,
-    mastodon,
     public_discussion,
-    gemini,
     category_sentiment,
     announcement,
-    notification_preferences,
-):
+)
+INVESTOR_ROUTERS = (watchlist, watchlist_ticker)
+ADMIN_ROUTERS = (investor, news, blog, bluesky, mastodon, gemini)
+SELF_MANAGED_ROUTERS = (auth, notification_preferences)
+
+for route_module in PUBLIC_READ_ROUTERS:
+    app.include_router(route_module.router, dependencies=[Depends(require_admin_for_writes)])
+for route_module in INVESTOR_ROUTERS:
+    app.include_router(route_module.router, dependencies=[Depends(get_current_investor)])
+for route_module in ADMIN_ROUTERS:
+    app.include_router(route_module.router, dependencies=[Depends(require_admin_investor)])
+for route_module in SELF_MANAGED_ROUTERS:
     app.include_router(route_module.router)
 
 

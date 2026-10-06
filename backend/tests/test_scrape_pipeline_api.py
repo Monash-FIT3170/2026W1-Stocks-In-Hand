@@ -272,48 +272,8 @@ def test_admin_dependency_accepts_admin() -> None:
     assert require_admin_investor(investor) is investor
 
 
-def test_scrape_route_requires_admin_dependency() -> None:
-    route = next(
-        route
-        for route in main.app.routes
-        if getattr(route, "path", None) == "/scrape/{ticker_symbol}"
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
-def test_direct_scrape_run_mutation_requires_admin_dependency() -> None:
-    route = next(
-        route
-        for route in main.scrape_run.router.routes
-        if getattr(route, "path", None) == "/scrape-runs/"
-        and "POST" in getattr(route, "methods", set())
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
 def test_api_has_no_startup_scrape_or_reddit_jobs() -> None:
     assert main.app.router.on_startup == []
-
-
-def test_investor_mutations_require_admin_dependency() -> None:
-    mutation_routes = [
-        route
-        for route in main.investor.router.routes
-        if getattr(route, "path", "").startswith("/investors")
-        and set(getattr(route, "methods", set())) & {"POST", "PATCH", "DELETE"}
-    ]
-
-    assert mutation_routes
-    for route in mutation_routes:
-        assert require_admin_investor in {
-            dependency.call for dependency in route.dependant.dependencies
-        }
 
 
 def test_investor_update_rejects_role_escalation_fields() -> None:

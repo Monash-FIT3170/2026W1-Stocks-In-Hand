@@ -10,8 +10,8 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi.routing import APIRoute
 
-from app.api.deps import get_current_investor, require_admin_investor
-from app.api.routes import category_sentiment, gemini, reddit
+from app.api.deps import get_current_investor
+from app.api.routes import reddit
 from app.services import bedrock, llm
 
 
@@ -300,27 +300,6 @@ def test_reddit_digest_rejects_unrecognised_sentiment() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/gemini/categorise/recent",
-        "/gemini/summarise/ticker/{symbol}",
-        "/gemini/summarise/artifact/{artifact_id}",
-    ],
-)
-def test_cost_bearing_generation_routes_require_admin(path: str) -> None:
-    """Manual generation routes must require an admin investor."""
-    route = next(
-        route
-        for route in gemini.router.routes
-        if isinstance(route, APIRoute) and route.path == path
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
 def test_reddit_digest_route_requires_an_investor() -> None:
     """Manual Reddit digest generation must require an authenticated investor."""
     route = next(
@@ -331,20 +310,5 @@ def test_reddit_digest_route_requires_an_investor() -> None:
     )
 
     assert get_current_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
-def test_sentiment_generation_route_requires_admin() -> None:
-    """The compatibility sentiment POST must protect its Bedrock calls."""
-    route = next(
-        route
-        for route in category_sentiment.router.routes
-        if isinstance(route, APIRoute)
-        and route.path == "/sentiment/{ticker}"
-        and "POST" in route.methods
-    )
-
-    assert require_admin_investor in {
         dependency.call for dependency in route.dependant.dependencies
     }

@@ -6,13 +6,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
 from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.models.investor import Investor
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
@@ -346,7 +344,6 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
 def create_ticker(
     ticker: TickerCreate,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
     if existing:
@@ -380,7 +377,6 @@ def update_ticker(
     ticker_id: UUID,
     data: TickerUpdate,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
     if not ticker:

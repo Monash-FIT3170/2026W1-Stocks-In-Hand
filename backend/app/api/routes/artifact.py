@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
-from app.api.deps import require_admin_investor
 from app.database.connection import get_db
-from app.models.investor import Investor
 from app.schemas.artifact import ArtifactCreate, ArtifactResponse
 from app.crud import artifact as crud
 
@@ -17,7 +15,6 @@ def list_artifacts(limit: int = 200, offset: int = 0, db: Session = Depends(get_
 def create_artifact(
     artifact: ArtifactCreate,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     return crud.create_artifact(db=db, artifact=artifact)
 

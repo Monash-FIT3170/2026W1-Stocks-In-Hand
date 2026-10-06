@@ -64,12 +64,20 @@ Examples:
 
 ## How Routes Are Registered
 
-The routers are imported and registered in `backend/main.py`:
+The routers are imported and registered in `backend/main.py`, in one of four
+access policy groups. The group decides who may call every route in the
+router, so route handlers do not add their own login dependency:
 
-```python
-app.include_router(artifact.router)
-app.include_router(watchlist.router)
-```
+- `PUBLIC_READ_ROUTERS`: reads are open unless the route asks for a login,
+  and every other method needs an admin.
+- `INVESTOR_ROUTERS`: every route needs a signed-in investor.
+- `ADMIN_ROUTERS`: every route needs an admin.
+- `SELF_MANAGED_ROUTERS`: `auth.py` and `notification_preferences.py` set
+  access per route, because some of their routes must work without a session.
+
+`tests/test_access_policy.py` fails if a router is included without a group
+(other than the self-managed ones), or if a write route is not admin-only
+and not on its short allowlists.
 
 If a route module is not included in `main.py`, its endpoints will not be
 available in the running API.

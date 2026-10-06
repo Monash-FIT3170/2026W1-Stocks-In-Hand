@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
 from app.database.connection import get_db
-from app.models.investor import Investor
 from app.schemas.public_discussion import (
     PublicDiscussionRequeueResponse,
     PublicDiscussionStatusResponse,
@@ -36,7 +34,6 @@ def requeue_analysis(
     ticker: str | None = None,
     limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     try:
         return public_discussion_service.requeue_pending_analysis(

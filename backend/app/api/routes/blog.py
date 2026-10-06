@@ -10,13 +10,11 @@ from defusedxml import ElementTree
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_admin_investor
 from app.core.config import settings
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
 from app.crud import scrape_run as scrape_run_crud
 from app.database.connection import SessionLocal, get_db
-from app.models.investor import Investor
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
 from app.services import public_discussion as public_discussion_service
@@ -259,7 +257,6 @@ def scrape_and_store(
     feed_url: str,
     limit: int = 25,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     if feed_url not in settings.PUBLIC_DISCUSSION_FEED_URLS:
         raise HTTPException(status_code=400, detail="feed_url is not in the configured allowlist")

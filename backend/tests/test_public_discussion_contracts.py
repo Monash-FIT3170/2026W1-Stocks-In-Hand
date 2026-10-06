@@ -409,42 +409,6 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
     assert result["artifact_ids"] == [artifact.id for artifact in artifacts]
 
 
-def test_public_discussion_requeue_route_requires_admin_dependency() -> None:
-    from app.api.deps import require_admin_investor
-    from app.api.routes import public_discussion
-
-    route = next(
-        route
-        for route in public_discussion.router.routes
-        if getattr(route, "path", None) == "/public-discussion/analysis/requeue"
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
-@pytest.mark.parametrize("route_name", ["reddit", "bluesky", "mastodon", "blog"])
-def test_public_discussion_collectors_require_admin_dependency(
-    route_name: str,
-) -> None:
-    from importlib import import_module
-
-    from app.api.deps import require_admin_investor
-
-    module = import_module(f"app.api.routes.{route_name}")
-    route = next(
-        route
-        for route in module.router.routes
-        if getattr(route, "path", "").endswith("/scrape")
-        and "POST" in getattr(route, "methods", set())
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
 def test_blog_adapter_parses_rss_and_atom_entries() -> None:
     from app.api.routes import blog
 
