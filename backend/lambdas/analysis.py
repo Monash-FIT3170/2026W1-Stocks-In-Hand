@@ -27,6 +27,7 @@ from parsing.analysis import (
 )
 from pydantic import ValidationError
 
+from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.messages import NotificationMessage
 from lambdas.common import (
     PermanentDocumentError,
@@ -493,7 +494,7 @@ def _try_publish_notification(  # pylint: disable=too-many-arguments
     """Publish an eligible result without risking the analysis pipeline."""
     if os.getenv("NOTIFICATIONS_ENABLED", "false").lower() != "true":
         return
-    if sentiment.get("sentiment_label") not in {"negative", "positive"}:
+    if sentiment.get("sentiment_label") not in ALERT_SENTIMENT_LABELS:
         return
     try:
         _publish_notification(

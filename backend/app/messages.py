@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.alert_vocabulary import AlertSentimentLabel
 from app.sources import SourceAdapter, adapter_matches_ticker
 
 _FORBIDDEN_METADATA_KEYS = {
@@ -128,7 +129,7 @@ class NotificationMessage(BaseModel):
     artifact_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     scrape_run_id: UUID
-    sentiment_label: Literal["positive", "negative"]
+    sentiment_label: AlertSentimentLabel
     confidence_score: Decimal = Field(ge=0, le=1)
 
     model_config = {"extra": "forbid"}
