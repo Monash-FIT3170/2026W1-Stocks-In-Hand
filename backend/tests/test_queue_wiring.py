@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from tools import verify_queue_wiring
 from tools.template_model import (
     TemplateModel,
     getatt_target,
@@ -34,6 +35,9 @@ from tools.template_model import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OIDC_TEMPLATE_PATH = REPOSITORY_ROOT / "infra" / "github-oidc.yaml"
 QUEUE_CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci-infra-queue-wiring.yml"
+STAGING_VERIFICATION_WORKFLOW = (
+    REPOSITORY_ROOT / ".github" / "workflows" / "verify-staging-queue-wiring.yml"
+)
 
 # SQS can deliver a message again while a slow batch is still running unless
 # the visibility timeout covers the consumer's timeout with room for retries.
@@ -322,6 +326,94 @@ def test_analysis_queue_policy_restricts_bucket_notifications_to_this_account() 
     assert possible_strings(statement["Condition"]["ArnLike"]["aws:SourceArn"]) == [
         "arn:${AWS::Partition}:s3:::stocks-in-hand-${Environment}-${AWS::AccountId}-raw"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Staging verification reads the same model
+# ---------------------------------------------------------------------------
+
+class DeployedStack:
+    """A fake AWS CLI for a stack deployed exactly as the template declares."""
+
+    def __init__(self, model: TemplateModel) -> None:
+        self.statuses = {logical_id: "UPDATE_COMPLETE" for logical_id in model.resources}
+        self.outputs = {key: f"https://sqs.example/{key}" for key in model.outputs}
+        self.attributes = {}
+        for queue_id, queue in model.queues().items():
+            [output] = model.outputs_referencing(queue_id)
+            attributes = {
+                "QueueArn": f"arn:aws:sqs:region:account:{queue_id}",
+                "VisibilityTimeout": str(queue.visibility_timeout),
+                "MessageRetentionPeriod": str(queue.retention),
+            }
+            if queue.dead_letter_queue:
+                attributes["RedrivePolicy"] = (
+                    f'{{"deadLetterTargetArn":"arn:aws:sqs:region:account:'
+                    f'{queue.dead_letter_queue}","maxReceiveCount":"{queue.max_receive_count}"}}'
+                )
+            self.attributes[self.outputs[output]] = attributes
+
+    def __call__(self, service: str, command: str, *args: str) -> dict:
+        if command == "list-stack-resources":
+            return {
+                "StackResourceSummaries": [
+                    {"LogicalResourceId": logical_id, "ResourceStatus": status}
+                    for logical_id, status in self.statuses.items()
+                ]
+            }
+        if command == "describe-stacks":
+            outputs = [{"OutputKey": k, "OutputValue": v} for k, v in self.outputs.items()]
+            return {"Stacks": [{"Outputs": outputs}]}
+        assert (service, command) == ("sqs", "get-queue-attributes")
+        return {"Attributes": self.attributes[args[args.index("--queue-url") + 1]]}
+
+
+def _verify(stack: DeployedStack) -> list[str]:
+    problems, _summary = verify_queue_wiring.verify(template_model(), stack, "stack")
+    return problems
+
+
+def test_staging_verification_checks_every_queue_from_the_model() -> None:
+    model = template_model()
+    resources = verify_queue_wiring.pipeline_resources(model)
+
+    assert set(model.queues()) | {"AnalysisQueuePolicy", "RawDocumentBucket"} <= set(resources)
+    assert {"NotificationFunction", "SchedulerFunction", "NotificationDlqAlarm"} <= set(resources)
+    assert "FrontendBucket" not in resources
+    assert [expected.queue for expected in verify_queue_wiring.queue_expectations(model)] == [
+        "AnalysisQueue",
+        "DiscoveryQueue",
+        "DownloadQueue",
+        "NotificationQueue",
+    ]
+    assert _verify(DeployedStack(model)) == []
+
+
+def test_staging_verification_reports_drift() -> None:
+    stack = DeployedStack(template_model())
+    stack.statuses.pop("DownloadDlqAlarm")
+    stack.statuses["AnalysisFunction"] = "UPDATE_ROLLBACK_COMPLETE"
+    stack.outputs["NotificationDeadLetterQueueUrl"] = ""
+    stack.attributes[stack.outputs["AnalysisQueueUrl"]]["VisibilityTimeout"] = "30"
+    stack.attributes[stack.outputs["DiscoveryQueueUrl"]]["RedrivePolicy"] = (
+        '{"deadLetterTargetArn":"arn:aws:sqs:region:account:Other","maxReceiveCount":"3"}'
+    )
+
+    assert sorted(_verify(stack)) == [
+        "AnalysisFunction is in unhealthy state: UPDATE_ROLLBACK_COMPLETE",
+        "AnalysisQueue: visibility timeout is not 4320s",
+        "DiscoveryQueue: maxReceiveCount is not 5",
+        "DiscoveryQueue: redrive does not target its dead-letter queue",
+        "DownloadDlqAlarm is missing from stack",
+        "Stack output NotificationDeadLetterQueueUrl is missing or empty",
+    ]
+
+
+def test_staging_workflow_runs_the_model_based_verification() -> None:
+    workflow = STAGING_VERIFICATION_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "python -m tools.verify_queue_wiring" in workflow
+    assert "PyYAML==" in workflow
 
 
 # ---------------------------------------------------------------------------
