@@ -921,7 +921,7 @@ def test_ticker_brief_aside_returns_empty_database_state(
     db_session.commit()
 
     with patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_brief_aside(symbol.lower(), db=db_session)
+        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["aside"]
 
     assert result["key_numbers"] == [
         {"label": "Current price", "value": "N/A"},
@@ -951,13 +951,13 @@ def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
     db_session.commit()
 
     with patch.object(ticker_route, "_live_quote", return_value=(31.25, 30.0)):
-        result = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
+        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
 
     assert result["current_price"] == "$31.25"
     assert result["day_change"] == "+4.17%"
 
     with patch.object(ticker_route, "_live_quote", return_value=None):
-        unavailable = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
+        unavailable = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
 
     assert unavailable["current_price"] == "N/A"
     assert unavailable["day_change"] == "N/A"

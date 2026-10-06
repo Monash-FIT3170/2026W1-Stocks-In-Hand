@@ -86,7 +86,7 @@ Investor and watchlist routes:
 Ticker routes:
 
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
-  endpoints the frontend reads (`/overview`, `/brief-aside`, `/news-feed`,
+  endpoints the frontend reads (`/brief`, `/news-feed`,
   `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
   stored, so there is no market data route.
 

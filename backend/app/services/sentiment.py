@@ -1,6 +1,5 @@
 import os
 from functools import lru_cache
-from typing import Any, Mapping
 
 from app.core.config import settings
 
@@ -178,14 +177,3 @@ def analyse_text(text: str):
         "chunks_used": len(chunks),
         "chunks_analyzed": len(chunks),
     }
-
-
-def analyse_categories(categories: Mapping[str, str | None],):
-    results: dict[str, dict[str, Any]] = {}
-
-    for category, summary in categories.items():
-        text = (summary or "").strip()
-        sentiment = analyse_text(text)
-        results[category] = {"summary": text, **sentiment}
-
-    return results

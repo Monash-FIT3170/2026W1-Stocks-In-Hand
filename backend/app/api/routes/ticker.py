@@ -497,16 +497,6 @@ def update_ticker(
     )
 
 
-@router.get("/symbol/{symbol}/overview")
-def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["overview"]
-
-
-@router.get("/symbol/{symbol}/brief-aside")
-def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["aside"]
-
-
 @router.get("/symbol/{symbol}/brief")
 def get_ticker_brief(symbol: str, db: Session = Depends(get_db)):
     """Return the overview and aside from one quote and artifact lookup."""

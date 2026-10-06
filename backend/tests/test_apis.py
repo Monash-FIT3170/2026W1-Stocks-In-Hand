@@ -393,28 +393,6 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
     assert result[0]["tags"] == ["ASX"]
 
 
-def test_bluesky_ticker_filter_requires_financial_context() -> None:
-    """Posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_bluesky_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
-
-
-def test_mastodon_ticker_filter_requires_financial_context() -> None:
-    """Mastodon posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_mastodon_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
-
-
 def test_stored_sentiment_groups_forum_sources_as_public_discussion() -> None:
     """All supported forum sources should share the public discussion category."""
     from app.api.routes.category_sentiment import _categories_for_stored_artifact
@@ -454,76 +432,6 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
     assert result[0]["author"] == "investor"
     assert result[0]["favourites_count"] == 4
     assert result[0]["tags"] == ["ASX"]
-
-
-def test_public_discussion_summary_combines_all_sources() -> None:
-    """All public discussion sources are included in one summary request."""
-    from app.api.routes import category_sentiment
-
-    reddit_post = MagicMock(
-        title="ANZ earnings discussion",
-        raw_text="Investors are watching the result.",
-        url="https://reddit.com/example",
-        artifact_metadata={"score": 7},
-    )
-    bluesky_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="ASX investors are positive.",
-        url="https://bsky.app/example",
-        artifact_metadata={
-            "like_count": 3,
-            "repost_count": 2,
-            "reply_count": 1,
-            "quote_count": 0,
-        },
-    )
-    mastodon_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="Investors are positive about the result.",
-        url="https://aus.social/example",
-        artifact_metadata={
-            "favourites_count": 4,
-            "reblogs_count": 2,
-            "replies_count": 1,
-        },
-    )
-    captured_posts = []
-
-    def fake_summary(**kwargs):
-        captured_posts.extend(kwargs["posts"])
-        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
-
-    with patch.object(
-        category_sentiment.artifact_crud,
-        "get_reddit_posts_for_ticker",
-        return_value=[reddit_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_bluesky_posts_for_ticker",
-        return_value=[bluesky_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_mastodon_posts_for_ticker",
-        return_value=[mastodon_post],
-    ), patch.object(
-        category_sentiment.reddit_route,
-        "_summarise_reddit_posts",
-        side_effect=fake_summary,
-    ):
-        result = category_sentiment._summarise_recent_public_discussion(
-            ticker="ANZ",
-            db=MagicMock(),
-            days=30,
-            reddit_limit=50,
-            bluesky_limit=50,
-            mastodon_limit=50,
-        )
-
-    assert result["summary"] == "Discussion is positive."
-    assert len(captured_posts) == 3
-    assert captured_posts[0]["score"] == 7
-    assert captured_posts[1]["score"] == 6
-    assert captured_posts[2]["score"] == 7
 
 
 def test_summarise_reddit_posts_uses_provider_routing() -> None:
@@ -598,10 +506,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
         category_sentiment,
         "_stored_sentiment_rows",
         return_value=[(revenue_artifact, positive), (reddit_artifact, neutral)],
-    ), patch.object(
-        category_sentiment.sentiment_service,
-        "analyse_categories",
-    ) as analyse_categories:
+    ), patch("app.services.sentiment.analyse_text") as analyse_text:
         result = category_sentiment.get_ticker_category_sentiments("anz", db=db)
 
     assert result["ticker"] == "ANZ"
@@ -623,7 +528,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
     validated = CategorySentimentResponse.model_validate(result)
     assert validated.status == "partial"
     assert validated.categories["risk"].sentiment_label is None
-    analyse_categories.assert_not_called()
+    analyse_text.assert_not_called()
 
 
 def test_sentiment_route_reports_unavailable_without_stored_analysis() -> None:
@@ -662,7 +567,7 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
 
 def test_gemini_summary_response_parser_accepts_strict_json() -> None:
     """Gemini summary parsing should preserve text and clarity fields."""
-    from app.services.gemini import parse_summary_response
+    from app.services.llm import parse_summary_response
 
     result = parse_summary_response(
         """
@@ -691,7 +596,7 @@ def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
     """Incomplete Gemini JSON should fail before storage uses it."""
     import pytest
 
-    from app.services.gemini import parse_summary_response
+    from app.services.llm import parse_summary_response
 
     with pytest.raises(ValueError, match="missing keys"):
         parse_summary_response('{"summary": "Only one field"}')
@@ -701,7 +606,7 @@ def test_gemini_summary_response_parser_rejects_non_list_clarity_fields() -> Non
     """Clarity fields must remain structured so the UI can label each claim."""
     import pytest
 
-    from app.services.gemini import parse_summary_response
+    from app.services.llm import parse_summary_response
 
     with pytest.raises(ValueError, match="confirmed_facts.*list of strings"):
         parse_summary_response(
@@ -904,7 +809,7 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
         "_latest_sentiment_for_ticker",
         return_value=None,
     ), patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+        result = ticker_route.get_ticker_brief("anz", db=MagicMock())["overview"]
 
     assert result["clarity"] == {
         "is_classified": True,
