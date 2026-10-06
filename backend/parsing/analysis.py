@@ -9,6 +9,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from typing import Any
 
+from app.services.llm_errors import LLMUnavailableError
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 from lambdas.common import PermanentDocumentError
@@ -401,9 +402,8 @@ def analyse_document(
         )
         summary_model = llm_service.active_model_name()
         summary_prompt_version = llm_service.SUMMARY_PROMPT_VERSION
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
+    except LLMUnavailableError:
+        pass
 
     return AnalysisOutput(
         parsed=parsed,
@@ -449,9 +449,8 @@ def analyse_public_discussion_text(
         summary_prompt_version = (
             llm_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
         )
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
+    except LLMUnavailableError:
+        pass
 
     return AnalysisOutput(
         parsed=ParsedDocument(
@@ -501,9 +500,8 @@ def analyse_news_text(
         }
         summary_model = llm_service.active_model_name()
         summary_prompt_version = llm_service.NEWS_SUMMARY_PROMPT_VERSION
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
+    except LLMUnavailableError:
+        pass
 
     return AnalysisOutput(
         parsed=ParsedDocument(

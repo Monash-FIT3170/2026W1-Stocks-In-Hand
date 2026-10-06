@@ -488,7 +488,7 @@ summaries and evidence categorisation:
 - IAM permits only regional `openai.gpt-oss-120b-1:0`;
 - API requests use Standard tier and cost-bearing routes require authentication;
 - queued analysis uses Flex tier, concurrency one, and SQS batch size one;
-- prompts are capped at 30,000 characters and completions at 1,024 tokens; and
+- prompts are capped at 30,000 characters and completions at 4,096 tokens; and
 - responses must pass the existing strict JSON schemas before storage.
 
 Use on-demand inference only. Do not create Provisioned Throughput. When the

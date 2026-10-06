@@ -10,6 +10,7 @@ import httpx
 
 from app.core.config import settings
 from app.services import bedrock
+from app.services.llm_errors import LLMUnavailableError
 
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
@@ -363,7 +364,7 @@ key_themes: an array of short recurring themes.
 
 def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
     if not settings.GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY is not configured")
+        raise LLMUnavailableError("GROQ_API_KEY is not configured")
     active_prompt = prompt
     payload = {
         "model": settings.GROQ_MODEL,
