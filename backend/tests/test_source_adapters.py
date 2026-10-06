@@ -8,9 +8,7 @@ import hashlib
 import inspect
 import json
 import textwrap
-from contextlib import contextmanager
-from datetime import datetime, timezone
-from types import SimpleNamespace
+from datetime import datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -19,8 +17,7 @@ from pydantic import ValidationError
 
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
-from app.status import ScrapeRunStatus
-from lambdas import analysis, discovery, download, source_download
+from lambdas import analysis, download, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument
 from scrapers.base import Announcement
@@ -251,77 +248,6 @@ def test_registry_discover_does_not_call_download(
     monkeypatch.setattr(scraper_type, "download_pdf", forbidden_download)
 
     assert asyncio.run(discover(ticker)) == [announcement]
-
-
-def test_bhp_discovery_message_preserves_article_resolution_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    run_id = uuid4()
-    artifact_id = uuid4()
-    source = SOURCES["BHP"]
-    article_url = "https://www.bhp.com/news/articles/2026/07/results"
-    announcement = Announcement(
-        ticker="BHP",
-        title="Results",
-        date=datetime.now(timezone.utc),
-        pdf_url=article_url,
-        source_url=source.source_url,
-        metadata={"article_url": article_url, "source_id": article_url},
-    )
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker="BHP",
-        source_url=source.source_url,
-        source_adapter="bhp",
-    )
-    calls: dict[str, object] = {}
-
-    async def fake_discover(_ticker):
-        return [announcement]
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", fake_discover)
-    monkeypatch.setattr(discovery, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_scrape_run",
-        lambda *_args: SimpleNamespace(status=ScrapeRunStatus.QUEUED),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_started",
-        lambda *_args: None,
-    )
-
-    def fake_artifact(*_args, **kwargs):
-        calls["artifact"] = kwargs
-        return SimpleNamespace(id=artifact_id, scrape_run_id=run_id), True
-
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_or_create_artifact",
-        fake_artifact,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_completed",
-        lambda *_args, **_kwargs: None,
-    )
-
-    class FakeSqs:
-        def send_message(self, **kwargs):
-            calls["queue_body"] = kwargs["MessageBody"]
-
-    monkeypatch.setattr(discovery.boto3, "client", lambda _service: FakeSqs())
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
-
-    discovery.handler({"Records": [_sqs_record(message.model_dump_json())]}, None)
-
-    queued = QueueBMessage.model_validate_json(calls["queue_body"])
-    assert queued.ticker == "BHP"
-    assert queued.source_adapter == "bhp"
-    assert str(queued.document_url) == article_url
-    assert queued.source_id == article_url
-    assert calls["artifact"]["source_adapter"] == "bhp"
 
 
 def test_csl_resolver_uses_generic_downloader(

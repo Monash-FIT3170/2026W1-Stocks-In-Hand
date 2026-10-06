@@ -31,11 +31,8 @@ from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.messages import NotificationMessage
 from lambdas.common import (
     PermanentDocumentError,
-    correlation_id,
     database_session,
-    is_final_attempt,
     log_event,
-    receive_attempt,
 )
 from app.sources import SOURCES, adapter_matches_ticker
 from app.status import AnalysisStatus, DownloadStatus
@@ -44,6 +41,12 @@ from lambdas.download_validation import (
     DocumentFormat,
     document_size_limit,
     validate_document_content,
+)
+from lambdas.pipeline_stage import (
+    StageRecord,
+    analysed_document,
+    analysed_stored_text,
+    run_stage,
 )
 from parsing.classification_metadata import merge_classification_metadata
 
@@ -500,58 +503,6 @@ def _try_publish_notification(  # pylint: disable=too-many-arguments
         )
 
 
-def _mark_failed(artifact_id: UUID, error: str) -> None:
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_artifact_analysis_failed
-
-            mark_artifact_analysis_failed(db, artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            artifact_id=artifact_id,
-            error_code="database_error",
-        )
-        # Do not acknowledge a queue message until its failure is durable.
-        raise
-
-
-def _mark_public_discussion_failed(artifact_id: UUID, error: str) -> None:
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_inline_artifact_analysis_failed
-
-            mark_inline_artifact_analysis_failed(db, artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            artifact_id=artifact_id,
-            error_code="database_error",
-        )
-        raise
-
-
-def _record_retry(artifact_id: UUID, error: str) -> None:
-    # Best effort: the message is retried whether or not this is recorded.
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import record_artifact_analysis_retry
-
-            record_artifact_analysis_retry(db, artifact_id, error=error)
-    except Exception:  # pylint: disable=broad-exception-caught
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            artifact_id=artifact_id,
-            error_code="database_error",
-        )
-
-
 def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
     """Load a stored-text artifact for the legacy inline-analysis queue contract."""
     with database_session() as db:
@@ -786,83 +737,37 @@ def _analyse_object(
     )
 
 
-def _handle_record(record: dict) -> None:
-    correlation = correlation_id(record)
-    attempt = receive_attempt(record)
-    artifact_id: UUID | None = None
-    public_discussion_message: PublicDiscussionAnalysisMessage | None = None
-    started_at = time.monotonic()
-    try:
-        public_discussion_message = parse_public_discussion_message(record)
-        if public_discussion_message is not None:
-            artifact_id = public_discussion_message.artifact_id
-            _analyse_public_discussion_artifact(
-                artifact_id=artifact_id,
-                correlation=correlation,
-                attempt=attempt,
-            )
-            return
-        notifications = parse_s3_notifications(record)
-        s3 = boto3.client("s3")
-        expected_bucket = os.environ["RAW_DOCUMENT_BUCKET"]
-        for bucket, key, ticker, artifact_id, checksum, document_format in notifications:
-            if bucket != expected_bucket:
-                raise PermanentDocumentError(
-                    "S3 event came from an unexpected bucket",
-                    code="unexpected_bucket",
-                )
-            _analyse_object(
-                s3=s3,
-                bucket=bucket,
-                key=key,
-                artifact_id=artifact_id,
-                checksum=checksum,
-                ticker=ticker,
-                document_format=document_format,
-                correlation=correlation,
-                attempt=attempt,
-            )
-    except PermanentDocumentError as exc:
-        untrusted_event_errors = {
-            "artifact_identity_mismatch",
-            "artifact_not_found",
-            "unexpected_bucket",
-        }
-        if artifact_id is not None and exc.code not in untrusted_event_errors:
-            if public_discussion_message is not None:
-                _mark_public_discussion_failed(artifact_id, f"{exc.code}: {exc}")
-            else:
-                _mark_failed(artifact_id, f"{exc.code}: {exc}")
-        log_event(
-            stage=STAGE,
-            event="permanent_failure",
-            started_at=started_at,
-            level=logging.WARNING,
-            correlation_id=correlation,
-            artifact_id=artifact_id,
-            attempt=attempt,
-            error_code=exc.code,
+def _analyse(current: StageRecord) -> None:
+    stored_text_message = parse_public_discussion_message(current.record)
+    if stored_text_message is not None:
+        current.subject = analysed_stored_text(stored_text_message.artifact_id)
+        _analyse_public_discussion_artifact(
+            artifact_id=stored_text_message.artifact_id,
+            correlation=current.correlation_id,
+            attempt=current.attempt,
         )
-    except Exception as exc:
-        if artifact_id is not None:
-            error = f"{type(exc).__name__}: {exc}"
-            if not is_final_attempt(attempt):
-                _record_retry(artifact_id, error)
-            elif public_discussion_message is not None:
-                _mark_public_discussion_failed(artifact_id, error)
-            else:
-                _mark_failed(artifact_id, error)
-        log_event(
-            stage=STAGE,
-            event="retryable_failure",
-            started_at=started_at,
-            level=logging.ERROR,
-            correlation_id=correlation,
+        return
+    notifications = parse_s3_notifications(current.record)
+    s3 = boto3.client("s3")
+    expected_bucket = os.environ["RAW_DOCUMENT_BUCKET"]
+    for bucket, key, ticker, artifact_id, checksum, document_format in notifications:
+        current.subject = analysed_document(artifact_id)
+        if bucket != expected_bucket:
+            raise PermanentDocumentError(
+                "S3 event came from an unexpected bucket",
+                code="unexpected_bucket",
+            )
+        _analyse_object(
+            s3=s3,
+            bucket=bucket,
+            key=key,
             artifact_id=artifact_id,
-            attempt=attempt,
-            error_code=type(exc).__name__,
+            checksum=checksum,
+            ticker=ticker,
+            document_format=document_format,
+            correlation=current.correlation_id,
+            attempt=current.attempt,
         )
-        raise
 
 
 def handler(event: dict, _context) -> dict:
@@ -875,5 +780,5 @@ def handler(event: dict, _context) -> dict:
             limit=int(event.get("limit", 10)),
         )
     for record in event.get("Records", []):
-        _handle_record(record)
+        run_stage(STAGE, record, _analyse)
     return {"processed": len(event.get("Records", []))}

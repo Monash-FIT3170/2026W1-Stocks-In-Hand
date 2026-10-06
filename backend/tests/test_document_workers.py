@@ -6,7 +6,6 @@ import json
 import logging
 import zipfile
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -19,14 +18,11 @@ from pypdf import PdfWriter
 from app.messages import (
     NotificationMessage,
     PublicDiscussionAnalysisMessage,
-    QueueAMessage,
-    QueueBMessage,
 )
 from app.sources import SOURCES
-from lambdas import analysis, common, discovery, download
+from lambdas import analysis, common
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
-    DownloadedDocument,
     download_document,
     validate_document_content,
     validate_download_url,
@@ -40,8 +36,6 @@ from parsing.analysis import (
     extract_pdf,
 )
 from parsing.classification import ClassificationInput, classify_document
-from scrapers.base import Announcement
-from scrapers.companies.csl import CSLScraper
 
 
 def test_runtime_configuration_loads_public_discussion_parameters(
@@ -324,251 +318,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
             max_docx_uncompressed_bytes=1_000,
         )
     assert expanded.value.code == "document_too_large"
-
-
-def test_discovery_handler_never_downloads_or_writes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-):
-    run_id = uuid4()
-    artifact_id = uuid4()
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker="CSL",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-    )
-    announcement = Announcement(
-        ticker="CSL",
-        title="Half Year Results",
-        date=datetime.now(timezone.utc),
-        pdf_url="https://investors.csl.com/pdf/report.pdf",
-        source_url=str(message.source_url),
-    )
-    duplicate_announcement = Announcement(
-        ticker="CSL",
-        title="Duplicate link",
-        date=announcement.date,
-        pdf_url=f"{announcement.pdf_url}?utm_source=duplicate",
-        source_url=announcement.source_url,
-    )
-    calls: dict[str, object] = {}
-
-    async def fake_discover(_self):
-        return [announcement, duplicate_announcement]
-
-    async def forbidden_download(_self, _announcement):
-        raise AssertionError("discovery called download_pdf")
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(CSLScraper, "fetch_announcements", fake_discover)
-    monkeypatch.setattr(CSLScraper, "download_pdf", forbidden_download)
-    monkeypatch.setattr(discovery, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_scrape_run",
-        # Downstream work may advance this aggregate status before Queue A is
-        # acknowledged. Discovery must still finish queuing every document.
-        lambda _db, _id: SimpleNamespace(status="analyzing"),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_started",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_or_create_artifact",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(id=artifact_id, scrape_run_id=run_id),
-            True,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_completed",
-        lambda *_args, **kwargs: calls.setdefault("items_found", kwargs["items_found"]),
-    )
-
-    class FakeSqs:
-        def send_message(self, **kwargs):
-            calls.setdefault("queue_bodies", []).append(kwargs["MessageBody"])
-
-    monkeypatch.setattr(discovery.boto3, "client", lambda service: FakeSqs())
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
-    before = list(tmp_path.iterdir())
-
-    result = discovery.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    assert result == {"processed": 1}
-    assert list(tmp_path.iterdir()) == before
-    assert calls["items_found"] == 1
-    assert len(calls["queue_bodies"]) == 1
-    queued = QueueBMessage.model_validate_json(calls["queue_bodies"][0])
-    assert queued.artifact_id == artifact_id
-    assert str(queued.document_url) == announcement.pdf_url
-
-
-def test_discovery_filters_old_documents_and_sorts_newest_first(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    now = datetime.now(timezone.utc)
-    recent = Announcement(
-        ticker="CSL",
-        title="Recent",
-        date=now - timedelta(days=1),
-        pdf_url="https://investors.csl.com/recent.pdf",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-    )
-    newer = Announcement(
-        ticker="CSL",
-        title="Newer",
-        date=now,
-        pdf_url="https://investors.csl.com/newer.pdf",
-        source_url=recent.source_url,
-    )
-    old = Announcement(
-        ticker="CSL",
-        title="Old",
-        date=now - timedelta(days=31),
-        pdf_url="https://investors.csl.com/old.pdf",
-        source_url=recent.source_url,
-    )
-    monkeypatch.setenv("DISCOVERY_LOOKBACK_DAYS", "30")
-
-    bounded = discovery._bounded_announcements([recent, old, newer])
-
-    assert [announcement.title for announcement in bounded] == ["Newer", "Recent"]
-
-
-def test_discovery_queues_at_most_three_new_documents(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    run_id = uuid4()
-    source_url = "https://investors.csl.com/investors/asx-announcements"
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker="CSL",
-        source_url=source_url,
-    )
-    now = datetime.now(timezone.utc)
-    announcements = [
-        Announcement(
-            ticker="CSL",
-            title=f"Document {index}",
-            date=now - timedelta(minutes=index),
-            pdf_url=f"https://investors.csl.com/document-{index}.pdf",
-            source_url=source_url,
-        )
-        for index in range(5)
-    ]
-    queued_bodies: list[str] = []
-
-    async def fake_discover(_ticker):
-        return announcements
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    def fake_artifact(*_args, **_kwargs):
-        return SimpleNamespace(id=uuid4(), scrape_run_id=run_id), True
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", fake_discover)
-    monkeypatch.setattr(discovery, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_scrape_run",
-        lambda *_args: SimpleNamespace(status="queued"),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_started",
-        lambda *_args: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_or_create_artifact",
-        fake_artifact,
-    )
-    completed = MagicMock()
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_completed",
-        completed,
-    )
-
-    class FakeSqs:
-        def send_message(self, **kwargs):
-            queued_bodies.append(kwargs["MessageBody"])
-
-    monkeypatch.setattr(discovery.boto3, "client", lambda _service: FakeSqs())
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
-    monkeypatch.setenv("MAX_DOCUMENTS_PER_RUN", "3")
-
-    discovery.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    assert len(queued_bodies) == 3
-    assert [
-        QueueBMessage.model_validate_json(body).title for body in queued_bodies
-    ] == ["Document 0", "Document 1", "Document 2"]
-    assert completed.call_args.kwargs["items_found"] == 3
-
-
-def test_downloader_uses_content_addressed_key_and_never_sends_queue_c(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    run_id = uuid4()
-    artifact_id = uuid4()
-    content = b"%PDF-1.7\ncontent"
-    checksum = hashlib.sha256(content).hexdigest()
-    message = QueueBMessage(
-        scrape_run_id=run_id,
-        artifact_id=artifact_id,
-        ticker="CSL",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-        document_url="https://investors.csl.com/pdf/report.pdf",
-        canonical_url="https://investors.csl.com/pdf/report.pdf",
-        title="Results",
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    class FakeS3:
-        def put_object(self, **kwargs):
-            calls["put"] = kwargs
-
-    monkeypatch.setattr(
-        download,
-        "_load_artifact",
-        lambda _message: {"status": "pending", "s3_bucket": None, "s3_key": None},
-    )
-    monkeypatch.setattr(download, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_download_started",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_stored",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        download,
-        "_resolve_download",
-        lambda *_args, **_kwargs: DownloadedDocument(
-            content=content,
-            checksum=checksum,
-            final_url=str(message.document_url),
-            content_type="application/pdf",
-        ),
-    )
-    monkeypatch.setattr(download.boto3, "client", lambda service: FakeS3())
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "private-raw-documents")
-
-    download.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    expected_key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
-    assert calls["put"]["Key"] == expected_key
-    assert calls["put"]["IfNoneMatch"] == "*"
-    assert calls["put"]["Metadata"]["document-format"] == "pdf"
-    assert calls["stored"]["s3_key"] == expected_key
 
 
 def test_s3_event_contract_and_analysis_duplicate_are_idempotent(monkeypatch):

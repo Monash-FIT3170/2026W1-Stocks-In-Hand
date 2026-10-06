@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
-import time
 
 import boto3
 from botocore.exceptions import ClientError
@@ -14,11 +12,7 @@ from app.status import DownloadStatus
 from lambdas.common import (
     PermanentDocumentError,
     canonicalize_url,
-    correlation_id,
     database_session,
-    is_final_attempt,
-    log_event,
-    receive_attempt,
 )
 from lambdas.download_validation import (
     DOCUMENT_CONTENT_TYPES,
@@ -26,6 +20,7 @@ from lambdas.download_validation import (
     document_size_limit,
     validate_document_content,
 )
+from lambdas.pipeline_stage import StageRecord, downloaded_artifact, run_stage
 
 STAGE = "download"
 
@@ -68,43 +63,6 @@ def _load_artifact(message: QueueBMessage):
             "s3_bucket": artifact.s3_bucket,
             "s3_key": artifact.s3_key,
         }
-
-
-def _mark_failed(message: QueueBMessage, error: str) -> None:
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_artifact_download_failed
-
-            mark_artifact_download_failed(db, message.artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            run_id=message.scrape_run_id,
-            artifact_id=message.artifact_id,
-            error_code="database_error",
-        )
-        # Do not acknowledge a queue message until its failure is durable.
-        raise
-
-
-def _record_retry(message: QueueBMessage, error: str) -> None:
-    # Best effort: the message is retried whether or not this is recorded.
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import record_artifact_download_retry
-
-            record_artifact_download_retry(db, message.artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            run_id=message.scrape_run_id,
-            artifact_id=message.artifact_id,
-            error_code="database_error",
-        )
 
 
 def _object_exists(s3, *, bucket: str | None, key: str | None) -> bool:
@@ -164,130 +122,81 @@ def _put_immutable_document(
         raise
 
 
-def _handle_record(record: dict) -> None:
-    started_at = time.monotonic()
-    correlation = correlation_id(record)
-    attempt = receive_attempt(record)
-    message: QueueBMessage | None = None
+def _download(current: StageRecord) -> None:
+    message = _parse_message(current.record)
+    current.subject = downloaded_artifact(
+        run_id=message.scrape_run_id,
+        artifact_id=message.artifact_id,
+    )
+    artifact_state = _load_artifact(message)
+    s3 = boto3.client("s3")
+    if artifact_state["status"] == DownloadStatus.STORED and _object_exists(
+        s3,
+        bucket=artifact_state["s3_bucket"],
+        key=artifact_state["s3_key"],
+    ):
+        current.log("duplicate_skipped")
+        return
 
-    try:
-        message = _parse_message(record)
-        artifact_state = _load_artifact(message)
-        s3 = boto3.client("s3")
-        if artifact_state["status"] == DownloadStatus.STORED and _object_exists(
-            s3,
-            bucket=artifact_state["s3_bucket"],
-            key=artifact_state["s3_key"],
-        ):
-            log_event(
-                stage=STAGE,
-                event="duplicate_skipped",
-                started_at=started_at,
-                correlation_id=correlation,
-                run_id=message.scrape_run_id,
-                artifact_id=message.artifact_id,
-                attempt=attempt,
-            )
-            return
+    with database_session() as db:
+        from app.crud.scrape_run import mark_artifact_download_started
 
-        with database_session() as db:
-            from app.crud.scrape_run import mark_artifact_download_started
+        mark_artifact_download_started(db, message.artifact_id)
 
-            mark_artifact_download_started(db, message.artifact_id)
+    max_bytes = document_size_limit()
+    downloaded = _resolve_download(message, max_bytes=max_bytes)
+    if len(downloaded.content) > max_bytes:
+        raise PermanentDocumentError(
+            "Document is larger than the configured limit",
+            code="document_too_large",
+        )
+    if hashlib.sha256(downloaded.content).hexdigest() != downloaded.checksum:
+        raise PermanentDocumentError(
+            "Source resolver returned an invalid checksum",
+            code="checksum_mismatch",
+        )
+    validate_document_content(
+        downloaded.content,
+        declared_content_type=downloaded.content_type,
+        expected_format=downloaded.document_format,
+    )
+    if downloaded.content_type != DOCUMENT_CONTENT_TYPES[downloaded.document_format]:
+        raise PermanentDocumentError(
+            "Source resolver returned a non-canonical content type",
+            code="content_type_mismatch",
+        )
+    bucket = os.environ["RAW_DOCUMENT_BUCKET"]
+    key = (
+        f"raw/{message.ticker}/{message.artifact_id}/"
+        f"{downloaded.checksum}.{downloaded.extension}"
+    )
+    _put_immutable_document(
+        s3,
+        bucket=bucket,
+        key=key,
+        downloaded=downloaded,
+    )
 
-        max_bytes = document_size_limit()
-        downloaded = _resolve_download(message, max_bytes=max_bytes)
-        if len(downloaded.content) > max_bytes:
-            raise PermanentDocumentError(
-                "Document is larger than the configured limit",
-                code="document_too_large",
-            )
-        if hashlib.sha256(downloaded.content).hexdigest() != downloaded.checksum:
-            raise PermanentDocumentError(
-                "Source resolver returned an invalid checksum",
-                code="checksum_mismatch",
-            )
-        validate_document_content(
-            downloaded.content,
-            declared_content_type=downloaded.content_type,
-            expected_format=downloaded.document_format,
-        )
-        if downloaded.content_type != DOCUMENT_CONTENT_TYPES[downloaded.document_format]:
-            raise PermanentDocumentError(
-                "Source resolver returned a non-canonical content type",
-                code="content_type_mismatch",
-            )
-        bucket = os.environ["RAW_DOCUMENT_BUCKET"]
-        key = (
-            f"raw/{message.ticker}/{message.artifact_id}/"
-            f"{downloaded.checksum}.{downloaded.extension}"
-        )
-        _put_immutable_document(
-            s3,
-            bucket=bucket,
-            key=key,
-            downloaded=downloaded,
-        )
+    with database_session() as db:
+        from app.crud.scrape_run import mark_artifact_stored
 
-        with database_session() as db:
-            from app.crud.scrape_run import mark_artifact_stored
-
-            mark_artifact_stored(
-                db,
-                message.artifact_id,
-                checksum_sha256=downloaded.checksum,
-                s3_bucket=bucket,
-                s3_key=key,
-                content_type=downloaded.content_type,
-                file_size_bytes=len(downloaded.content),
-            )
-        log_event(
-            stage=STAGE,
-            event="completed",
-            started_at=started_at,
-            correlation_id=correlation,
-            run_id=message.scrape_run_id,
-            artifact_id=message.artifact_id,
-            attempt=attempt,
-            bytes_downloaded=len(downloaded.content),
-            document_format=downloaded.document_format,
+        mark_artifact_stored(
+            db,
+            message.artifact_id,
+            checksum_sha256=downloaded.checksum,
+            s3_bucket=bucket,
+            s3_key=key,
+            content_type=downloaded.content_type,
+            file_size_bytes=len(downloaded.content),
         )
-    except PermanentDocumentError as exc:
-        if message is not None and exc.code != "artifact_identity_mismatch":
-            _mark_failed(message, f"{exc.code}: {exc}")
-        log_event(
-            stage=STAGE,
-            event="permanent_failure",
-            started_at=started_at,
-            level=logging.WARNING,
-            correlation_id=correlation,
-            run_id=message.scrape_run_id if message else None,
-            artifact_id=message.artifact_id if message else None,
-            attempt=attempt,
-            error_code=exc.code,
-        )
-    except Exception as exc:
-        if message is not None:
-            error = f"{type(exc).__name__}: {exc}"
-            if is_final_attempt(attempt):
-                _mark_failed(message, error)
-            else:
-                _record_retry(message, error)
-        log_event(
-            stage=STAGE,
-            event="retryable_failure",
-            started_at=started_at,
-            level=logging.ERROR,
-            correlation_id=correlation,
-            run_id=message.scrape_run_id if message else None,
-            artifact_id=message.artifact_id if message else None,
-            attempt=attempt,
-            error_code=type(exc).__name__,
-        )
-        raise
+    current.log(
+        "completed",
+        bytes_downloaded=len(downloaded.content),
+        document_format=downloaded.document_format,
+    )
 
 
 def handler(event: dict, _context) -> dict:
     for record in event.get("Records", []):
-        _handle_record(record)
+        run_stage(STAGE, record, _download)
     return {"processed": len(event.get("Records", []))}
