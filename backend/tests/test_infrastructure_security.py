@@ -1,10 +1,10 @@
 """Regression tests for security-critical Cognito template settings."""
 
-from cloudformation_template import load_template
+from tools.template_model import template_model
 
 
 def _template() -> dict:
-    return load_template()
+    return template_model().document
 
 
 def test_cognito_browser_client_has_no_secret() -> None:

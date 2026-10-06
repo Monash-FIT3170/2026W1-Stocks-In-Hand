@@ -1,8 +1,8 @@
 import re
 from pathlib import Path
 
-from cloudformation_template import image_functions, template_parameters
 from tools import sync_tickers
+from tools.template_model import template_model
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -135,7 +135,7 @@ def test_brevo_notification_infrastructure_contract() -> None:
     )[0]
 
     assert 'NotificationsEnabled:' in template
-    assert template_parameters()["NotificationsEnabled"]["Default"] == "false"
+    assert template_model().parameters["NotificationsEnabled"]["Default"] == "false"
     assert (
         'IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]'
         in template
@@ -338,7 +338,7 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
         "  NotificationFunction:", 1
     )[0]
 
-    assert template_parameters()["BedrockEnabled"]["Default"] == "false"
+    assert template_model().parameters["BedrockEnabled"]["Default"] == "false"
     for function in (api_function, analysis_function):
         assert "LLM_PROVIDER: bedrock" in function
         assert "BEDROCK_ENABLED: !Ref BedrockEnabled" in function
@@ -412,7 +412,7 @@ def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None
         "  SchedulerInvokeRole:", 1
     )[0]
 
-    assert template_parameters()["PublicDiscussionScheduleEnabled"]["Default"] == "false"
+    assert template_model().parameters["PublicDiscussionScheduleEnabled"]["Default"] == "false"
     assert "ReservedConcurrentExecutions" not in function
     assert "PublicDiscussionPerSourceLimit" in function
     assert "MaximumRetryAttempts: 2" in template
@@ -448,7 +448,7 @@ def _workflow(name: str) -> str:
 
 
 def test_release_workflows_map_every_image_function_to_a_repository() -> None:
-    functions = image_functions()
+    functions = template_model().image_functions()
 
     assert "NotificationFunction" in functions
     for workflow in ("deploy-staging.yml", "prepare-staging-backend-rollback.yml"):
@@ -465,7 +465,7 @@ def test_deploy_supplies_every_parameter_without_a_default() -> None:
     deploy = _workflow("deploy-staging.yml")
     required = [
         name
-        for name, parameter in template_parameters().items()
+        for name, parameter in template_model().parameters.items()
         if "Default" not in parameter
     ]
 
@@ -485,7 +485,7 @@ def test_rollback_keeps_live_parameters_and_swaps_only_images() -> None:
     # hard-coded AuthProvider=legacy and feature switches did.
     hard_coded = [
         name
-        for name in template_parameters()
+        for name in template_model().parameters
         if name not in IMAGE_URI_PARAMETERS and f'"{name}=' in rollback
     ]
     assert hard_coded == []
@@ -499,7 +499,7 @@ def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:
 
     assert "SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}" in values
     assert 'FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"' in values
-    assert template_parameters()["SiteDomainName"]["Default"] == ""
+    assert template_model().parameters["SiteDomainName"]["Default"] == ""
     assert (
         values.index('FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"')
         < values.index("OutputKey=='FrontendUrl'")
@@ -509,7 +509,7 @@ def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:
 def test_feature_switches_default_to_off() -> None:
     switches = {
         name: parameter["Default"]
-        for name, parameter in template_parameters().items()
+        for name, parameter in template_model().parameters.items()
         if sorted(parameter.get("AllowedValues", [])) == ["false", "true"]
     }
 
