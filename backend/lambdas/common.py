@@ -14,6 +14,10 @@ from botocore.exceptions import ClientError
 LOGGER = logging.getLogger("document_pipeline")
 LOGGER.setLevel(logging.INFO)
 _RUNTIME_CONFIGURATION_LOADED = False
+# Matches maxReceiveCount on every pipeline queue's RedrivePolicy in
+# infra/template.yaml. A failure on this receive is the last one before SQS
+# moves the message to its dead-letter queue.
+MAX_RECEIVE_COUNT = 5
 
 
 class PermanentDocumentError(ValueError):
@@ -62,6 +66,11 @@ def receive_attempt(record: dict[str, Any]) -> int:
         return max(int(value), 1)
     except (TypeError, ValueError):
         return 1
+
+
+def is_final_attempt(attempt: int) -> bool:
+    """Whether a retryable failure on this receive is terminal."""
+    return attempt >= MAX_RECEIVE_COUNT
 
 
 def correlation_id(record: dict[str, Any]) -> str:

@@ -17,6 +17,7 @@ from lambdas.common import (
     canonicalize_url,
     correlation_id,
     database_session,
+    is_final_attempt,
     log_event,
     receive_attempt,
 )
@@ -41,6 +42,23 @@ def _mark_run_failed(run_id: UUID, error: str) -> None:
         )
         # Do not acknowledge a queue message until its failure is durable.
         raise
+
+
+def _record_run_retry(run_id: UUID, error: str) -> None:
+    # Best effort: the message is retried whether or not this is recorded.
+    try:
+        with database_session() as db:
+            from app.crud.scrape_run import record_run_discovery_retry
+
+            record_run_discovery_retry(db, run_id, error=error)
+    except Exception:
+        log_event(
+            stage=STAGE,
+            event="state_update_failed",
+            level=logging.ERROR,
+            run_id=run_id,
+            error_code="database_error",
+        )
 
 
 def _parse_message(record: dict) -> QueueAMessage:
@@ -221,7 +239,11 @@ def _handle_record(record: dict) -> None:
         # Permanent failures are acknowledged, so they do not waste DLQ retries.
     except Exception as exc:
         if message is not None:
-            _mark_run_failed(message.scrape_run_id, f"{type(exc).__name__}: {exc}")
+            error = f"{type(exc).__name__}: {exc}"
+            if is_final_attempt(attempt):
+                _mark_run_failed(message.scrape_run_id, error)
+            else:
+                _record_run_retry(message.scrape_run_id, error)
         log_event(
             stage=STAGE,
             event="retryable_failure",

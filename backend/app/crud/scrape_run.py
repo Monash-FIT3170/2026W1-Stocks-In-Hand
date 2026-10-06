@@ -322,6 +322,26 @@ def mark_run_discovery_failed(
     return _commit(db, run)
 
 
+def record_run_discovery_retry(
+    db: Session,
+    scrape_run_id: UUID,
+    *,
+    error: str,
+) -> ScrapeRun | None:
+    """Keep a retrying discovery run active; only the final receive fails it.
+
+    Marking the run failed here would let the API or scheduler enqueue a
+    second Queue A message while SQS is still redelivering the first.
+    """
+    run = _lock_run(db, scrape_run_id)
+    if run is None:
+        return None
+    if run.status in RUN_DOWNSTREAM_OF_DISCOVERY or run.status == ScrapeRunStatus.FAILED:
+        return run
+    run.error_message = error[:8000]
+    return _commit(db, run)
+
+
 def get_or_create_artifact(
     db: Session,
     *,
@@ -493,6 +513,23 @@ def mark_artifact_download_failed(
     return _commit(db, artifact)
 
 
+def record_artifact_download_retry(
+    db: Session,
+    artifact_id: UUID,
+    *,
+    error: str,
+) -> Artifact | None:
+    """Record a retryable download error without failing the artifact or run."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.download_status in {
+        DownloadStatus.STORED,
+        DownloadStatus.FAILED,
+    }:
+        return artifact
+    artifact.last_error = error[:8000]
+    return _commit(db, artifact)
+
+
 def mark_artifact_analysis_started(
     db: Session,
     artifact_id: UUID,
@@ -557,6 +594,27 @@ def mark_artifact_analysis_failed(
     if first_failure and run:
         run.items_failed = (run.items_failed or 0) + 1
         _finish_run_if_terminal(run)
+    return _commit(db, artifact)
+
+
+def record_artifact_analysis_retry(
+    db: Session,
+    artifact_id: UUID,
+    *,
+    error: str,
+) -> Artifact | None:
+    """Record a retryable analysis error without failing the artifact or run.
+
+    Used for document and stored-text analysis alike: neither touches run
+    counters until the final receive.
+    """
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.analysis_status in {
+        AnalysisStatus.COMPLETED,
+        AnalysisStatus.FAILED,
+    }:
+        return artifact
+    artifact.last_error = error[:8000]
     return _commit(db, artifact)
 
 

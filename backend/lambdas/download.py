@@ -16,6 +16,7 @@ from lambdas.common import (
     canonicalize_url,
     correlation_id,
     database_session,
+    is_final_attempt,
     log_event,
     receive_attempt,
 )
@@ -105,6 +106,24 @@ def _mark_failed(message: QueueBMessage, error: str) -> None:
         )
         # Do not acknowledge a queue message until its failure is durable.
         raise
+
+
+def _record_retry(message: QueueBMessage, error: str) -> None:
+    # Best effort: the message is retried whether or not this is recorded.
+    try:
+        with database_session() as db:
+            from app.crud.scrape_run import record_artifact_download_retry
+
+            record_artifact_download_retry(db, message.artifact_id, error=error)
+    except Exception:
+        log_event(
+            stage=STAGE,
+            event="state_update_failed",
+            level=logging.ERROR,
+            run_id=message.scrape_run_id,
+            artifact_id=message.artifact_id,
+            error_code="database_error",
+        )
 
 
 def _object_exists(s3, *, bucket: str | None, key: str | None) -> bool:
@@ -269,7 +288,11 @@ def _handle_record(record: dict) -> None:
         )
     except Exception as exc:
         if message is not None:
-            _mark_failed(message, f"{type(exc).__name__}: {exc}")
+            error = f"{type(exc).__name__}: {exc}"
+            if is_final_attempt(attempt):
+                _mark_failed(message, error)
+            else:
+                _record_retry(message, error)
         log_event(
             stage=STAGE,
             event="retryable_failure",
