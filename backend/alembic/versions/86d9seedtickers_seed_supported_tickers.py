@@ -12,7 +12,7 @@ API Lambda runs with ``lifespan="off"``, so seeding belongs in a migration.
 
 The rows are a snapshot of the supported tickers at this revision; adding a
 ticker later needs its own data migration. Existing rows keep curated
-values and only gain missing ones, matching ``_ensure_default_tickers``.
+values and only gain missing ones, matching ``crud.ticker.ensure_ticker``.
 """
 
 from typing import Sequence, Union

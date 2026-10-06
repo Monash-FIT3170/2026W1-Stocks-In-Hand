@@ -13,40 +13,11 @@ from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.investor import Investor
-from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
-from app.sources import SOURCES
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
-
-
-def _ensure_default_tickers(db: Session) -> None:
-    changed = False
-
-    for symbol, source in SOURCES.items():
-        defaults = {
-            "company_name": source.company_name,
-            "exchange": "ASX",
-            "sector": source.sector,
-            "industry": source.industry,
-        }
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
-        if not ticker:
-            db.add(Ticker(symbol=symbol, **defaults))
-            changed = True
-            continue
-
-        for key, value in defaults.items():
-            current = getattr(ticker, key)
-            if not current or (key == "company_name" and current == symbol):
-                setattr(ticker, key, value)
-                changed = True
-
-    if changed:
-        db.commit()
-
 
 QUOTE_CACHE_TTL_SECONDS = 300
 QUOTE_FAILURE_TTL_SECONDS = 60
@@ -287,7 +258,6 @@ def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[st
 
 
 def _ticker_brief_payload(symbol: str, db: Session) -> dict:
-    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -386,13 +356,11 @@ def create_ticker(
 
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     return crud.get_tickers(db, skip=skip, limit=limit)
 
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -484,12 +452,6 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
     """Return only persisted filing events; an empty history stays empty."""
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        # Deep-dive can be the first ticker endpoint requested by the client.
-        # Keep it consistent with the brief endpoints instead of relying on a
-        # separate request to create the deployed ticker records first.
-        _ensure_default_tickers(db)
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 

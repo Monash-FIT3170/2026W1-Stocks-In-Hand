@@ -84,17 +84,13 @@ def test_migrated_database_has_named_rows_for_every_source(db_session: Session) 
 
 
 @pytest.mark.parametrize("symbol", sorted(SOURCES))
-def test_read_routes_find_tickers_without_on_demand_seeding(
+def test_read_routes_find_every_ticker_on_a_migrated_database(
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
     symbol: str,
 ) -> None:
-    def no_seeding(_db):
-        raise AssertionError("route relied on on-demand ticker seeding")
-
-    monkeypatch.setattr(ticker_route, "_ensure_default_tickers", no_seeding)
-
     assert ticker_route.get_ticker_news_feed(symbol, db=db_session) == []
+    assert ticker_route.get_ticker_deep_dive_timeline(symbol, db=db_session) == []
+    assert ticker_route.get_ticker_by_symbol(symbol, db=db_session).symbol == symbol
     category = category_sentiment.read_ticker_category_sentiment(symbol, db=db_session)
     assert category["ticker"] == symbol
     status = public_discussion.public_discussion_status(db_session, symbol)
