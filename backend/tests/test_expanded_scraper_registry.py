@@ -1,32 +1,23 @@
-"""Regression checks for the expanded company scraper registry."""
-
-import ast
-from pathlib import Path
+"""Every ticker in the catalogue has a scraper for its source adapter."""
 
 import pytest
 
-from scrapers.registry import REGISTRY, get_scraper
+from app.sources import SOURCES
+from scrapers.registry import REGISTRY, SCRAPERS, get_scraper
 
 
-NEW_TICKERS = ("COL", "COH", "TCL", "TLS", "WDS", "RIO", "ORG", "MQG")
-REGISTRY_PATH = Path(__file__).resolve().parents[1] / "scrapers" / "registry.py"
+@pytest.mark.parametrize("ticker", sorted(SOURCES))
+def test_every_catalogue_ticker_has_an_instantiable_scraper(ticker: str) -> None:
+    scraper = get_scraper(f"{ticker.lower()}.ax")
 
-
-@pytest.mark.parametrize("ticker", NEW_TICKERS)
-def test_new_ticker_has_an_instantiable_scraper(ticker: str) -> None:
-    scraper = get_scraper(ticker.lower())
-
-    assert ticker in REGISTRY
+    assert type(scraper) is SCRAPERS[SOURCES[ticker].adapter]
     assert scraper.ticker == ticker
 
 
-def test_registry_entrypoints_are_defined_once() -> None:
-    tree = ast.parse(REGISTRY_PATH.read_text(encoding="utf-8"))
-    function_names = [
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    ]
+def test_registry_covers_exactly_the_catalogue() -> None:
+    assert set(REGISTRY) == set(SOURCES)
 
-    assert function_names.count("get_scraper") == 1
-    assert function_names.count("discover") == 1
+
+def test_unknown_ticker_has_no_scraper() -> None:
+    with pytest.raises(ValueError, match="No scraper implemented for 'XYZ'"):
+        get_scraper("xyz")

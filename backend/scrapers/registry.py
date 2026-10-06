@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.sources import SOURCES
+from app.sources import SOURCES, SourceAdapter, normalise_symbol
 
 from .base import BaseScraper, Announcement
 from .companies.anz import ANZScraper
@@ -17,39 +17,39 @@ from .companies.rio import RIOScraper
 from .companies.org import ORGScraper
 from .companies.mqg import MQGScraper
 
-# Add one import and one line here each time a new company is onboarded, and
-# add a matching entry to app.sources.SOURCES (the ticker catalog the AWS
-# pipeline uses for adapter/URL lookups). The two are kept in sync by the
-# check below rather than by one being derived from the other, since this
-# dict's values (scraper classes) have no equivalent in app.sources.
-REGISTRY: dict[str, type[BaseScraper]] = {
-    "ANZ": ANZScraper,
-    "BHP": BHPScraper,
-    "CBA": CBAScraper,
-    "COL": COLScraper,
-    "COH": COHScraper,
-    "TCL": TCLScraper,
-    "TLS": TLSScraper,
-    "CSL": CSLScraper,
-    "WES": WESScraper,
-    "WDS": WDSScraper,
-    "RIO": RIOScraper,
-    "ORG": ORGScraper,
-    "MQG": MQGScraper,
+# One scraper per source adapter. The ticker catalogue (app.sources.SOURCES)
+# names each company's adapter, so onboarding a company means one catalogue
+# entry plus its adapter here.
+SCRAPERS: dict[SourceAdapter, type[BaseScraper]] = {
+    "anz": ANZScraper,
+    "bhp": BHPScraper,
+    "cba": CBAScraper,
+    "coh": COHScraper,
+    "col": COLScraper,
+    "csl": CSLScraper,
+    "mqg": MQGScraper,
+    "org": ORGScraper,
+    "rio": RIOScraper,
+    "tcl": TCLScraper,
+    "tls": TLSScraper,
+    "wds": WDSScraper,
+    "wes": WESScraper,
 }
 
-_missing_scraper = set(SOURCES) - set(REGISTRY)
-_missing_source = set(REGISTRY) - set(SOURCES)
-if _missing_scraper or _missing_source:
+_missing_scrapers = sorted({source.adapter for source in SOURCES.values()} - set(SCRAPERS))
+if _missing_scrapers:
     raise RuntimeError(
-        "scrapers.registry.REGISTRY and app.sources.SOURCES have drifted: "
-        f"tickers in SOURCES with no scraper: {sorted(_missing_scraper) or 'none'}; "
-        f"tickers in REGISTRY with no source definition: {sorted(_missing_source) or 'none'}"
+        "The ticker catalogue names source adapters with no scraper: "
+        f"{_missing_scrapers}"
     )
+
+REGISTRY: dict[str, type[BaseScraper]] = {
+    ticker: SCRAPERS[source.adapter] for ticker, source in SOURCES.items()
+}
 
 
 def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
-    symbol = ticker.strip().upper()
+    symbol = normalise_symbol(ticker)
     scraper_type = REGISTRY.get(symbol)
     if scraper_type is None:
         raise ValueError(

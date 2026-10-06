@@ -22,6 +22,7 @@ from app.messages import (
     QueueAMessage,
     QueueBMessage,
 )
+from app.sources import SOURCES
 from lambdas import analysis, common, discovery, download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -629,6 +630,18 @@ def test_s3_event_accepts_supported_non_pdf_key_and_rejects_unknown_ticker():
             )
         )
     assert error.value.code == "invalid_object_key"
+
+
+@pytest.mark.parametrize("ticker", sorted(SOURCES))
+def test_s3_event_accepts_every_catalogue_ticker(ticker: str):
+    artifact_id = UUID("123e4567-e89b-42d3-a456-426614174000")
+    key = f"raw/{ticker}/{artifact_id}/{'e' * 64}.pdf"
+
+    [(_bucket, _key, parsed_ticker, *_rest)] = analysis.parse_s3_notifications(
+        s3_record(bucket="private-raw-documents", key=key)
+    )
+
+    assert parsed_ticker == ticker
 
 
 def test_s3_event_reconciles_an_uploaded_object_before_downloader_commit(

@@ -37,6 +37,7 @@ from lambdas.common import (
     log_event,
     receive_attempt,
 )
+from app.sources import SOURCES, adapter_matches_ticker
 from app.status import AnalysisStatus, DownloadStatus
 from lambdas.download_validation import (
     DOCUMENT_CONTENT_TYPES,
@@ -47,23 +48,6 @@ from lambdas.download_validation import (
 from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
-SUPPORTED_TICKERS = frozenset(
-    {
-        "ANZ",
-        "BHP",
-        "CBA",
-        "COH",
-        "COL",
-        "CSL",
-        "MQG",
-        "ORG",
-        "RIO",
-        "TCL",
-        "TLS",
-        "WDS",
-        "WES",
-    }
-)
 FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "pdf": "pdf",
     "txt": "txt",
@@ -71,7 +55,7 @@ FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
     "docx": "docx",
 }
 OBJECT_KEY = re.compile(
-    r"^raw/(?P<ticker>ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)/"
+    rf"^raw/(?P<ticker>{'|'.join(map(re.escape, SOURCES))})/"
     r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
     r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
@@ -186,9 +170,8 @@ def _artifact_state(
             )
         artifact_ticker = artifact.ticker.symbol if artifact.ticker is not None else None
         if (
-            artifact.source_adapter != ticker.lower()
+            not adapter_matches_ticker(ticker, artifact.source_adapter or "")
             or artifact_ticker != ticker
-            or ticker not in SUPPORTED_TICKERS
             or artifact.scrape_run_id is None
         ):
             raise PermanentDocumentError(
