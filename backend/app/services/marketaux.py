@@ -16,9 +16,9 @@ from app.crud import information_platform as platform_crud
 from app.crud import ticker as ticker_crud
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
-from app.schemas.ticker import TickerCreate
 from app.services import news_summary
 from app.services.title_normalization import normalise_title
+from app.sources import normalise_symbol
 
 
 PROVIDER_NAME = "Marketaux"
@@ -66,19 +66,12 @@ class NewsArticle:
     image_url: str | None = None
 
 
-def normalise_asx_symbol(symbol: str) -> str:
-    """Return the database form of an ASX symbol, for example ``BHP``."""
-    cleaned = symbol.strip().upper()
-    if cleaned.endswith(".AX"):
-        cleaned = cleaned[:-3]
-    if not cleaned:
-        raise ValueError("Ticker symbol must not be empty")
-    return cleaned
-
-
 def marketaux_asx_symbol(symbol: str) -> str:
     """Return Marketaux's exchange-qualified ASX symbol."""
-    return f"{normalise_asx_symbol(symbol)}.AX"
+    ticker_symbol = normalise_symbol(symbol)
+    if not ticker_symbol:
+        raise ValueError("Ticker symbol must not be empty")
+    return f"{ticker_symbol}.AX"
 
 
 def select_article_text(payload: dict[str, Any]) -> tuple[str, str]:
@@ -211,21 +204,6 @@ def article_content_hash(article: NewsArticle) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def _get_or_create_ticker(db: Session, symbol: str):
-    ticker_symbol = normalise_asx_symbol(symbol)
-    ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
-    if ticker:
-        return ticker
-    return ticker_crud.create_ticker(
-        db,
-        TickerCreate(
-            symbol=ticker_symbol,
-            company_name=ticker_symbol,
-            exchange="ASX",
-        ),
-    )
-
-
 def _get_or_create_platform(db: Session):
     platform = platform_crud.get_platform_by_name(db, PROVIDER_NAME)
     if platform:
@@ -251,7 +229,9 @@ def fetch_and_store_news(
 ) -> dict[str, Any]:
     """Fetch Marketaux articles and persist new ones as news artifacts."""
     articles = fetch_news(symbol, limit)
-    ticker = _get_or_create_ticker(db, symbol)
+    ticker = ticker_crud.ensure_ticker(db, symbol)
+    # Commit now: the loop below rolls back the session when one article fails.
+    db.commit()
     platform = _get_or_create_platform(db)
     result: dict[str, Any] = {
         "symbol": ticker.symbol,

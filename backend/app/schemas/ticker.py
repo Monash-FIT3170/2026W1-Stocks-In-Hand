@@ -4,6 +4,8 @@ from uuid import UUID
 from typing import Optional
 from decimal import Decimal
 
+from app.sources import normalise_symbol
+
 class TickerCreate(BaseModel):
     symbol: str
     company_name: str
@@ -11,6 +13,14 @@ class TickerCreate(BaseModel):
     sector: Optional[str] = None
     industry: Optional[str] = None
     market_cap: Optional[Decimal] = None
+
+    @field_validator("symbol")
+    @classmethod
+    def normalise(cls, value: str) -> str:
+        symbol = normalise_symbol(value)
+        if not symbol:
+            raise ValueError("must not be empty")
+        return symbol
 
 class TickerUpdate(BaseModel):
     """Descriptive fields an administrator may correct on an existing ticker."""

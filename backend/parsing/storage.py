@@ -14,7 +14,6 @@ if str(_BACKEND_DIR) not in sys.path:
 
 # db components
 from app.database.connection import SessionLocal
-from app.models.ticker import Ticker
 from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
@@ -181,20 +180,6 @@ def should_replace_artifact_title(
     )
 
 
-def get_or_create_ticker(db, ticker_symbol: str) -> Ticker:
-    ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
-    if not ticker:
-        from app.schemas.ticker import TickerCreate
-        ticker_data = TickerCreate(
-            symbol=ticker_symbol,
-            company_name=ticker_symbol,
-            exchange="ASX",
-        )
-        ticker = ticker_crud.create_ticker(db, ticker_data)
-        print(f"[STORAGE] Created new ticker: {ticker_symbol}")
-    return ticker
-
-
 def get_or_create_platform(db, platform_name: str = "ASX") -> InformationPlatform:
     platform = platform_crud.get_platform_by_name(db, platform_name)
     if not platform:
@@ -225,7 +210,7 @@ def store(
 
     db = SessionLocal()
     try:
-        ticker = get_or_create_ticker(db, announcement.ticker)
+        ticker = ticker_crud.ensure_ticker(db, announcement.ticker)
         platform = get_or_create_platform(db, "ASX")
         content_hash = compute_content_hash(raw_text)
 

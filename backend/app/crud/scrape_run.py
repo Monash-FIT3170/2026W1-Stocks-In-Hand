@@ -8,10 +8,10 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.crud import ticker as ticker_crud
 from app.models.artifact import Artifact
 from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
-from app.models.ticker import Ticker
 from app.schemas.scrape_run import ScrapeRunCreate
 from app.status import AnalysisStatus, DownloadStatus, RUN_DOWNSTREAM_OF_DISCOVERY, ScrapeRunStatus
 
@@ -180,20 +180,6 @@ def _get_or_create_platform(db: Session, source_url: str) -> InformationPlatform
     return platform
 
 
-def _get_or_create_ticker(db: Session, ticker: str) -> Ticker:
-    row = db.query(Ticker).filter(Ticker.symbol == ticker).first()
-    if row:
-        return row
-    row = Ticker(
-        symbol=ticker,
-        company_name="CSL Limited" if ticker == "CSL" else ticker,
-        exchange="ASX",
-    )
-    db.add(row)
-    db.flush()
-    return row
-
-
 def get_or_create_queued_run(
     db: Session,
     *,
@@ -212,7 +198,7 @@ def get_or_create_queued_run(
         return existing, False
 
     platform = _get_or_create_platform(db, source_url)
-    ticker_row = _get_or_create_ticker(db, ticker)
+    ticker_row = ticker_crud.ensure_ticker(db, ticker)
     run = ScrapeRun(
         platform_id=platform.id,
         ticker_id=ticker_row.id,
