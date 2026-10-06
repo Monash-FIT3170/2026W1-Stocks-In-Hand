@@ -57,7 +57,7 @@ class QueueAMessage(BaseModel):
     scrape_run_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     source_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: SourceAdapter
     requested_at: datetime = Field(default_factory=_utcnow)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -93,7 +93,7 @@ class QueueBMessage(BaseModel):
     source_url: HttpUrl
     document_url: HttpUrl
     canonical_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: SourceAdapter
     source_id: str | None = Field(default=None, max_length=512)
     title: str | None = Field(default=None, max_length=1000)
     published_at: datetime | None = None

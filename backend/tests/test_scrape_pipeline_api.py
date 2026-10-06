@@ -28,6 +28,7 @@ def test_queue_a_normalises_ticker_and_serialises_identifiers() -> None:
         scrape_run_id=run_id,
         ticker="csl",
         source_url="https://investors.csl.com/investors/asx-announcements",
+        source_adapter="csl",
     )
 
     assert message.ticker == "CSL"
@@ -42,6 +43,7 @@ def test_queue_b_requires_urls_and_rejects_sensitive_metadata() -> None:
             artifact_id=uuid4(),
             ticker="CSL",
             source_url="https://investors.csl.com/investors/asx-announcements",
+            source_adapter="csl",
             document_url="https://example.com/announcement.pdf",
             canonical_url="https://example.com/announcement.pdf",
             metadata={"cookie": "do-not-send"},
@@ -53,9 +55,19 @@ def test_queue_b_requires_urls_and_rejects_sensitive_metadata() -> None:
             artifact_id=uuid4(),
             ticker="CSL",
             source_url="https://investors.csl.com/investors/asx-announcements",
+            source_adapter="csl",
             document_url="https://example.com/announcement.pdf",
             canonical_url="https://example.com/announcement.pdf",
             metadata={"headers": {"authorization": "do-not-send"}},
+        )
+
+
+def test_queue_messages_name_their_source_adapter() -> None:
+    with pytest.raises(ValidationError, match="source_adapter"):
+        QueueAMessage(
+            scrape_run_id=uuid4(),
+            ticker="CSL",
+            source_url="https://investors.csl.com/investors/asx-announcements",
         )
 
 
@@ -65,6 +77,7 @@ def test_queue_messages_forbid_uncontracted_document_content() -> None:
             scrape_run_id=uuid4(),
             ticker="CSL",
             source_url="https://investors.csl.com/investors/asx-announcements",
+            source_adapter="csl",
             raw_text="document content",
         )
 
@@ -78,6 +91,7 @@ def test_enqueue_discovery_sends_validated_json(monkeypatch: pytest.MonkeyPatch)
         scrape_run_id=uuid4(),
         ticker="CSL",
         source_url="https://investors.csl.com/investors/asx-announcements",
+        source_adapter="csl",
     )
 
     assert scrape_queue.enqueue_discovery(message) == "message-123"

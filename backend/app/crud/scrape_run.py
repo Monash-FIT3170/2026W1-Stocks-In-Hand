@@ -13,6 +13,7 @@ from app.models.artifact import Artifact
 from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
 from app.schemas.scrape_run import ScrapeRunCreate
+from app.sources import SourceAdapter
 from app.status import (
     ANALYSIS_QUEUED_OR_DONE,
     RUN_DOWNSTREAM_OF_DISCOVERY,
@@ -345,7 +346,7 @@ def get_or_create_artifact(
     scrape_run_id: UUID,
     canonical_url: str,
     document_url: str,
-    source_adapter: str = "csl",
+    source_adapter: SourceAdapter,
     source_id: str | None = None,
     title: str | None = None,
     published_at: datetime | None = None,
