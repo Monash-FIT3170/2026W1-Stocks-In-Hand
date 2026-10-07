@@ -14,7 +14,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
-from app.services import bedrock, llm
+from app.services import llm
+from app.services.generation import providers
+from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
 from parsing.analysis import analyse_news_text, analyse_public_discussion_text
 
@@ -83,14 +85,9 @@ def test_typed_error_stays_a_runtime_error_for_existing_route_handlers() -> None
     assert issubclass(LLMUnavailableError, RuntimeError)
 
 
-def test_provider_failures_are_still_retried() -> None:
-    with patch.multiple(
-        settings,
-        LLM_PROVIDER="bedrock",
-        BEDROCK_ENABLED=True,
-    ), patch.object(
-        bedrock,
-        "invoke_text",
-        side_effect=RuntimeError("Amazon Bedrock model invocation failed"),
-    ), pytest.raises(RuntimeError, match="invocation failed"):
+def test_provider_failures_are_still_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    failing = ScriptedProvider([RuntimeError("Amazon Bedrock model invocation failed")])
+    monkeypatch.setattr(providers, "configured_provider", lambda: failing)
+
+    with pytest.raises(RuntimeError, match="invocation failed"):
         _analyse("news")

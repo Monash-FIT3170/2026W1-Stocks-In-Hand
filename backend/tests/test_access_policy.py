@@ -198,6 +198,7 @@ def test_public_read_policy_holds_other_methods_to_an_admin() -> None:
         ("POST", "/gemini/categorise/recent"),
         ("POST", "/sentiment/BHP"),
         ("GET", "/investors/"),
+        ("GET", "/reddit/ticker-sentiment/BHP"),
     ],
 )
 def test_anonymous_writes_are_rejected_before_any_work(method: str, path: str) -> None:

@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-import time
 
-import httpx
-
-from app.core.config import settings
-from app.services import bedrock
-from app.services.llm_errors import LLMUnavailableError
+from app.services.generation import providers
 
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
@@ -27,7 +22,6 @@ _UNQUOTED_SUMMARY_KEY = re.compile(
     rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
 )
 REDDIT_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral"}
-GROQ_RETRY_PROMPT_CHARS = 6000
 ARTIFACT_SEPARATOR = "\n\n---\n\n"
 
 __all__ = (
@@ -362,69 +356,13 @@ key_themes: an array of short recurring themes.
 """.strip()
 
 
-def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
-    if not settings.GROQ_API_KEY:
-        raise LLMUnavailableError("GROQ_API_KEY is not configured")
-    active_prompt = prompt
-    payload = {
-        "model": settings.GROQ_MODEL,
-        "temperature": temperature,
-        "response_format": {"type": "json_object"},
-    }
-    reduced_for_payload_limit = False
-    for attempt in range(5):
-        try:
-            response = httpx.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-                json={
-                    **payload,
-                    "messages": [{"role": "user", "content": active_prompt}],
-                },
-                timeout=60,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            if (
-                exc.response.status_code == 413
-                and not reduced_for_payload_limit
-                and len(active_prompt) > GROQ_RETRY_PROMPT_CHARS
-            ):
-                active_prompt = active_prompt[:GROQ_RETRY_PROMPT_CHARS]
-                reduced_for_payload_limit = True
-                continue
-            if exc.response.status_code != 429:
-                raise RuntimeError("Groq model invocation failed") from exc
-            response = exc.response
-        except httpx.RequestError as exc:
-            raise RuntimeError("Groq model invocation failed") from exc
-        if response.status_code == 429:
-            wait = int(response.headers.get("retry-after", min(2**attempt * 5, 60)))
-            time.sleep(wait)
-            continue
-        data = response.json()
-        try:
-            return data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ValueError("Groq response did not include text output") from exc
-    raise RuntimeError("Groq rate limit exceeded after 5 retries")
-
-
 def active_model_name() -> str:
     """Return the configured provider and model for stored provenance."""
-    if settings.LLM_PROVIDER == "bedrock":
-        return f"bedrock:{settings.BEDROCK_MODEL_ID}"
-    if settings.LLM_PROVIDER == "groq":
-        return f"groq:{settings.GROQ_MODEL}"
-    return "llm-not-configured"
+    return providers.configured_provider().name
 
 
 def _call_llm(prompt: str, *, temperature: float = 0.2) -> str:
-    if settings.LLM_PROVIDER == "bedrock":
-        return bedrock.invoke_text(prompt, temperature=temperature)
-    if settings.LLM_PROVIDER == "groq":
-        return _call_groq(prompt, temperature=temperature)
-    raise RuntimeError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")
+    return providers.configured_provider().complete(prompt, temperature=temperature)
 
 
 def categorise_chunk(chunk: str) -> dict[str, str]:
