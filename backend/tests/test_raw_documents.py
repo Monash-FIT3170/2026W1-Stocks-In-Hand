@@ -147,6 +147,48 @@ def test_read_rejects_an_object_that_is_not_what_its_key_names(
     assert error.value.code == code
 
 
+def test_verify_describes_the_object_without_reading_it(store: RawDocumentStore) -> None:
+    stored = store.put(ticker="CSL", artifact_id=uuid.uuid4(), document=_document())
+
+    assert store.verify(stored.location) == stored
+
+
+def test_verify_rejects_an_object_whose_metadata_names_another_document(
+    store: RawDocumentStore,
+) -> None:
+    other = store.put(ticker="CSL", artifact_id=uuid.uuid4(), document=_document())
+    claimed = locate(
+        store.name,
+        other.location.key.replace(str(other.location.artifact_id), str(uuid.uuid4())),
+    )
+    store.bucket.objects[claimed.key] = store.bucket.objects[other.location.key]
+
+    with pytest.raises(PermanentDocumentError) as error:
+        store.verify(claimed)
+
+    assert error.value.code == "artifact_identity_mismatch"
+
+
+def test_verify_rejects_an_oversized_object(store: RawDocumentStore) -> None:
+    stored = store.put(ticker="CSL", artifact_id=uuid.uuid4(), document=_document())
+    _tamper(store, stored.location.key, size=50 * 1024 * 1024)
+
+    with pytest.raises(PermanentDocumentError) as error:
+        store.verify(stored.location)
+
+    assert error.value.code == "document_too_large"
+
+
+def test_verify_retries_an_object_that_is_not_visible_yet(store: RawDocumentStore) -> None:
+    missing = locate(
+        store.name,
+        f"{KEY_PREFIX}CSL/{uuid.uuid4()}/{'a' * 64}.pdf",
+    )
+
+    with pytest.raises(RuntimeError, match="not visible"):
+        store.verify(missing)
+
+
 def _localstack_s3():
     endpoint = os.getenv("LOCALSTACK_ENDPOINT_URL", "http://localhost:4566")
     try:
@@ -188,6 +230,7 @@ def test_store_on_localstack_s3() -> None:
             "document-format": "pdf",
         },
     )
+    assert store.verify(stored.location) == stored
     assert store.read(stored.location) == PDF
     assert store.holds(bucket, stored.location.key)
     assert store.bucket.head(f"{KEY_PREFIX}missing") is None

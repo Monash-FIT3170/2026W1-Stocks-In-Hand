@@ -34,7 +34,6 @@ from lambdas.common import (
 )
 from app.sources import adapter_matches_ticker
 from app.status import AnalysisStatus, DownloadStatus
-from lambdas.download_validation import document_size_limit
 from lambdas.pipeline_stage import (
     StageRecord,
     analysed_document,
@@ -159,10 +158,10 @@ def _artifact_state(store: RawDocumentStore, location: DocumentLocation) -> dict
         }
 
     if state["download_status"] == DownloadStatus.STORED:
-        if (
-            state["s3_bucket"] != location.bucket
-            or state["s3_key"] != location.key
-            or state["checksum"] != location.checksum
+        if not location.is_recorded_as(
+            s3_bucket=state["s3_bucket"],
+            s3_key=state["s3_key"],
+            checksum_sha256=state["checksum"],
         ):
             raise PermanentDocumentError(
                 "S3 notification is stale or does not match the artifact",
@@ -173,42 +172,11 @@ def _artifact_state(store: RawDocumentStore, location: DocumentLocation) -> dict
     # S3 can deliver ObjectCreated before the downloader commits its database
     # update. Reconcile from the immutable object so the event is not delayed
     # for the queue's 72-minute visibility timeout.
-    stored_object = store.bucket.head(location.key)
-    if stored_object is None:
-        raise RuntimeError("Stored object is not visible yet")
-    metadata = stored_object.metadata
-    content_type = stored_object.content_type
-    content_length = stored_object.size
-    if (
-        metadata.get("artifact-id") != str(artifact_id)
-        or metadata.get("sha256") != location.checksum
-        or metadata.get("ticker") != ticker
-        or metadata.get("document-format") != location.document_format
-        or content_type != location.content_type
-    ):
-        raise PermanentDocumentError(
-            "Stored object metadata does not match the S3 event",
-            code="artifact_identity_mismatch",
-        )
-    if content_length > document_size_limit():
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-
+    stored = store.verify(location)
     with database_session() as db:
         from app.crud.scrape_run import mark_artifact_stored
 
-        artifact = mark_artifact_stored(
-            db,
-            artifact_id,
-            checksum_sha256=location.checksum,
-            s3_bucket=location.bucket,
-            s3_key=location.key,
-            content_type=content_type,
-            file_size_bytes=content_length,
-        )
-        if artifact is None:
+        if mark_artifact_stored(db, artifact_id, **stored.artifact_fields()) is None:
             raise PermanentDocumentError(
                 "Artifact does not exist",
                 code="artifact_not_found",

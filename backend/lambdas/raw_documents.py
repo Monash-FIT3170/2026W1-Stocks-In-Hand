@@ -67,6 +67,30 @@ class DocumentLocation:
     def content_type(self) -> str:
         return DOCUMENT_CONTENT_TYPES[self.document_format]
 
+    def is_recorded_as(
+        self,
+        *,
+        s3_bucket: str | None,
+        s3_key: str | None,
+        checksum_sha256: str | None,
+    ) -> bool:
+        """Whether an artifact row already records this object as its copy."""
+        return (s3_bucket, s3_key, checksum_sha256) == (
+            self.bucket,
+            self.key,
+            self.checksum,
+        )
+
+
+def _object_metadata(location: DocumentLocation) -> dict[str, str]:
+    """The S3 user metadata that repeats a stored document's identity."""
+    return {
+        "artifact-id": str(location.artifact_id),
+        "sha256": location.checksum,
+        "ticker": location.ticker,
+        "document-format": location.document_format,
+    }
+
 
 def locate(bucket: str, key: str) -> DocumentLocation:
     """Read a document's identity from its key, or reject the key."""
@@ -164,12 +188,7 @@ class RawDocumentStore:
             location.key,
             document.content,
             content_type=location.content_type,
-            metadata={
-                "artifact-id": str(artifact_id),
-                "sha256": location.checksum,
-                "ticker": ticker,
-                "document-format": location.document_format,
-            },
+            metadata=_object_metadata(location),
         )
         return StoredDocument(location=location, size=len(document.content))
 
@@ -178,6 +197,32 @@ class RawDocumentStore:
         if not key or bucket != self.name:
             return False
         return self.bucket.head(key) is not None
+
+    def verify(self, location: DocumentLocation) -> StoredDocument:
+        """Check, without reading it, that an object is the document its key names.
+
+        S3 can announce a new object before the download worker records it,
+        so the analysis worker reconciles the artifact from the object itself
+        instead of waiting a whole visibility timeout for the database.
+        """
+        stored = self.bucket.head(location.key)
+        if stored is None:
+            raise RuntimeError("Stored object is not visible yet")
+        expected = _object_metadata(location)
+        if (
+            any(stored.metadata.get(name) != value for name, value in expected.items())
+            or stored.content_type != location.content_type
+        ):
+            raise PermanentDocumentError(
+                "Stored object metadata does not match the S3 event",
+                code="artifact_identity_mismatch",
+            )
+        ensure_within_size_limit(
+            stored.size,
+            document_size_limit(),
+            subject="Stored document",
+        )
+        return StoredDocument(location=location, size=stored.size)
 
     def read(self, location: DocumentLocation) -> bytes:
         """Read a stored document and check it is the one its key names."""
