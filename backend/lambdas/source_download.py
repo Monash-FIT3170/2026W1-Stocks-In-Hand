@@ -24,6 +24,7 @@ from lambdas.download_validation import (
     declared_length,
     download_document,
     ensure_within_size_limit,
+    raise_for_document_status,
     validate_download_url,
     validated_document,
 )
@@ -84,7 +85,6 @@ _YOURIR_BASES = {
     "anz": "https://yourir.info/resources/4d216b570d08af30/announcements",
     "cba": "https://yourir.info/resources/e381e7bfa5abbe55/announcements",
 }
-_RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429}
 
 
 def _validated_url(adapter: SourceAdapter, url: str) -> str:
@@ -93,21 +93,6 @@ def _validated_url(adapter: SourceAdapter, url: str) -> str:
 
 def _response_content_type(headers: Mapping[str, str]) -> str:
     return headers.get("content-type", "").split(";", 1)[0].strip().lower()
-
-
-def _raise_for_status(status: int, url: str) -> None:
-    if status == 404:
-        raise PermanentDocumentError(
-            "Document no longer exists",
-            code="document_not_found",
-        )
-    if 400 <= status < 500 and status not in _RETRYABLE_HTTP_STATUSES:
-        raise PermanentDocumentError(
-            f"Document request was permanently rejected ({status})",
-            code="document_rejected",
-        )
-    if status >= 400:
-        raise RuntimeError(f"Document request failed with HTTP {status}: {url}")
 
 
 async def _request_document(
@@ -127,7 +112,7 @@ async def _request_document(
         timeout=120_000,
     )
     final_url = _validated_url(adapter, response.url)
-    _raise_for_status(response.status, final_url)
+    raise_for_document_status(response.status, final_url)
 
     ensure_within_size_limit(declared_length(response.headers), max_bytes)
     return validated_document(
@@ -175,7 +160,7 @@ async def _resolve_bhp_document_url(
 ) -> str:
     response = await context.request.get(article_url, timeout=60_000)
     final_article_url = _validated_url("bhp", response.url)
-    _raise_for_status(response.status, final_article_url)
+    raise_for_document_status(response.status, final_article_url)
     html = await response.text()
 
     absolute = re.search(

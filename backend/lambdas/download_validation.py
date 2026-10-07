@@ -18,6 +18,8 @@ from lambdas.common import PermanentDocumentError
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_CODES = {301, 302, 303, 307, 308}
+# Client errors a later attempt can still succeed after.
+RETRYABLE_CLIENT_ERRORS = frozenset({408, 409, 425, 429})
 DEFAULT_ALLOWED_HOSTS = (
     "investors.csl.com",
     "announcements.asx.com.au",
@@ -165,6 +167,26 @@ def _reject_private_resolution(url: str) -> None:
                 "Document host resolved to a non-public address",
                 code="unsafe_document_host",
             )
+
+
+def raise_for_document_status(status: int, url: str) -> None:
+    """Classify a document response's HTTP status as permanent or retryable.
+
+    A missing document, and a client error a retry cannot fix, are
+    permanent. Any other status outside 2xx is retried.
+    """
+    if status == 404:
+        raise PermanentDocumentError(
+            "Document no longer exists",
+            code="document_not_found",
+        )
+    if 400 <= status < 500 and status not in RETRYABLE_CLIENT_ERRORS:
+        raise PermanentDocumentError(
+            f"Document request was permanently rejected ({status})",
+            code="document_rejected",
+        )
+    if not 200 <= status < 300:
+        raise RuntimeError(f"Document request failed with HTTP {status}: {url}")
 
 
 def declared_length(headers) -> int:
@@ -367,20 +389,7 @@ def download_document(
                     )
                     continue
 
-                if response.status_code == 404:
-                    raise PermanentDocumentError(
-                        "Document no longer exists",
-                        code="document_not_found",
-                    )
-                if (
-                    400 <= response.status_code < 500
-                    and response.status_code not in {408, 409, 425, 429}
-                ):
-                    raise PermanentDocumentError(
-                        "Document request was permanently rejected",
-                        code="document_rejected",
-                    )
-                response.raise_for_status()
+                raise_for_document_status(response.status_code, current_url)
 
                 content_type = _content_type(response)
                 if content_type not in SUPPORTED_CONTENT_TYPES:

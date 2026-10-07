@@ -258,6 +258,48 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
 
 @pytest.mark.parametrize(
+    ("status", "outcome"),
+    [
+        (200, None),
+        (404, "document_not_found"),
+        (403, "document_rejected"),
+        (410, "document_rejected"),
+        (429, RuntimeError),
+        (408, RuntimeError),
+        (503, RuntimeError),
+        (304, RuntimeError),
+    ],
+)
+def test_document_responses_classify_their_status(status: int, outcome) -> None:
+    def response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            headers={"content-type": "application/pdf"},
+            content=b"%PDF-1.7\ncontent",
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        def download():
+            return download_document(
+                "https://investors.csl.com/report.pdf",
+                max_bytes=1024,
+                client=client,
+                resolve_hosts=False,
+            )
+
+        if outcome is None:
+            assert download().document_format == "pdf"
+        elif outcome is RuntimeError:
+            with pytest.raises(RuntimeError, match=str(status)):
+                download()
+        else:
+            with pytest.raises(PermanentDocumentError) as error:
+                download()
+            assert error.value.code == outcome
+
+
+@pytest.mark.parametrize(
     ("content", "content_type", "expected_format"),
     [
         (b"%PDF-1.7\ncontent", "application/pdf", "pdf"),
