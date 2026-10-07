@@ -35,6 +35,16 @@ class RIOScraper(BaseScraper):
     riotinto.com wrapper page.
     """
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset(
+        {
+            "www.riotinto.com",
+            "riotinto.com",
+            "ne-cdn.eurolandir.com",
+            "tools.eurolandir.com",
+        }
+    )
+
     EXCHANGE_RELEASES_URL = "https://www.riotinto.com/en/invest/exchange-releases"
 
     # Confirmed by loading /en/invest/exchange-releases directly: the ASX
@@ -149,7 +159,7 @@ class RIOScraper(BaseScraper):
                     return urljoin(self.EXCHANGE_RELEASES_URL, href)
 
             if candidates:
-                print(f"[RIO] No ASX-tagged eurolandir URL found, falling back to default")
+                print("[RIO] No ASX-tagged eurolandir URL found, falling back to default")
             return self.FALLBACK_ASX_FEED_URL
         except Exception as e:
             print(f"[RIO] Failed to resolve ASX feed URL from wrapper page: {e}")

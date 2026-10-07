@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -16,8 +15,6 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from app.messages import QueueBMessage
-from app.sources import AdapterName
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
@@ -30,65 +27,13 @@ from lambdas.download_validation import (
 )
 from scrapers.browser import chromium_launch_options
 
-_ADAPTER_HOSTS: dict[AdapterName, frozenset[str]] = {
-    "anz": frozenset(
-        {
-            "www.anz.com",
-            "anz.com",
-            "www.anz.com.au",
-            "anz.com.au",
-            "yourir.info",
-        }
-    ),
-    "bhp": frozenset({"www.bhp.com", "bhp.com"}),
-    "cba": frozenset(
-        {"www.commbank.com.au", "commbank.com.au", "yourir.info"}
-    ),
-    "coh": frozenset(
-        {
-            "www.cochlear.com",
-            "cochlear.com",
-            "coh.live.irmau.com",
-        }
-    ),
-    "col": frozenset({"www.colesgroup.com.au", "colesgroup.com.au"}),
-    "csl": frozenset({"investors.csl.com"}),
-    "mqg": frozenset({"www.macquarie.com", "macquarie.com"}),
-    "org": frozenset(
-        {"www.originenergy.com.au", "originenergy.com.au"}
-    ),
-    "rio": frozenset(
-        {
-            "www.riotinto.com",
-            "riotinto.com",
-            "ne-cdn.eurolandir.com",
-            "tools.eurolandir.com",
-        }
-    ),
-    "tcl": frozenset(
-        {"www.transurban.com", "transurban.com", "yourir.info"}
-    ),
-    "tls": frozenset(
-        {
-            "www.telstra.com.au",
-            "telstra.com.au",
-            "events.miraqle.com",
-        }
-    ),
-    "wds": frozenset({"www.woodside.com", "woodside.com"}),
-    "wes": frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"}),
-}
 _BROWSER_REQUEST_ADAPTERS = frozenset(
-    {"coh", "col", "mqg", "org", "rio", "tcl", "tls", "wds"}
+    {"coh", "col", "mqg", "org", "rio", "tls", "wds"}
 )
-_YOURIR_BASES = {
-    "anz": "https://yourir.info/resources/4d216b570d08af30/announcements",
-    "cba": "https://yourir.info/resources/e381e7bfa5abbe55/announcements",
-}
 
 
-def _validated_url(adapter: AdapterName, url: str) -> str:
-    return validate_download_url(url, hosts=_ADAPTER_HOSTS[adapter])
+def _validated_url(hosts: frozenset[str], url: str) -> str:
+    return validate_download_url(url, hosts=hosts)
 
 
 def _response_content_type(headers: Mapping[str, str]) -> str:
@@ -98,20 +43,18 @@ def _response_content_type(headers: Mapping[str, str]) -> str:
 async def _request_document(
     context: BrowserContext,
     *,
-    adapter: AdapterName,
+    hosts: frozenset[str],
     url: str,
     referer: str,
     max_bytes: int,
-    params: Mapping[str, str] | None = None,
 ) -> DownloadedDocument:
-    requested_url = _validated_url(adapter, url)
+    requested_url = _validated_url(hosts, url)
     response: APIResponse = await context.request.get(
         requested_url,
         headers={"Referer": referer},
-        params=params,
         timeout=120_000,
     )
-    final_url = _validated_url(adapter, response.url)
+    final_url = _validated_url(hosts, response.url)
     raise_for_document_status(response.status, final_url)
 
     ensure_within_size_limit(declared_length(response.headers), max_bytes)
@@ -123,43 +66,14 @@ async def _request_document(
     )
 
 
-def _download_yourir(
-    *,
-    adapter: AdapterName,
-    source_url: str,
-    document_url: str,
-    metadata: Mapping[str, object],
-    max_bytes: int,
-) -> DownloadedDocument:
-    try:
-        return download_document(
-            _validated_url(adapter, document_url),
-            hosts=_ADAPTER_HOSTS[adapter],
-            referer=source_url,
-            max_bytes=max_bytes,
-        )
-    except PermanentDocumentError as exc:
-        if exc.code != "document_not_found":
-            raise
-        source_id = metadata.get("yourir_id")
-        if not isinstance(source_id, str) or not source_id:
-            raise
-        fallback_url = f"{_YOURIR_BASES[adapter]}/{source_id}/announcement.pdf"
-        return download_document(
-            _validated_url(adapter, fallback_url),
-            hosts=_ADAPTER_HOSTS[adapter],
-            referer=source_url,
-            max_bytes=max_bytes,
-        )
-
-
 async def _resolve_bhp_document_url(
     context: BrowserContext,
     *,
+    hosts: frozenset[str],
     article_url: str,
 ) -> str:
     response = await context.request.get(article_url, timeout=60_000)
-    final_article_url = _validated_url("bhp", response.url)
+    final_article_url = _validated_url(hosts, response.url)
     raise_for_document_status(response.status, final_article_url)
     html = await response.text()
 
@@ -168,7 +82,7 @@ async def _resolve_bhp_document_url(
         html,
     )
     if absolute:
-        return _validated_url("bhp", absolute.group(0))
+        return _validated_url(hosts, absolute.group(0))
     relative = re.search(
         r"""["']([^"'<>]+\.pdf(?:\?[^"'<>]*)?)["']""",
         html,
@@ -206,6 +120,7 @@ def _content_type_for_download(download: Download, content: bytes) -> str:
 async def _download_wes(
     context: BrowserContext,
     *,
+    hosts: frozenset[str],
     source_url: str,
     document_url: str,
     title: str | None,
@@ -215,12 +130,12 @@ async def _download_wes(
     page = await context.new_page()
     try:
         await page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
-        _validated_url("wes", page.url)
+        _validated_url(hosts, page.url)
         await page.wait_for_selector(
             "article.asx-announce div.asx-results li",
             timeout=30_000,
         )
-        expected_url = _validated_url("wes", document_url)
+        expected_url = _validated_url(hosts, document_url)
         raw_href = metadata.get("raw_href")
         target = None
 
@@ -254,7 +169,7 @@ async def _download_wes(
         except PlaywrightTimeoutError as exc:
             raise RuntimeError("Wesfarmers download did not start") from exc
 
-        final_url = _validated_url("wes", browser_download.url)
+        final_url = _validated_url(hosts, browser_download.url)
         raw_temporary_path = await browser_download.path()
         if raw_temporary_path is None:
             raise RuntimeError("Browser did not provide a downloaded file path")
@@ -275,7 +190,7 @@ async def _download_wes(
 
 
 def _request_referer(
-    adapter: AdapterName,
+    hosts: frozenset[str],
     source_url: str,
     metadata: Mapping[str, object],
 ) -> str:
@@ -286,46 +201,41 @@ def _request_referer(
     for key in ("feed_url", "listing_url", "article_url"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
-            return _validated_url(adapter, value)
-    return _validated_url(adapter, source_url)
+            return _validated_url(hosts, value)
+    return _validated_url(hosts, source_url)
 
 
 async def _download_browser_request(
     context: BrowserContext,
     *,
-    adapter: AdapterName,
+    hosts: frozenset[str],
     source_url: str,
     document_url: str,
     metadata: Mapping[str, object],
     max_bytes: int,
 ) -> DownloadedDocument:
     """Recreate the short-lived browser session used by expanded adapters."""
-    referer = _request_referer(adapter, source_url, metadata)
+    referer = _request_referer(hosts, source_url, metadata)
     page = await context.new_page()
     try:
         await page.goto(referer, wait_until="domcontentloaded", timeout=60_000)
-        _validated_url(adapter, page.url)
+        _validated_url(hosts, page.url)
     finally:
         await page.close()
 
-    params = (
-        {"appID": "a50955429d255a58", "liveness": "live"}
-        if adapter == "tcl"
-        else None
-    )
     return await _request_document(
         context,
-        adapter=adapter,
+        hosts=hosts,
         url=document_url,
         referer=referer,
         max_bytes=max_bytes,
-        params=params,
     )
 
 
 async def resolve_session_download(
     *,
     source_adapter: str,
+    hosts: frozenset[str],
     source_url: str,
     document_url: str,
     title: str | None,
@@ -333,25 +243,14 @@ async def resolve_session_download(
     max_bytes: int,
 ) -> DownloadedDocument:
     """Resolve and download one document using a fresh, non-persisted session."""
-    if source_adapter not in {"anz", "bhp", "cba", "wes"}.union(
-        _BROWSER_REQUEST_ADAPTERS
-    ):
+    if source_adapter not in {"bhp", "wes"}.union(_BROWSER_REQUEST_ADAPTERS):
         raise PermanentDocumentError(
             "Source does not use a browser download session",
             code="unsupported_source",
         )
-    adapter: AdapterName = source_adapter  # type: ignore[assignment]
-    validated_source_url = _validated_url(adapter, source_url)
-    validated_document_url = _validated_url(adapter, document_url)
-
-    if adapter in {"anz", "cba"}:
-        return _download_yourir(
-            adapter=adapter,
-            source_url=validated_source_url,
-            document_url=validated_document_url,
-            metadata=metadata,
-            max_bytes=max_bytes,
-        )
+    adapter = source_adapter
+    validated_source_url = _validated_url(hosts, source_url)
+    validated_document_url = _validated_url(hosts, document_url)
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
@@ -371,11 +270,12 @@ async def resolve_session_download(
             if adapter == "bhp":
                 resolved_url = await _resolve_bhp_document_url(
                     context,
+                    hosts=hosts,
                     article_url=validated_document_url,
                 )
                 return await _request_document(
                     context,
-                    adapter=adapter,
+                    hosts=hosts,
                     url=resolved_url,
                     referer=validated_document_url,
                     max_bytes=max_bytes,
@@ -383,7 +283,7 @@ async def resolve_session_download(
             if adapter in _BROWSER_REQUEST_ADAPTERS:
                 return await _download_browser_request(
                     context,
-                    adapter=adapter,
+                    hosts=hosts,
                     source_url=validated_source_url,
                     document_url=validated_document_url,
                     metadata=metadata,
@@ -391,6 +291,7 @@ async def resolve_session_download(
                 )
             return await _download_wes(
                 context,
+                hosts=hosts,
                 source_url=validated_source_url,
                 document_url=validated_document_url,
                 title=title,
@@ -404,6 +305,7 @@ async def resolve_session_download(
 async def fetch_document(
     *,
     source_adapter: str,
+    hosts: frozenset[str],
     source_url: str,
     document_url: str,
     title: str | None,
@@ -415,27 +317,10 @@ async def fetch_document(
         return download_document(document_url, max_bytes=max_bytes)
     return await resolve_session_download(
         source_adapter=source_adapter,
+        hosts=hosts,
         source_url=source_url,
         document_url=document_url,
         title=title,
         metadata=metadata,
         max_bytes=max_bytes,
-    )
-
-
-def resolve_download(
-    message: QueueBMessage,
-    *,
-    max_bytes: int,
-) -> DownloadedDocument:
-    """Download one Queue B document using the minimum strategy for its source."""
-    return asyncio.run(
-        fetch_document(
-            source_adapter=message.source_adapter,
-            source_url=str(message.source_url),
-            document_url=str(message.document_url),
-            title=message.title,
-            metadata=message.metadata,
-            max_bytes=max_bytes,
-        )
     )

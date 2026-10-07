@@ -11,6 +11,9 @@ from ..browser import chromium_launch_options
 class COHScraper(BaseScraper):
     """Cochlear ASX announcements scraper via IRM feed iframe source."""
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.cochlear.com", "cochlear.com", "coh.live.irmau.com"})
+
     IRM_BASE = "https://coh.live.irmau.com/irm/ShowCategory.aspx"
 
     @property

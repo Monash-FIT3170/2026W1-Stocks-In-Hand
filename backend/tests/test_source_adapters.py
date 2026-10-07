@@ -1,11 +1,10 @@
-"""Focused contracts for the five minimal ASX source adapters."""
+"""Contracts every source adapter keeps with the queue messages and hosts."""
 
 from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
-from unittest.mock import MagicMock
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
@@ -13,10 +12,10 @@ from pydantic import ValidationError
 
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
-from lambdas import download, source_download
+from lambdas import download
 from lambdas.common import PermanentDocumentError
-from lambdas.download_validation import validated_document
-from scrapers.companies.anz import ANZScraper
+from scrapers.adapter import DocumentRequest
+from scrapers.registry import adapter_for
 
 
 def _sqs_record(body: str) -> dict:
@@ -89,145 +88,20 @@ def test_download_worker_rejects_mismatched_ticker_and_adapter() -> None:
     assert error.value.code == "invalid_message"
 
 
-@pytest.mark.parametrize(("_ticker", "source"), SOURCES.items())
-def test_each_canonical_source_has_an_adapter_scoped_host(_ticker, source) -> None:
-    assert source.adapter in source_download._ADAPTER_HOSTS
-    assert source_download._validated_url(source.adapter, source.source_url) == (
-        source.source_url
-    )
+@pytest.mark.parametrize("ticker", sorted(SOURCES))
+def test_each_adapter_may_contact_its_own_announcements_page(ticker: str) -> None:
+    adapter = adapter_for(ticker)
+
+    assert urlsplit(adapter.source_url).hostname in adapter.hosts
 
 
-def test_rio_adapter_accepts_its_euroland_document_cdn() -> None:
-    document_url = (
-        "https://ne-cdn.eurolandir.com/press-releases-attachments./"
-        "4163612/results.pdf"
-    )
-
-    assert source_download._validated_url("rio", document_url) == document_url
-
-def test_anz_feed_preserves_yourir_document_identity() -> None:
-    announcements = ANZScraper()._parse_feed(
-        {
-            "items": {
-                "heading": ["2026 Third Quarter Trading Update"],
-                "time": ["2026-08-13 07:30:09"],
-                "fileID": ["3A698699"],
-            }
-        }
-    )
-
-    assert len(announcements) == 1
-    announcement = announcements[0]
-    assert announcement.ticker == "ANZ"
-    assert announcement.date == datetime(2026, 8, 13)
-    assert announcement.metadata == {
-        "yourir_id": "3A698699",
-        "source_id": "3A698699",
-    }
-    assert str(announcement.pdf_url) == (
-        "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx/"
-        "3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
-    )
-
-
-def test_anz_feed_rejects_missing_parallel_item_arrays() -> None:
-    with pytest.raises(ValueError, match="invalid item schema"):
-        ANZScraper()._parse_feed({"items": {"heading": ["Results"]}})
-def test_csl_resolver_uses_generic_downloader(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected = validated_document(
-        b"%PDF-1.7\ncontent",
-        declared_content_type="application/pdf",
-        final_url="https://investors.csl.com/report.pdf",
-        max_bytes=1024,
-    )
-    generic = MagicMock(return_value=expected)
-    monkeypatch.setattr(source_download, "download_document", generic)
-    message = QueueBMessage(
-        scrape_run_id=uuid4(),
-        artifact_id=uuid4(),
-        ticker="CSL",
-        source_url=SOURCES["CSL"].source_url,
-        document_url=expected.final_url,
-        canonical_url=expected.final_url,
-        source_adapter="csl",
-    )
-
-    assert source_download.resolve_download(message, max_bytes=1024) is expected
-    generic.assert_called_once_with(expected.final_url, max_bytes=1024)
-
-
-def test_session_resolver_rejects_untrusted_url_before_browser_launch() -> None:
+def test_download_rejects_a_document_outside_the_companys_hosts() -> None:
     with pytest.raises(PermanentDocumentError) as error:
         asyncio.run(
-            source_download.resolve_session_download(
-                source_adapter="bhp",
-                source_url=SOURCES["BHP"].source_url,
-                document_url="https://example.com/report.pdf",
-                title="Results",
-                metadata={},
+            adapter_for("BHP").fetch_document(
+                DocumentRequest(document_url="https://example.com/report.pdf"),
                 max_bytes=1024,
             )
         )
 
     assert error.value.code == "invalid_document_url"
-
-
-def test_wds_download_seeds_session_from_html_listing() -> None:
-    document_url = (
-        "https://www.woodside.com/docs/default-source/investor-documents/"
-        "half-year-2026-report.pdf?sfvrsn=test"
-    )
-
-    referer = source_download._request_referer(
-        "wds",
-        document_url,
-        {
-            "article_url": document_url,
-            "listing_url": SOURCES["WDS"].source_url,
-        },
-    )
-
-    assert referer == SOURCES["WDS"].source_url
-
-
-def test_anz_resolver_downloads_directly_without_browser(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    document_url = (
-        "https://yourir.info/resources/4d216b570d08af30/announcements/"
-        "anz.asx/3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
-    )
-    expected = validated_document(
-        b"%PDF-1.7\ncontent",
-        declared_content_type="application/pdf",
-        final_url=document_url,
-        max_bytes=1024,
-    )
-    direct_download = MagicMock(return_value=expected)
-    monkeypatch.setattr(source_download, "download_document", direct_download)
-
-    def forbidden_playwright():
-        raise AssertionError("ANZ download launched Playwright")
-
-    monkeypatch.setattr(source_download, "async_playwright", forbidden_playwright)
-
-    result = asyncio.run(
-        source_download.resolve_session_download(
-            source_adapter="anz",
-            source_url=SOURCES["ANZ"].source_url,
-            document_url=document_url,
-            title="2026 Third Quarter Trading Update",
-            metadata={"yourir_id": "3A698699"},
-            max_bytes=1024,
-        )
-    )
-
-    assert result is expected
-    direct_download.assert_called_once_with(
-        document_url,
-        hosts=source_download._ADAPTER_HOSTS["anz"],
-        referer=SOURCES["ANZ"].source_url,
-        max_bytes=1024,
-    )

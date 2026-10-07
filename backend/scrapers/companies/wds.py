@@ -24,6 +24,9 @@ class WDSScraper(BaseScraper):
     cases are handled below rather than assumed.
     """
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.woodside.com", "woodside.com"})
+
     # How many `?pageNo=` pages to walk before stopping. Kept small since
     # this mirrors the "recent announcements" scope every other scraper in
     # this repo uses — bump this if a deeper backfill is ever needed.

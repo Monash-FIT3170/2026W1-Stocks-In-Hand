@@ -38,6 +38,9 @@ class MQGScraper(BaseScraper):
     WDS/RIO/ORG scrapers.
     """
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.macquarie.com", "macquarie.com"})
+
     LISTING_URL = "https://www.macquarie.com/au/en/investors/reports.html"
 
     @property

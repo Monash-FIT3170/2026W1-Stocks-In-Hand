@@ -16,6 +16,7 @@ class Announcement:
 
 
 class BaseScraper(ABC):
+    HOSTS: frozenset[str]
 
     @property
     @abstractmethod

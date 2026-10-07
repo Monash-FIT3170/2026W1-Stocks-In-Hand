@@ -10,6 +10,9 @@ from ..browser import chromium_launch_options
 
 class COLScraper(BaseScraper):
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.colesgroup.com.au", "colesgroup.com.au"})
+
     @property
     def ticker(self) -> str:
         return "COL"

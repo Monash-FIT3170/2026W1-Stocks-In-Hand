@@ -9,6 +9,9 @@ from ..browser import chromium_launch_options
 
 class WESScraper(BaseScraper):
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"})
+
     @property
     def ticker(self) -> str:
         return "WES"

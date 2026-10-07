@@ -30,6 +30,9 @@ class ORGScraper(BaseScraper):
     WDS/RIO, rather than betting on unverified CSS selectors.
     """
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.originenergy.com.au", "originenergy.com.au"})
+
     LISTING_BASE_URL = "https://www.originenergy.com.au/about/investors-media/media-releases/"
 
     # `?query-0-page=N` goes up to ~66 on the live site; kept small here to

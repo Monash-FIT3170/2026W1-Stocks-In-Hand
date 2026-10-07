@@ -7,22 +7,23 @@ fetches them through ``adapter_named(message.source_adapter)``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from app.sources import SOURCES, AdapterName, SourceDefinition, normalise_symbol
 
 from .adapter import DocumentRequest, SourceAdapter
 from .base import Announcement, BaseScraper
-from .companies.anz import ANZScraper
+from .companies.anz import ANZAdapter
 from .companies.bhp import BHPScraper
-from .companies.cba import CBAScraper
+from .companies.cba import CBAAdapter
 from .companies.coh import COHScraper
 from .companies.col import COLScraper
 from .companies.csl import CSLScraper
 from .companies.mqg import MQGScraper
 from .companies.org import ORGScraper
 from .companies.rio import RIOScraper
-from .companies.tcl import TCLScraper
+from .companies.tcl import TCLAdapter
 from .companies.tls import TLSScraper
 from .companies.wds import WDSScraper
 from .companies.wes import WESScraper
@@ -41,6 +42,7 @@ class ScraperAdapter(SourceAdapter):
     def __init__(self, source: SourceDefinition, scraper: type[BaseScraper]) -> None:
         super().__init__(source)
         self.scraper = scraper
+        self.hosts = scraper.HOSTS
 
     async def list_documents(self) -> list[Announcement]:
         return await self.scraper().fetch_announcements()
@@ -55,6 +57,7 @@ class ScraperAdapter(SourceAdapter):
 
         return await fetch_document(
             source_adapter=self.source.adapter,
+            hosts=self.hosts,
             source_url=self.source_url,
             document_url=request.document_url,
             title=request.title,
@@ -63,24 +66,28 @@ class ScraperAdapter(SourceAdapter):
         )
 
 
-_SCRAPERS: dict[AdapterName, type[BaseScraper]] = {
-    "anz": ANZScraper,
-    "bhp": BHPScraper,
-    "cba": CBAScraper,
-    "coh": COHScraper,
-    "col": COLScraper,
-    "csl": CSLScraper,
-    "mqg": MQGScraper,
-    "org": ORGScraper,
-    "rio": RIOScraper,
-    "tcl": TCLScraper,
-    "tls": TLSScraper,
-    "wds": WDSScraper,
-    "wes": WESScraper,
+def _scraped(scraper: type[BaseScraper]) -> Callable[[SourceDefinition], SourceAdapter]:
+    return lambda source: ScraperAdapter(source, scraper)
+
+
+_ADAPTER_TYPES: dict[AdapterName, Callable[[SourceDefinition], SourceAdapter]] = {
+    "anz": ANZAdapter,
+    "bhp": _scraped(BHPScraper),
+    "cba": CBAAdapter,
+    "coh": _scraped(COHScraper),
+    "col": _scraped(COLScraper),
+    "csl": _scraped(CSLScraper),
+    "mqg": _scraped(MQGScraper),
+    "org": _scraped(ORGScraper),
+    "rio": _scraped(RIOScraper),
+    "tcl": TCLAdapter,
+    "tls": _scraped(TLSScraper),
+    "wds": _scraped(WDSScraper),
+    "wes": _scraped(WESScraper),
 }
 
 ADAPTERS: dict[AdapterName, SourceAdapter] = {
-    source.adapter: ScraperAdapter(source, _SCRAPERS[source.adapter])
+    source.adapter: _ADAPTER_TYPES[source.adapter](source)
     for source in SOURCES.values()
 }
 

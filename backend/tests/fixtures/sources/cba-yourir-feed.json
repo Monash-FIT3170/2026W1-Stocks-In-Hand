@@ -1,0 +1,226 @@
+{
+ "pageCount": 1118,
+ "symbol": "cba.asx",
+ "date": "2026-10-07",
+ "page": 1,
+ "pageSize": 12,
+ "itemCount": 12,
+ "shortName": "CWLTH BANK",
+ "totalCount": 13409,
+ "items": {
+  "pageCount": [
+   86,
+   2,
+   2,
+   2,
+   3,
+   13,
+   12,
+   9,
+   80,
+   7,
+   5,
+   5
+  ],
+  "attachmentCount": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "time": [
+   "2026-10-07 15:24:35",
+   "2026-10-06 09:37:24",
+   "2026-10-06 09:32:15",
+   "2026-10-06 09:28:59",
+   "2026-10-06 09:24:19",
+   "2026-10-01 09:10:23",
+   "2026-09-30 10:54:24",
+   "2026-09-29 13:25:25",
+   "2026-09-25 13:17:52",
+   "2026-09-21 16:36:16",
+   "2026-09-17 15:18:29",
+   "2026-09-17 15:15:54"
+  ],
+  "types": [
+   [
+    "02001"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "14013"
+   ],
+   [
+    "06018"
+   ],
+   [
+    "02003"
+   ],
+   [
+    "02001"
+   ],
+   [
+    "10006",
+    "10001",
+    "10002",
+    "10003"
+   ],
+   [
+    "10001",
+    "10002",
+    "10003"
+   ],
+   [
+    "10001",
+    "10002",
+    "10003"
+   ]
+  ],
+  "heading": [
+   "Becoming a substantial holder for CAR",
+   "Appendix 3Y - Jane McAloon",
+   "Appendix 3Y - Alistair Currie",
+   "Appendix 3Y - Kate Howitt",
+   "Appendix 3Y - Julie Galbo",
+   "Group Personal Trading Policy",
+   "Issue of CNH 2,000,000,000 worth of Subordinated Notes",
+   "Ceasing to be a substantial holder for CAR",
+   "Becoming a substantial holder for CAR",
+   "Update - Dividend/Distribution - CBA",
+   "Dividend/Distribution - CBAPM",
+   "Dividend/Distribution - CBAPL"
+  ],
+  "retracted": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "timestamp": [
+   1791347075,
+   1791239844,
+   1791239535,
+   1791239339,
+   1791239059,
+   1790809823,
+   1790729664,
+   1790652325,
+   1790306272,
+   1789972576,
+   1789622309,
+   1789622154
+  ],
+  "fileID": [
+   "2A1702632",
+   "2A1701924",
+   "2A1701922",
+   "2A1701920",
+   "2A1701915",
+   "2A1700953",
+   "2A1700563",
+   "2A1700186",
+   "2A1699402",
+   "2A1698216",
+   "2A1697711",
+   "2A1697710"
+  ],
+  "issuingSymbol": [
+   "car.asx",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "car.asx",
+   "car.asx",
+   null,
+   null,
+   null
+  ],
+  "issuingFileID": [
+   "3A703550",
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   "3A702773",
+   "3A702557",
+   null,
+   null,
+   null
+  ],
+  "priceSensitive": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "fileSize": [
+   2989703,
+   235280,
+   231624,
+   237154,
+   238126,
+   358622,
+   420468,
+   263273,
+   2759535,
+   20436,
+   12972,
+   12971
+  ],
+  "fileType": [
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf"
+  ]
+ },
+ "underlyingIssuerSymbol": "cba.asx"
+}

@@ -32,6 +32,9 @@ class DocumentRequest:
 
 
 class SourceAdapter(ABC):
+    # Hosts this company's documents may be downloaded from.
+    hosts: frozenset[str]
+
     def __init__(self, source: SourceDefinition) -> None:
         self.source = source
 

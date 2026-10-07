@@ -9,6 +9,9 @@ from ..browser import chromium_launch_options
 
 class CSLScraper(BaseScraper):
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"investors.csl.com"})
+
     @property
     def ticker(self) -> str:
         return "CSL"

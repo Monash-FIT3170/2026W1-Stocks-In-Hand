@@ -10,6 +10,9 @@ from ..browser import chromium_launch_options
 
 class TLSScraper(BaseScraper):
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.telstra.com.au", "telstra.com.au", "events.miraqle.com"})
+
     @property
     def ticker(self) -> str:
         return "TLS"

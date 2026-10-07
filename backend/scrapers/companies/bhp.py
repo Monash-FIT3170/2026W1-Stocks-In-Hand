@@ -17,6 +17,9 @@ def clean_bhp_title(raw_title: str, article_url: str) -> str:
 
 class BHPScraper(BaseScraper):
 
+    # Hosts this company's documents may be downloaded from.
+    HOSTS = frozenset({"www.bhp.com", "bhp.com"})
+
     @property
     def ticker(self) -> str:
         return "BHP"
