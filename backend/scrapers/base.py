@@ -1,11 +1,16 @@
-from datetime import datetime
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
 @dataclass
 class Announcement:
+    """One document a source adapter listed, before it is downloaded.
+
+    ``metadata`` holds the adapter's resolution hints; Queue B carries it to
+    the same adapter's fetch_document.
+    """
+
     ticker: str
     title: str
     date: datetime
@@ -13,23 +18,3 @@ class Announcement:
     source_url: str
     local_path: Path | None = None
     metadata: dict = field(default_factory=dict)
-
-
-class BaseScraper(ABC):
-    HOSTS: frozenset[str]
-
-    @property
-    @abstractmethod
-    def ticker(self) -> str: ...
-
-    @property
-    @abstractmethod
-    def source_url(self) -> str: ...
-
-    @abstractmethod
-    async def fetch_announcements(self) -> list[Announcement]:
-        """
-        Navigate the IR page and return announcement metadata.
-        No downloading occurs here.
-        """
-        ...

@@ -18,7 +18,7 @@ from scrapers.adapter import DocumentRequest
 from scrapers.companies.anz import ANZAdapter
 from scrapers.companies.cba import CBAAdapter
 from scrapers.companies.tcl import TCLAdapter
-from scrapers.fetching import RecordedFetcher
+from scrapers.fetching import RecordedFetcher, request_key
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sources"
 PDF = b"%PDF-1.7\nannouncement"
@@ -28,14 +28,21 @@ def _feed(name: str) -> dict:
     return json.loads((FIXTURES / f"{name}-yourir-feed.json").read_text())
 
 
-def _adapter(adapter_type, ticker: str, responses: dict) -> tuple:
-    fetcher = RecordedFetcher(responses)
+def _adapter(adapter_type, ticker: str, answers: dict) -> tuple:
+    fetcher = RecordedFetcher(answers=answers)
     return adapter_type(SOURCES[ticker], fetcher), fetcher
 
 
+def _feed_answer(adapter_type, payload) -> dict:
+    return {request_key("GET-JSON", adapter_type.feed.feed_url): payload}
+
+
+def _document_answers(documents: dict) -> dict:
+    return {request_key("DOWNLOAD", url): answer for url, answer in documents.items()}
+
+
 def _listed(adapter_type, ticker: str, name: str):
-    feed_url = adapter_type.feed.feed_url
-    adapter, fetcher = _adapter(adapter_type, ticker, {feed_url: _feed(name)})
+    adapter, fetcher = _adapter(adapter_type, ticker, _feed_answer(adapter_type, _feed(name)))
     return asyncio.run(adapter.list_documents()), fetcher.requests[0]
 
 
@@ -105,7 +112,7 @@ def test_feed_entries_without_an_id_heading_or_time_are_skipped() -> None:
             "time": ["2026-10-05 17:37:16"] * 4,
         }
     }
-    adapter, _fetcher = _adapter(ANZAdapter, "ANZ", {ANZAdapter.feed.feed_url: feed})
+    adapter, _fetcher = _adapter(ANZAdapter, "ANZ", _feed_answer(ANZAdapter, feed))
 
     [only] = asyncio.run(adapter.list_documents())
 
@@ -117,7 +124,7 @@ def test_a_feed_without_its_item_arrays_is_rejected() -> None:
     adapter, _fetcher = _adapter(
         ANZAdapter,
         "ANZ",
-        {ANZAdapter.feed.feed_url: {"items": {"heading": ["Results"]}}},
+        _feed_answer(ANZAdapter, {"items": {"heading": ["Results"]}}),
     )
 
     with pytest.raises(ValueError, match="invalid item schema"):
@@ -130,12 +137,14 @@ def _fetch(adapter, request: DocumentRequest):
 
 def test_anz_fetches_the_resource_with_its_page_as_referer() -> None:
     url = "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx/3A1/ANZ_Results.pdf"
-    adapter, fetcher = _adapter(ANZAdapter, "ANZ", {url: PDF})
+    adapter, fetcher = _adapter(ANZAdapter, "ANZ", _document_answers({url: PDF}))
 
     document = _fetch(adapter, DocumentRequest(url, metadata={"yourir_id": "3A1"}))
 
     assert document.content == PDF
-    assert fetcher.requests == [{"url": url, "referer": SOURCES["ANZ"].source_url}]
+    assert fetcher.requests == [
+        {"method": "DOWNLOAD", "url": url, "referer": SOURCES["ANZ"].source_url}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -163,7 +172,9 @@ def test_a_missing_resource_falls_back_to_its_fixed_file_name(
 ) -> None:
     url = f"{adapter_type.feed.resources_url}/renamed.pdf"
     missing = PermanentDocumentError("Document no longer exists", code="document_not_found")
-    adapter, _fetcher = _adapter(adapter_type, ticker, {url: missing, fallback: PDF})
+    adapter, _fetcher = _adapter(
+        adapter_type, ticker, _document_answers({url: missing, fallback: PDF})
+    )
 
     document = _fetch(adapter, DocumentRequest(url, metadata={"yourir_id": yourir_id}))
 
@@ -173,7 +184,7 @@ def test_a_missing_resource_falls_back_to_its_fixed_file_name(
 def test_a_rejected_resource_does_not_fall_back() -> None:
     url = "https://yourir.info/resources/4d216b570d08af30/announcements/anz.asx/3A1/x.pdf"
     rejected = PermanentDocumentError("Rejected", code="document_rejected")
-    adapter, fetcher = _adapter(ANZAdapter, "ANZ", {url: rejected})
+    adapter, fetcher = _adapter(ANZAdapter, "ANZ", _document_answers({url: rejected}))
 
     with pytest.raises(PermanentDocumentError):
         _fetch(adapter, DocumentRequest(url, metadata={"yourir_id": "3A1"}))
@@ -184,7 +195,7 @@ def test_a_rejected_resource_does_not_fall_back() -> None:
 def test_tcl_fetches_the_feed_document_for_its_app() -> None:
     url = "https://yourir.info/api/v5/symbols/tcl.asx/announcements/3A703481/document"
     requested = f"{url}?appID=a50955429d255a58&liveness=live"
-    adapter, fetcher = _adapter(TCLAdapter, "TCL", {requested: PDF})
+    adapter, fetcher = _adapter(TCLAdapter, "TCL", _document_answers({requested: PDF}))
 
     document = _fetch(adapter, DocumentRequest(url))
 

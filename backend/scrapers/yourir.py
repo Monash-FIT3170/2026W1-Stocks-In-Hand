@@ -23,10 +23,8 @@ from lambdas.common import PermanentDocumentError
 
 from .adapter import DocumentRequest, SourceAdapter
 from .base import Announcement
-from .fetching import Fetcher, HttpFetcher
 
 if TYPE_CHECKING:
-    from app.sources import SourceDefinition
     from lambdas.download_validation import DownloadedDocument
 
 API_URL = "https://yourir.info/api/v5/symbols"
@@ -57,29 +55,25 @@ class YourIRFeed:
 
 class YourIRAdapter(SourceAdapter):
     feed: YourIRFeed
-    hosts: frozenset[str]
-
-    def __init__(self, source: SourceDefinition, fetcher: Fetcher | None = None) -> None:
-        super().__init__(source)
-        self.fetcher = fetcher or HttpFetcher()
 
     async def list_documents(self) -> list[Announcement]:
-        payload = await self.fetcher.get_json(
+        async with self.fetcher.session() as web:
+            payload = await web.get_json(
             self.feed.feed_url,
-            params={
-                "appID": self.feed.app_id,
-                "includeEmbargoed": 1,
-                "includeOtherIssuers": int(self.feed.include_other_issuers),
-                "includeRetracted": 0,
-                "liveness": "live",
-                "order": "desc",
-                "page": 1,
-                "pageSize": self.feed.page_size,
-                "priceSensitiveOnly": 0,
-                "range": "all",
-            },
-            headers={"Referer": self.feed.referer},
-        )
+                params={
+                    "appID": self.feed.app_id,
+                    "includeEmbargoed": 1,
+                    "includeOtherIssuers": int(self.feed.include_other_issuers),
+                    "includeRetracted": 0,
+                    "liveness": "live",
+                    "order": "desc",
+                    "page": 1,
+                    "pageSize": self.feed.page_size,
+                    "priceSensitiveOnly": 0,
+                    "range": "all",
+                },
+                headers={"Referer": self.feed.referer},
+            )
         return [self._announcement(item) for item in feed_items(payload)]
 
     def _announcement(self, item: FeedItem) -> Announcement:
@@ -122,31 +116,32 @@ class YourIRAdapter(SourceAdapter):
         *,
         max_bytes: int,
     ) -> DownloadedDocument:
-        if self.feed.documents == "api":
-            return await self.fetcher.download(
-                f"{request.document_url}?appID={self.feed.app_id}&liveness=live",
-                hosts=self.hosts,
-                referer=self.source_url,
-                max_bytes=max_bytes,
-            )
-        try:
-            return await self.fetcher.download(
-                request.document_url,
-                hosts=self.hosts,
-                referer=self.source_url,
-                max_bytes=max_bytes,
-            )
-        except PermanentDocumentError as exc:
-            # YourIR also serves every resource under a fixed file name.
-            yourir_id = request.metadata.get("yourir_id")
-            if exc.code != "document_not_found" or not isinstance(yourir_id, str) or not yourir_id:
-                raise
-            return await self.fetcher.download(
-                f"{self.feed.resources_url}/{yourir_id}/announcement.pdf",
-                hosts=self.hosts,
-                referer=self.source_url,
-                max_bytes=max_bytes,
-            )
+        async with self.fetcher.session() as web:
+            if self.feed.documents == "api":
+                return await web.download(
+                    f"{request.document_url}?appID={self.feed.app_id}&liveness=live",
+                    hosts=self.hosts,
+                    referer=self.source_url,
+                    max_bytes=max_bytes,
+                )
+            try:
+                return await web.download(
+                    request.document_url,
+                    hosts=self.hosts,
+                    referer=self.source_url,
+                    max_bytes=max_bytes,
+                )
+            except PermanentDocumentError as exc:
+                # YourIR also serves every resource under a fixed file name.
+                yourir_id = request.metadata.get("yourir_id")
+                if exc.code != "document_not_found" or not yourir_id:
+                    raise
+                return await web.download(
+                    f"{self.feed.resources_url}/{yourir_id}/announcement.pdf",
+                    hosts=self.hosts,
+                    referer=self.source_url,
+                    max_bytes=max_bytes,
+                )
 
 
 @dataclass(frozen=True)

@@ -6,20 +6,27 @@ to list its recent documents (discovery) and how to fetch one of them
 Announcement's metadata, Queue B carries that metadata unchanged, and
 download hands it back to the same adapter, so both halves of a company's
 knowledge sit in one place.
+
+Each adapter splits its work into a thin fetch step, which asks a web
+session (``scrapers.fetching``) for pages, and a pure parse step over the
+returned HTML or JSON, so parsing is tested against recorded pages.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from app.sources import SourceDefinition
 from scrapers.base import Announcement
+from scrapers.fetching import Fetcher, LiveFetcher
 
 if TYPE_CHECKING:
     from lambdas.download_validation import DownloadedDocument
+    from scrapers.fetching import WebSession
 
 
 @dataclass(frozen=True)
@@ -32,11 +39,18 @@ class DocumentRequest:
 
 
 class SourceAdapter(ABC):
-    # Hosts this company's documents may be downloaded from.
+    # Hosts this company's pages and documents may be fetched from.
     hosts: frozenset[str]
 
-    def __init__(self, source: SourceDefinition) -> None:
+    def __init__(
+        self,
+        source: SourceDefinition,
+        fetcher: Fetcher | None = None,
+        clock: Callable[[], datetime] = datetime.now,
+    ) -> None:
         self.source = source
+        self.fetcher = fetcher or LiveFetcher()
+        self.clock = clock
 
     @property
     def ticker(self) -> str:
@@ -58,3 +72,49 @@ class SourceAdapter(ABC):
         max_bytes: int,
     ) -> DownloadedDocument:
         """Download and validate one document this adapter listed."""
+
+    def _validated(self, url: str) -> str:
+        from lambdas.download_validation import validate_download_url
+
+        return validate_download_url(url, hosts=self.hosts)
+
+
+class SeededBrowserDownload:
+    """Download through a browser session first seeded by a listing page.
+
+    These sites only serve documents to a browser that has visited them, so
+    download opens the page discovery found the document on (the feed,
+    listing or article URL in its metadata) before requesting the document
+    with that page as the referer.
+    """
+
+    session_options: Mapping[str, object] = {"disable_http2": True}
+
+    async def fetch_document(
+        self: SourceAdapter,  # type: ignore[misc]
+        request: DocumentRequest,
+        *,
+        max_bytes: int,
+    ) -> DownloadedDocument:
+        document_url = self._validated(request.document_url)
+        seed = self._validated(_seed_url(request.metadata) or self.source_url)
+        async with self.fetcher.session(**self.session_options) as web:  # type: ignore[attr-defined]
+            web: WebSession
+            return await web.request_document(
+                document_url,
+                hosts=self.hosts,
+                referer=seed,
+                max_bytes=max_bytes,
+                seed_url=seed,
+            )
+
+
+def _seed_url(metadata: Mapping[str, object]) -> str | None:
+    # Prefer an HTML listing over an article URL: some sites (notably WDS)
+    # list direct PDF links as their article URL, and opening a PDF as the
+    # seed page starts a download instead of loading a page.
+    for key in ("feed_url", "listing_url", "article_url"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None

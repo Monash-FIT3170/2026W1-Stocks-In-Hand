@@ -1,78 +1,72 @@
+"""CSL: the ASX announcements list on CSL's investor site."""
+
+from __future__ import annotations
+
 from datetime import datetime
 from urllib.parse import urljoin, urlsplit
 
-from playwright.async_api import async_playwright
+from ..adapter import DocumentRequest, SourceAdapter
+from ..base import Announcement
+from ..fetching import Page, Render
+from ..html import parse_html
 
-from ..base import BaseScraper, Announcement
-from ..browser import chromium_launch_options
+LISTING = Render(wait_for="div.list-item", wait_for_timeout_ms=30_000, required=True)
 
 
-class CSLScraper(BaseScraper):
+class CSLAdapter(SourceAdapter):
+    # CSL's PDFs can redirect to the ASX's own announcement hosts.
+    hosts = frozenset(
+        {"investors.csl.com", "announcements.asx.com.au", "wcsecure.weblink.com.au"}
+    )
 
-    # Hosts this company's documents may be downloaded from.
-    HOSTS = frozenset({"investors.csl.com"})
+    async def list_documents(self) -> list[Announcement]:
+        async with self.fetcher.session() as web:
+            page = await web.render(self.source_url, LISTING)
+        return parse_listing(page, ticker=self.ticker, source_url=self.source_url)
 
-    @property
-    def ticker(self) -> str:
-        return "CSL"
+    async def fetch_document(self, request: DocumentRequest, *, max_bytes: int):
+        async with self.fetcher.session() as web:
+            return await web.download(
+                self._validated(request.document_url),
+                hosts=self.hosts,
+                referer="https://investors.csl.com/",
+                max_bytes=max_bytes,
+            )
 
-    @property
-    def source_url(self) -> str:
-        return "https://investors.csl.com/investors/asx-announcements"
 
-    async def fetch_announcements(self) -> list[Announcement]:
-        """Discover CSL documents without downloading or writing any files."""
-        announcements: list[Announcement] = []
+def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcement]:
+    announcements: list[Announcement] = []
+    for item in parse_html(page.html).select("div.list-item"):
+        date_element = item.select_one("div.list-date")
+        link = item.select_one("a.asx-document")
+        if date_element is None or link is None:
+            continue
+        title = link.text.strip()
+        href = link.get("href")
+        if not title or not href:
+            continue
+        date = _parse_date(date_element.text.strip())
+        if date is None:
+            continue
+        document_url = urljoin(source_url, href)
+        if urlsplit(document_url).scheme not in {"http", "https"}:
+            continue
+        announcements.append(
+            Announcement(
+                ticker=ticker,
+                title=title,
+                date=date,
+                pdf_url=document_url,
+                source_url=source_url,
+            )
+        )
+    return announcements
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**chromium_launch_options())
-            page = await browser.new_page()
 
-            try:
-                await page.goto(
-                    self.source_url,
-                    wait_until="domcontentloaded",
-                    timeout=60_000,
-                )
-                await page.wait_for_selector("div.list-item", timeout=30_000)
-
-                items = await page.query_selector_all("div.list-item")
-
-                for item in items:
-                    date_el = await item.query_selector("div.list-date")
-                    link_el = await item.query_selector("a.asx-document")
-
-                    if not date_el or not link_el:
-                        continue
-
-                    date_str = (await date_el.inner_text()).strip()
-                    title = (await link_el.inner_text()).strip()
-                    href = await link_el.get_attribute("href")
-                    if not title or not href:
-                        continue
-
-                    try:
-                        date = datetime.strptime(date_str, "%d-%b-%Y")
-                    except ValueError:
-                        try:
-                            date = datetime.strptime(date_str, "%d-%B-%Y")
-                        except ValueError:
-                            continue
-
-                    document_url = urljoin(self.source_url, href)
-                    if urlsplit(document_url).scheme not in {"http", "https"}:
-                        continue
-
-                    announcements.append(
-                        Announcement(
-                            ticker=self.ticker,
-                            title=title,
-                            date=date,
-                            pdf_url=document_url,
-                            source_url=self.source_url,
-                        )
-                    )
-            finally:
-                await browser.close()
-
-        return announcements
+def _parse_date(value: str) -> datetime | None:
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None

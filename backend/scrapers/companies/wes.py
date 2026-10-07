@@ -1,99 +1,111 @@
+"""Wesfarmers (WES): the ASX announcements list on its investor centre.
+
+Wesfarmers serves a document only to a browser that clicks its link on the
+listing page, so download reopens the listing and clicks the same link.
+"""
+
+from __future__ import annotations
+
 from datetime import datetime
 from urllib.parse import urljoin
 
-from playwright.async_api import async_playwright
+from lambdas.common import PermanentDocumentError
 
-from ..base import BaseScraper, Announcement
-from ..browser import chromium_launch_options
+from ..adapter import DocumentRequest, SourceAdapter
+from ..base import Announcement
+from ..fetching import Page, Render
+from ..html import Element, parse_html
+
+ROWS = "article.asx-announce div.asx-results li"
+LISTING = Render(wait_for=ROWS, wait_for_timeout_ms=15_000, required=True)
 
 
-class WESScraper(BaseScraper):
+class WESAdapter(SourceAdapter):
+    hosts = frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"})
 
-    # Hosts this company's documents may be downloaded from.
-    HOSTS = frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"})
+    async def list_documents(self) -> list[Announcement]:
+        async with self.fetcher.session(ignore_https_errors=True) as web:
+            page = await web.render(self.source_url, LISTING)
+        return parse_listing(page, ticker=self.ticker, source_url=self.source_url)
 
-    @property
-    def ticker(self) -> str:
-        return "WES"
-
-    @property
-    def source_url(self) -> str:
-        return "https://www.wesfarmers.com.au/investor-centre/company-performance-news/asx-announcements"
-
-    async def fetch_announcements(self) -> list[Announcement]:
-        announcements = []
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**chromium_launch_options())
-
-            context = await browser.new_context(
-                accept_downloads=True,
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1366, "height": 768},
-                locale="en-AU",
-                ignore_https_errors=True,
+    async def fetch_document(self, request: DocumentRequest, *, max_bytes: int):
+        source_url = self._validated(self.source_url)
+        expected_url = self._validated(request.document_url)
+        async with self.fetcher.session(disable_http2=True) as web:
+            page = await web.render(source_url, LISTING)
+            self._validated(page.url)
+            href = matching_link(
+                page,
+                source_url=source_url,
+                document_url=expected_url,
+                raw_href=request.metadata.get("raw_href"),
+                title=request.title,
             )
-
-            page = await context.new_page()
-
-            await page.goto(
-                self.source_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-
-            await page.wait_for_selector(
-                "article.asx-announce div.asx-results li",
-                timeout=15000,
-            )
-
-            rows = await page.query_selector_all(
-                "article.asx-announce div.asx-results li"
-            )
-
-            print(f"[WES] Found {len(rows)} announcement rows")
-
-            for row in rows:
-                date_el = await row.query_selector("span.date-time")
-                link = await row.query_selector("a[href]")
-
-                if not date_el or not link:
-                    continue
-
-                date_str = (await date_el.inner_text()).strip()
-                title = (await link.inner_text()).strip()
-                href = await link.get_attribute("href")
-
-                if not date_str or not title or not href:
-                    continue
-
-                try:
-                    parsed_date = datetime.strptime(date_str, "%d.%m.%y")
-                except ValueError:
-                    print(f"[WES] Could not parse date: {date_str}")
-                    continue
-
-                pdf_url = href if href.startswith("http") else urljoin(self.source_url, href)
-
-                announcements.append(
-                    Announcement(
-                        ticker=self.ticker,
-                        title=title,
-                        date=parsed_date,
-                        pdf_url=pdf_url,
-                        source_url=self.source_url,
-                        metadata={
-                            "raw_href": href,
-                            "raw_date": date_str,
-                            "source_id": href,
-                        },
-                    )
+            if href is None:
+                raise PermanentDocumentError(
+                    "Wesfarmers document link is no longer listed",
+                    code="document_link_not_found",
                 )
+            return await web.click_download(
+                source_url,
+                wait_for=ROWS,
+                link_selector=f'{ROWS} a[href="{_css_string(href)}"]',
+                hosts=self.hosts,
+                max_bytes=max_bytes,
+            )
 
-            await browser.close()
 
-        return announcements
+def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcement]:
+    announcements: list[Announcement] = []
+    for row in parse_html(page.html).select(ROWS):
+        date_element = row.select_one("span.date-time")
+        link = row.select_one("a[href]")
+        if date_element is None or link is None:
+            continue
+        date_text = date_element.text.strip()
+        title = link.text.strip()
+        href = link.get("href")
+        if not date_text or not title or not href:
+            continue
+        try:
+            date = datetime.strptime(date_text, "%d.%m.%y")
+        except ValueError:
+            continue
+        announcements.append(
+            Announcement(
+                ticker=ticker,
+                title=title,
+                date=date,
+                pdf_url=href if href.startswith("http") else urljoin(source_url, href),
+                source_url=source_url,
+                metadata={"raw_href": href, "raw_date": date_text, "source_id": href},
+            )
+        )
+    return announcements
+
+
+def matching_link(
+    page: Page,
+    *,
+    source_url: str,
+    document_url: str,
+    raw_href: object,
+    title: str | None,
+) -> str | None:
+    """The href of the listed link that names this document, if it is still listed."""
+    for row in parse_html(page.html).select(ROWS):
+        link: Element | None = row.select_one("a[href]")
+        if link is None:
+            continue
+        href = link.get("href") or ""
+        if (
+            urljoin(source_url, href) == document_url
+            or (isinstance(raw_href, str) and href == raw_href)
+            or (title and link.text.strip() == title)
+        ):
+            return href
+    return None
+
+
+def _css_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')

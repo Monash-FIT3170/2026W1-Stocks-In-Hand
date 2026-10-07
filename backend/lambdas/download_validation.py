@@ -20,11 +20,6 @@ ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 # Client errors a later attempt can still succeed after.
 RETRYABLE_CLIENT_ERRORS = frozenset({408, 409, 425, 429})
-DEFAULT_ALLOWED_HOSTS = (
-    "investors.csl.com",
-    "announcements.asx.com.au",
-    "wcsecure.weblink.com.au",
-)
 DocumentFormat = Literal["pdf", "txt", "html", "docx"]
 DOCUMENT_EXTENSIONS: dict[DocumentFormat, str] = {
     "pdf": "pdf",
@@ -120,13 +115,8 @@ def ensure_within_size_limit(
         )
 
 
-def allowed_hosts() -> frozenset[str]:
-    configured = os.getenv("DOWNLOAD_ALLOWED_HOSTS", "")
-    hosts = configured.split(",") if configured else DEFAULT_ALLOWED_HOSTS
-    return frozenset(host.strip().lower().rstrip(".") for host in hosts if host.strip())
-
-
-def validate_download_url(url: str, hosts: frozenset[str] | None = None) -> str:
+def validate_download_url(url: str, *, hosts: frozenset[str]) -> str:
+    """Accept only an HTTPS URL on one of the source's hosts."""
     parsed = urlsplit(url)
     host = (parsed.hostname or "").lower().rstrip(".")
     try:
@@ -142,7 +132,7 @@ def validate_download_url(url: str, hosts: frozenset[str] | None = None) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or port not in (None, 443)
-        or host not in (hosts or allowed_hosts())
+        or host not in hosts
     ):
         raise PermanentDocumentError(
             "Document URL is not an allowlisted HTTPS URL",
@@ -350,10 +340,10 @@ def download_document(
     url: str,
     *,
     max_bytes: int,
+    hosts: frozenset[str],
+    referer: str,
     client: httpx.Client | None = None,
     resolve_hosts: bool = True,
-    hosts: frozenset[str] | None = None,
-    referer: str = "https://investors.csl.com/",
 ) -> DownloadedDocument:
     """Download one bounded, allowlisted document and validate its real format."""
     if max_bytes <= len(PDF_MAGIC):

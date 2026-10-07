@@ -126,6 +126,9 @@ def test_missing_optional_public_discussion_parameters_disable_sources(
     assert all(common.os.environ[variable] == "" for variable in parameter_variables)
 
 
+CSL_HOSTS = frozenset({"investors.csl.com"})
+
+
 def sqs_record(body: str) -> dict:
     return {
         "messageId": "message-1",
@@ -175,11 +178,13 @@ def docx_bytes(text: str = "Revenue increased strongly.") -> bytes:
 
 def test_url_validation_rejects_non_https_and_unapproved_hosts():
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("http://investors.csl.com/report.pdf")
+        validate_download_url("http://investors.csl.com/report.pdf", hosts=CSL_HOSTS)
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("https://example.com/report.pdf")
+        validate_download_url("https://example.com/report.pdf", hosts=CSL_HOSTS)
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("https://user:password@investors.csl.com/report.pdf")
+        validate_download_url(
+            "https://user:password@investors.csl.com/report.pdf", hosts=CSL_HOSTS
+        )
 
 
 def test_download_validates_redirects_size_type_and_magic_bytes():
@@ -196,6 +201,8 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
     with httpx.Client(transport=httpx.MockTransport(valid_response)) as client:
         result = download_document(
             "https://investors.csl.com/report.pdf",
+            hosts=CSL_HOSTS,
+            referer="https://investors.csl.com/",
             max_bytes=1024,
             client=client,
             resolve_hosts=False,
@@ -214,6 +221,8 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         with pytest.raises(PermanentDocumentError) as error:
             download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -232,6 +241,8 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         with pytest.raises(PermanentDocumentError) as error:
             download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -250,6 +261,8 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         with pytest.raises(PermanentDocumentError) as error:
             download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -283,6 +296,8 @@ def test_document_responses_classify_their_status(status: int, outcome) -> None:
         def download():
             return download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -332,6 +347,8 @@ def test_download_document_detects_supported_format(
     with httpx.Client(transport=httpx.MockTransport(response)) as client:
         downloaded = download_document(
             "https://investors.csl.com/document",
+            hosts=CSL_HOSTS,
+            referer="https://investors.csl.com/",
             max_bytes=1024 * 1024,
             client=client,
             resolve_hosts=False,

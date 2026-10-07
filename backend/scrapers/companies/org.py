@@ -1,342 +1,209 @@
+"""Origin Energy (ORG): media releases on Origin's investor pages.
+
+The listing is a server-rendered WordPress page that paginates with
+?query-0-page=N. Each release's article page links to one or more PDFs;
+when there are several, the one labelled ASX is the lodged document rather
+than a supplementary report.
+"""
+
+from __future__ import annotations
+
+import logging
 import re
 from datetime import datetime
 from urllib.parse import urljoin
 
-from playwright.async_api import async_playwright, BrowserContext
+from ..adapter import SeededBrowserDownload, SourceAdapter
+from ..base import Announcement
+from ..fetching import Page, Render, SourceUnavailableError
+from ..html import Element, nearby_text_levels, parse_html
 
-from ..base import BaseScraper, Announcement
-from ..browser import chromium_launch_options
+LOGGER = logging.getLogger(__name__)
+# The listing goes back about 66 pages; keep to the recent ones.
+MAX_PAGES = 2
+# The listing is server-rendered and never reaches network idle, so wait for
+# the DOM and the release links.
+LISTING = Render(wait_for="a[href*='/about/investors-media/']")
+ARTICLE = Render(settle_ms=1_000)
 
 
-class ORGScraper(BaseScraper):
-    """
-    Origin Energy Limited (ORG) scraper.
+def listing_page_url(listing_url: str, page_number: int) -> str:
+    return listing_url if page_number == 1 else f"{listing_url}?query-0-page={page_number}"
 
-    Unlike WDS/RIO, originenergy.com.au is a plain server-rendered
-    WordPress site — the listing at /about/investors-media/media-releases/
-    already contains every card's title, date, and article link with no
-    client-side JS required, and paginates via `?query-0-page=N`. Each
-    article page (e.g. .../quarterly-report-june-2026/) then links directly
-    to one or more PDFs, e.g. "Quarterly Report June 2026 (PDF)" and
-    "Quarterly Report June 2026 ASX/Media Release (PDF)" — when an article
-    has more than one attachment, the one whose link text/href mentions
-    "ASX" is preferred, since that's the actual lodged regulatory document
-    rather than a supplementary report.
 
-    Still uses Playwright (rather than plain httpx) for consistency with
-    every other scraper in this repo, and because the exact WordPress
-    theme's markup/classes weren't inspected live — row discovery is done
-    defensively by scanning anchors and filtering by URL shape, same as
-    WDS/RIO, rather than betting on unverified CSS selectors.
-    """
+class ORGAdapter(SeededBrowserDownload, SourceAdapter):
+    hosts = frozenset({"www.originenergy.com.au", "originenergy.com.au"})
 
-    # Hosts this company's documents may be downloaded from.
-    HOSTS = frozenset({"www.originenergy.com.au", "originenergy.com.au"})
-
-    LISTING_BASE_URL = "https://www.originenergy.com.au/about/investors-media/media-releases/"
-
-    # `?query-0-page=N` goes up to ~66 on the live site; kept small here to
-    # mirror the "recent announcements" scope every other scraper uses.
-    MAX_PAGES = 2
-
-    @property
-    def ticker(self) -> str:
-        return "ORG"
-
-    @property
-    def source_url(self) -> str:
-        return self.LISTING_BASE_URL
-
-    async def fetch_announcements(self) -> list[Announcement]:
+    async def list_documents(self) -> list[Announcement]:
         announcements: list[Announcement] = []
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**chromium_launch_options())
-
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1366, "height": 768},
-                locale="en-AU",
-                ignore_https_errors=True,
-            )
-
+        async with self.fetcher.session(ignore_https_errors=True) as web:
             article_links: list[dict] = []
-
-            for page_no in range(1, self.MAX_PAGES + 1):
-                page_url = (
-                    self.LISTING_BASE_URL
-                    if page_no == 1
-                    else f"{self.LISTING_BASE_URL}?query-0-page={page_no}"
-                )
-
-                page = await context.new_page()
+            for page_number in range(1, MAX_PAGES + 1):
+                page_url = listing_page_url(self.source_url, page_number)
                 try:
-                    await page.goto(page_url, wait_until="networkidle", timeout=60000)
-                except Exception as e:
-                    print(f"[ORG] Failed to load page {page_no} ({page_url}): {e}")
-                    await page.close()
+                    listing = await web.render(page_url, LISTING)
+                except SourceUnavailableError:
                     break
-
-                try:
-                    await page.wait_for_selector(
-                        "a[href*='/about/investors-media/']",
-                        timeout=15000,
-                    )
-                except Exception:
-                    pass
-
-                page_items = await self._extract_article_links(page, page_url)
-                await page.close()
-
+                known = {item["article_url"] for item in article_links}
                 new_items = [
                     item
-                    for item in page_items
-                    if item["article_url"] not in {a["article_url"] for a in article_links}
+                    for item in release_links(listing, page_url=page_url, listing_url=self.source_url)
+                    if item["article_url"] not in known
                 ]
-
-                print(f"[ORG] Page {page_no}: found {len(page_items)} candidate links, {len(new_items)} new")
-
                 if not new_items:
                     break
-
                 article_links.extend(new_items)
 
             for item in article_links:
                 try:
-                    pdf_url = await self._resolve_pdf_url(context, item["article_url"])
-
-                    if not pdf_url:
-                        print(f"[ORG] No PDF found for: {item['title']}")
-                        continue
-
-                    announcements.append(
-                        Announcement(
-                            ticker=self.ticker,
-                            title=item["title"],
-                            date=item["date"],
-                            pdf_url=pdf_url,
-                            source_url=item["article_url"],
-                            metadata={
-                                "listing_url": self.LISTING_BASE_URL,
-                                "article_url": item["article_url"],
-                                "raw_date": item["raw_date"],
-                            },
-                        )
-                    )
-                except Exception as e:
-                    print(f"[ORG] Failed to process link {item['article_url']}: {e}")
-
-            announcements = self._dedupe_announcements(announcements)
-
-            await browser.close()
-
-        return announcements
-
-    async def _extract_article_links(self, page, page_url: str) -> list[dict]:
-        items = []
-
-        links = await page.query_selector_all("a[href]")
-
-        for link in links:
-            href = await link.get_attribute("href")
-            text = (await link.inner_text()).strip()
-
-            if not href:
-                continue
-
-            full_url = urljoin(page_url, href)
-
-            if not self._looks_like_org_release(full_url, text):
-                continue
-
-            date = await self._extract_nearby_date(link)
-
-            if not date:
-                print(f"[ORG] Skipping link because no date found nearby: {text}")
-                continue
-
-            items.append(
-                {
-                    "title": text,
-                    "date": date,
-                    "raw_date": date.isoformat(),
-                    "article_url": full_url,
-                }
-            )
-
-        return self._dedupe_article_links(items)
-
-    def _looks_like_org_release(self, url: str, text: str) -> bool:
-        url_lower = url.lower().split("#", 1)[0]
-
-        if not text:
-            return False
-
-        if url_lower.startswith("http") and "originenergy.com.au" not in url_lower:
-            return False
-
-        if "/about/investors-media/" not in url_lower:
-            return False
-
-        # Exclude tag chips ("Asx", "Media Release", ...), pagination
-        # controls, and the listing page linking to itself (e.g. a
-        # breadcrumb back to "Media Releases").
-        if "/tag/" in url_lower:
-            return False
-
-        if "query-0-page" in url_lower:
-            return False
-
-        if url_lower.rstrip("/") == self.LISTING_BASE_URL.lower().rstrip("/"):
-            return False
-
-        return True
-
-    async def _resolve_pdf_url(self, context: BrowserContext, article_url: str) -> str | None:
-        page = await context.new_page()
-        try:
-            await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(1000)
-
-            pdf_links = await page.query_selector_all("a[href*='.pdf']")
-
-            candidates: list[tuple[str, str]] = []  # (full_url, link_text)
-            for link in pdf_links:
-                href = await link.get_attribute("href")
-                if not href:
+                    article = await web.render(item["article_url"], ARTICLE)
+                except SourceUnavailableError as exc:
+                    LOGGER.warning("ORG release %s failed: %s", item["article_url"], exc)
                     continue
-                full_url = urljoin(article_url, href)
-                if ".pdf" in full_url.lower():
-                    text = (await link.inner_text()).strip()
-                    candidates.append((full_url, text))
+                pdf_url = article_pdf_url(article, item["article_url"])
+                if not pdf_url:
+                    continue
+                announcements.append(
+                    Announcement(
+                        ticker=self.ticker,
+                        title=item["title"],
+                        date=item["date"],
+                        pdf_url=pdf_url,
+                        source_url=item["article_url"],
+                        metadata={
+                            "listing_url": self.source_url,
+                            "article_url": item["article_url"],
+                            "raw_date": item["raw_date"],
+                        },
+                    )
+                )
+        return _dedupe(announcements)
 
-            if not candidates:
-                html = await page.content()
-                match = re.search(r'https?://[^"\']+\.pdf(?:\?[^"\']*)?', html)
-                if match:
-                    return match.group(0)
 
-                relative_match = re.search(r'["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']', html)
-                if relative_match:
-                    return urljoin(article_url, relative_match.group(1))
-
-                return None
-
-            # An article can carry more than one attachment (e.g. a
-            # standalone quarterly report plus the actual "ASX/Media
-            # Release" PDF that was lodged with the exchange) — prefer
-            # whichever one is explicitly ASX-labelled, since that's the
-            # regulatory document, not a supplementary report.
-            for full_url, text in candidates:
-                if "asx" in text.lower() or "asx" in full_url.lower():
-                    return full_url
-
-            return candidates[0][0]
-        finally:
-            await page.close()
-
-    def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
-        seen: set[str] = set()
-        result = []
-        for item in items:
-            key = item["article_url"]
-            if key not in seen:
-                seen.add(key)
-                result.append(item)
-        return result
-
-    def _dedupe_announcements(self, announcements: list[Announcement]) -> list[Announcement]:
-        seen: set[str] = set()
-        result = []
-        for ann in announcements:
-            key = ann.pdf_url or ann.source_url or ann.title
-            if key not in seen:
-                seen.add(key)
-                result.append(ann)
-        return result
-
-    async def _extract_nearby_date(self, link) -> datetime | None:
-        """
-        Same narrowest-ancestor-first climb used by the WDS/RIO scrapers:
-        check each ancestor level's own text, nearest first, and stop at
-        the first level that contains a date, so a wider multi-card
-        listing container is never consulted and can't hand back a
-        neighbouring card's date.
-        """
-        result = await link.evaluate(
-            """
-            el => {
-                const levels = [];
-                let node = el;
-                let timeAttr = null;
-                for (let i = 0; i < 8 && node && node.parentElement; i++) {
-                    node = node.parentElement;
-                    if (!timeAttr) {
-                        const t = node.querySelector('time[datetime]');
-                        if (t) timeAttr = t.getAttribute('datetime');
-                    }
-                    levels.push(node.innerText || '');
-                }
-                return { timeAttr, levels };
+def release_links(listing: Page, *, page_url: str, listing_url: str) -> list[dict]:
+    items: list[dict] = []
+    seen: set[str] = set()
+    for link in parse_html(listing.html).select("a[href]"):
+        href = link.get("href")
+        text = link.text.strip()
+        if not href:
+            continue
+        article_url = urljoin(page_url, href)
+        if not _looks_like_release(article_url, text, listing_url):
+            continue
+        date = _nearby_date(link)
+        if date is None or article_url in seen:
+            continue
+        seen.add(article_url)
+        items.append(
+            {
+                "title": text,
+                "date": date,
+                "raw_date": date.isoformat(),
+                "article_url": article_url,
             }
-            """
         )
+    return items
 
-        time_attr = (result or {}).get("timeAttr")
-        if time_attr:
-            parsed = self._parse_date_str(time_attr.strip()[:19].replace("T", " "))
+
+def article_pdf_url(article: Page, article_url: str) -> str | None:
+    candidates: list[tuple[str, str]] = []
+    for link in parse_html(article.html).select("a[href*='.pdf']"):
+        href = link.get("href")
+        if not href:
+            continue
+        full_url = urljoin(article_url, href)
+        if ".pdf" in full_url.lower():
+            candidates.append((full_url, link.text.strip()))
+    if not candidates:
+        match = re.search(r'https?://[^"\']+\.pdf(?:\?[^"\']*)?', article.html)
+        if match:
+            return match.group(0)
+        relative = re.search(r'["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']', article.html)
+        if relative:
+            return urljoin(article_url, relative.group(1))
+        return None
+    # Prefer the attachment labelled ASX: that is the document lodged with
+    # the exchange, not a supplementary report.
+    for full_url, text in candidates:
+        if "asx" in text.lower() or "asx" in full_url.lower():
+            return full_url
+    return candidates[0][0]
+
+
+def _looks_like_release(url: str, text: str, listing_url: str) -> bool:
+    url_lower = url.lower().split("#", 1)[0]
+    if not text:
+        return False
+    if url_lower.startswith("http") and "originenergy.com.au" not in url_lower:
+        return False
+    if "/about/investors-media/" not in url_lower:
+        return False
+    # Not tag chips, pagination or the listing linking to itself.
+    if "/tag/" in url_lower or "query-0-page" in url_lower:
+        return False
+    return url_lower.rstrip("/") != listing_url.lower().rstrip("/")
+
+
+def _dedupe(announcements: list[Announcement]) -> list[Announcement]:
+    seen: set[str] = set()
+    result = []
+    for announcement in announcements:
+        key = announcement.pdf_url or announcement.source_url or announcement.title
+        if key not in seen:
+            seen.add(key)
+            result.append(announcement)
+    return result
+
+
+def _nearby_date(link: Element) -> datetime | None:
+    time_value, levels = nearby_text_levels(link)
+    if time_value:
+        parsed = _parse_date(time_value.strip()[:19].replace("T", " "))
+        if parsed:
+            return parsed
+    for text in levels:
+        if len(text) > 2000:
+            break
+        parsed = _first_date_in_text(text)
+        if parsed:
+            return parsed
+    return None
+
+
+def _first_date_in_text(text: str) -> datetime | None:
+    for pattern in (
+        r"[A-Za-z]+\s+\d{1,2},\s*\d{4}",  # July 31, 2026 (listing page)
+        r"\d{1,2}\s+[A-Za-z]+\s+\d{4}",  # 31 July 2026 (article page)
+        r"\d{1,2}/\d{1,2}/\d{4}",  # 31/07/2026
+        r"\d{1,2}\.\d{1,2}\.\d{2}\b",  # 31.07.26
+        r"\d{4}-\d{2}-\d{2}",  # 2026-07-31
+    ):
+        match = re.search(pattern, text)
+        if match:
+            parsed = _parse_date(match.group(0))
             if parsed:
                 return parsed
+    return None
 
-        for text in (result or {}).get("levels") or []:
-            if len(text) > 2000:
-                break
-            parsed = self._first_date_in_text(text)
-            if parsed:
-                return parsed
 
-        return None
-
-    def _first_date_in_text(self, text: str) -> datetime | None:
-        date_patterns = [
-            r"[A-Za-z]+\s+\d{1,2},\s*\d{4}",  # July 31, 2026 (listing page)
-            r"\d{1,2}\s+[A-Za-z]+\s+\d{4}",   # 31 July 2026 (article page)
-            r"\d{1,2}/\d{1,2}/\d{4}",         # 31/07/2026
-            r"\d{1,2}\.\d{1,2}\.\d{2}\b",     # 31.07.26
-            r"\d{4}-\d{2}-\d{2}",             # 2026-07-31
-        ]
-
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if match:
-                parsed = self._parse_date_str(match.group(0))
-                if parsed:
-                    return parsed
-
-        return None
-
-    def _parse_date_str(self, date_str: str) -> datetime | None:
-        date_str = date_str.strip()
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d",
-            "%B %d, %Y",
-            "%b %d, %Y",
-            "%d %B %Y",
-            "%d %b %Y",
-            "%d/%m/%Y",
-            "%d.%m.%y",
-        ):
-            try:
-                return datetime.strptime(date_str, fmt)
-            except ValueError:
-                continue
-
+def _parse_date(value: str) -> datetime | None:
+    value = value.strip()
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%d %B %Y",
+        "%d %b %Y",
+        "%d/%m/%Y",
+        "%d.%m.%y",
+    ):
         try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            return datetime.strptime(value, fmt)
         except ValueError:
-            return None
+            continue
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None

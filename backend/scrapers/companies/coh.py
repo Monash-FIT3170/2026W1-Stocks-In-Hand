@@ -1,226 +1,132 @@
+"""Cochlear (COH): the IRM announcement feed behind its ASX page.
+
+Cochlear's page embeds an IRM feed (coh.live.irmau.com) with one page per
+year. Listing reads the current year's page for the year links, then the
+two newest years.
+"""
+
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from urllib.parse import urljoin
 
-from playwright.async_api import async_playwright
+from ..adapter import SeededBrowserDownload, SourceAdapter
+from ..base import Announcement
+from ..fetching import Page, Render
+from ..html import Element, parse_html
 
-from ..base import Announcement, BaseScraper
-from ..browser import chromium_launch_options
+IRM_BASE = "https://coh.live.irmau.com/irm/ShowCategory.aspx"
+YEAR_PAGE = Render(wait_until="networkidle", timeout_ms=120_000, settle_ms=1_500)
 
 
-class COHScraper(BaseScraper):
-    """Cochlear ASX announcements scraper via IRM feed iframe source."""
+def feed_url(year: int) -> str:
+    return f"{IRM_BASE}?CategoryId=8&FilterStyle=B&archive=true&year={year}"
 
-    # Hosts this company's documents may be downloaded from.
-    HOSTS = frozenset({"www.cochlear.com", "cochlear.com", "coh.live.irmau.com"})
 
-    IRM_BASE = "https://coh.live.irmau.com/irm/ShowCategory.aspx"
+class COHAdapter(SeededBrowserDownload, SourceAdapter):
+    hosts = frozenset({"www.cochlear.com", "cochlear.com", "coh.live.irmau.com"})
 
-    @property
-    def ticker(self) -> str:
-        return "COH"
-
-    @property
-    def source_url(self) -> str:
-        return "https://www.cochlear.com/au/en/corporate/investors/asx-announcements"
-
-    def _feed_url(self, year: int) -> str:
-        return (
-            f"{self.IRM_BASE}?CategoryId=8&FilterStyle=B&archive=true&year={year}"
+    async def list_documents(self) -> list[Announcement]:
+        current_year = self.clock().year
+        async with self.fetcher.session(ignore_https_errors=True) as web:
+            seed = await web.render(feed_url(current_year), YEAR_PAGE)
+            # Keep scope manageable: the current and previous year by default.
+            years = (feed_years(seed) or [current_year])[:2]
+            pages = [
+                seed if year == current_year else await web.render(feed_url(year), YEAR_PAGE)
+                for year in years
+            ]
+        return parse_year_pages(
+            [(feed_url(year), page) for year, page in zip(years, pages)],
+            ticker=self.ticker,
+            source_url=self.source_url,
         )
 
-    async def fetch_announcements(self) -> list[Announcement]:
-        announcements: list[Announcement] = []
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**chromium_launch_options())
+def feed_years(page: Page) -> list[int]:
+    """The year links on a feed page, newest first as IRM renders them."""
+    years: list[int] = []
+    for link in parse_html(page.html).select("a"):
+        text = link.text.strip()
+        if re.fullmatch(r"\d{4}", text) and int(text) not in years:
+            years.append(int(text))
+    return years
 
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1366, "height": 768},
-                locale="en-AU",
-                ignore_https_errors=True,
-            )
 
-            now_year = datetime.now().year
-            seed_page = await context.new_page()
-            await seed_page.goto(
-                self._feed_url(now_year),
-                wait_until="networkidle",
-                timeout=120000,
-            )
-            await seed_page.wait_for_timeout(1500)
-
-            years = await self._extract_years(seed_page)
-            await seed_page.close()
-
-            if not years:
-                years = [now_year]
-
-            # Keep scope manageable while covering current and previous year by default.
-            years = years[:2]
-            print(f"[COH] Target years: {years}")
-
-            all_rows: list[dict[str, str]] = []
-            for year in years:
-                feed_url = self._feed_url(year)
-                page = await context.new_page()
-                await page.goto(feed_url, wait_until="networkidle", timeout=120000)
-                await page.wait_for_timeout(1200)
-
-                rows = await self._extract_rows(page, feed_url)
-                print(f"[COH] Year {year}: found {len(rows)} rows")
-                all_rows.extend(rows)
-                await page.close()
-
-            all_rows = self._dedupe_rows(all_rows)
-
-            for row in all_rows:
-                parsed_date = self._parse_date(row["date_str"])
-                if not parsed_date:
-                    print(f"[COH] Could not parse date: {row['date_str']}")
-                    continue
-
-                ann = Announcement(
-                    ticker=self.ticker,
-                    title=row["title"],
-                    date=parsed_date,
-                    pdf_url=row["pdf_url"],
-                    source_url=row.get("feed_url", self.source_url),
-                    metadata={
-                        "listing_url": self.source_url,
-                        "feed_url": row.get("feed_url", self.source_url),
-                        "raw_date": row["date_str"],
-                        "year": row.get("year"),
-                    },
-                )
-
-                announcements.append(ann)
-
-            await browser.close()
-
-        return self._dedupe_announcements(announcements)
-
-    async def _extract_years(self, page) -> list[int]:
-        year_texts = await page.evaluate(
-            """() => {
-                return Array.from(document.querySelectorAll('a[id*="lnkbtnYear"], a'))
-                    .map(a => (a.textContent || '').trim())
-                    .filter(t => /^\\d{4}$/.test(t));
-            }"""
-        )
-
-        years: list[int] = []
-        for text in year_texts:
-            try:
-                year = int(text)
-                if year not in years:
-                    years.append(year)
-            except ValueError:
-                pass
-
-        # Newest first is already how IRM renders the year links.
-        return years
-
-    async def _extract_rows(self, page, feed_url: str) -> list[dict[str, str]]:
-        rows: list[dict[str, str]] = []
-
-        links = await page.query_selector_all("tr a[href]")
-        for link in links:
-            row = await self._build_row_from_link(link, feed_url)
+def parse_year_pages(
+    pages: list[tuple[str, Page]],
+    *,
+    ticker: str,
+    source_url: str,
+) -> list[Announcement]:
+    rows: list[dict[str, str | None]] = []
+    for url, page in pages:
+        for link in parse_html(page.html).select("tr a[href]"):
+            row = _row(link, url)
             if row:
                 rows.append(row)
 
-        return rows
-
-    async def _build_row_from_link(self, link, feed_url: str) -> dict[str, str] | None:
-        href = (await link.get_attribute("href")) or ""
-        title_text = ((await link.inner_text()) or "").strip()
-        if not href or not title_text:
-            return None
-
-        pdf_url = href if href.startswith("http") else urljoin(feed_url, href)
-        if not self._looks_like_pdf_url(pdf_url):
-            return None
-
-        row_text = (
-            (
-                await link.evaluate(
-                    "el => (el.closest('tr, li, article, section, div') || el).innerText"
-                )
+    announcements: list[Announcement] = []
+    seen: set[str] = set()
+    for row in rows:
+        if row["pdf_url"] in seen:
+            continue
+        seen.add(row["pdf_url"])
+        date = _parse_date(row["date_str"])
+        if date is None:
+            continue
+        announcements.append(
+            Announcement(
+                ticker=ticker,
+                title=row["title"],
+                date=date,
+                pdf_url=row["pdf_url"],
+                source_url=row["feed_url"],
+                metadata={
+                    "listing_url": source_url,
+                    "feed_url": row["feed_url"],
+                    "raw_date": row["date_str"],
+                    "year": row["year"],
+                },
             )
-            or ""
-        ).strip()
+        )
+    return announcements
 
-        date_str = self._extract_date_string(row_text)
-        if not date_str:
-            return None
 
-        title = self._clean_title(title_text)
-        if not title:
-            return None
-
-        year = None
-        match = re.search(r"(\d{4})$", date_str)
-        if match:
-            year = match.group(1)
-
-        return {
-            "title": title,
-            "date_str": date_str,
-            "pdf_url": pdf_url,
-            "feed_url": feed_url,
-            "year": year,
-        }
-
-    def _looks_like_pdf_url(self, url: str) -> bool:
-        lowered = url.lower()
-        return "/irm/pdf/" in lowered and lowered.endswith(".pdf")
-
-    def _extract_date_string(self, text: str) -> str | None:
-        normalized = re.sub(r"\s+", " ", text)
-        match = re.search(r"\b\d{1,2}-[A-Za-z]{3}-\d{4}\b", normalized)
-        return match.group(0) if match else None
-
-    def _clean_title(self, title: str) -> str:
-        cleaned = re.sub(r"\s+", " ", title).strip()
-        cleaned = re.sub(r"\bopens? in (a )?new window\b", "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip(" -:\t")
-
-    def _parse_date(self, date_str: str) -> datetime | None:
-        for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%d %b %Y", "%d %B %Y"):
-            try:
-                return datetime.strptime(date_str, fmt)
-            except ValueError:
-                pass
+def _row(link: Element, feed: str) -> dict[str, str | None] | None:
+    href = link.get("href") or ""
+    title_text = link.text.strip()
+    if not href or not title_text:
         return None
+    pdf_url = href if href.startswith("http") else urljoin(feed, href)
+    lowered = pdf_url.lower()
+    if "/irm/pdf/" not in lowered or not lowered.endswith(".pdf"):
+        return None
+    row_text = (link.closest("tr, li, article, section, div") or link).text
+    match = re.search(r"\b\d{1,2}-[A-Za-z]{3}-\d{4}\b", re.sub(r"\s+", " ", row_text))
+    if not match:
+        return None
+    date_text = match.group(0)
+    title = re.sub(r"\s+", " ", title_text).strip()
+    title = re.sub(r"\bopens? in (a )?new window\b", "", title, flags=re.IGNORECASE)
+    title = title.strip(" -:\t")
+    if not title:
+        return None
+    year = re.search(r"(\d{4})$", date_text)
+    return {
+        "title": title,
+        "date_str": date_text,
+        "pdf_url": pdf_url,
+        "feed_url": feed,
+        "year": year.group(1) if year else None,
+    }
 
-    def _dedupe_rows(self, rows: list[dict[str, str]]) -> list[dict[str, str]]:
-        seen: set[str] = set()
-        result: list[dict[str, str]] = []
 
-        for row in rows:
-            key = row["pdf_url"]
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(row)
-
-        return result
-
-    def _dedupe_announcements(self, announcements: list[Announcement]) -> list[Announcement]:
-        seen: set[str] = set()
-        result: list[Announcement] = []
-
-        for ann in announcements:
-            key = ann.pdf_url or ann.source_url or ann.title
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(ann)
-
-        return result
+def _parse_date(value: str) -> datetime | None:
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
