@@ -102,7 +102,6 @@ export) shows up locally instead of only after a deploy.
 | `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
 | `BEDROCK_SERVICE_TIER` | No | `default`, `flex`, or `priority`. AWS queued analysis uses `flex`. |
 | `BEDROCK_MAX_PROMPT_CHARS` | No | Rejects prompts over 30,000 characters by default. |
-| `BEDROCK_MAX_OUTPUT_TOKENS` | No | Caps generated output at 1,024 tokens by default. |
 | `GROQ_API_KEY` | Local rollback only | Not loaded by the AWS deployment. |
 | `GROQ_MODEL` | Local rollback only | Defaults to `openai/gpt-oss-120b`. |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |

@@ -13,7 +13,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core.config import settings
-from app.services.llm_errors import LLMUnavailableError
+from app.services.llm_errors import LLMUnavailableError, PromptTooLargeError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -76,21 +76,22 @@ class BedrockProvider:
     def name(self) -> str:
         return f"bedrock:{settings.BEDROCK_MODEL_ID}"
 
-    def complete(self, prompt: str, *, temperature: float) -> str:
+    def complete(self, prompt: str, *, temperature: float, max_output_tokens: int) -> str:
         if not settings.BEDROCK_ENABLED:
             raise LLMUnavailableError("Amazon Bedrock is disabled")
         if not prompt.strip():
             raise ValueError("Bedrock prompt must not be empty")
         if len(prompt) > settings.BEDROCK_MAX_PROMPT_CHARS:
-            raise ValueError(
+            raise PromptTooLargeError(
                 "Bedrock prompt exceeds the configured character limit "
-                f"of {settings.BEDROCK_MAX_PROMPT_CHARS}"
+                f"of {settings.BEDROCK_MAX_PROMPT_CHARS}",
+                max_chars=settings.BEDROCK_MAX_PROMPT_CHARS,
             )
 
         payload = {
             "model": settings.BEDROCK_MODEL_ID,
             "messages": [{"role": "user", "content": prompt}],
-            "max_completion_tokens": settings.BEDROCK_MAX_OUTPUT_TOKENS,
+            "max_completion_tokens": max_output_tokens,
             "temperature": temperature,
             "response_format": {"type": "json_object"},
             "service_tier": settings.BEDROCK_SERVICE_TIER,

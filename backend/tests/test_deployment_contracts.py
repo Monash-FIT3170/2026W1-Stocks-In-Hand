@@ -298,9 +298,9 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
         assert environment["BEDROCK_ENABLED"] == {"Ref": "BedrockEnabled"}
         assert environment["BEDROCK_MODEL_ID"] == "openai.gpt-oss-120b-1:0"
         assert environment["BEDROCK_MAX_PROMPT_CHARS"] == "30000"
-        # Admin summary routes and the analysis worker produce the same summary
-        # shapes, so a smaller API budget truncates the JSON they parse.
-        assert environment["BEDROCK_MAX_OUTPUT_TOKENS"] == "4096"
+        # Each summary kind sets its own output budget. A per-function budget
+        # let the admin routes truncate summaries the worker completed.
+        assert "BEDROCK_MAX_OUTPUT_TOKENS" not in environment
         assert "GROQ_API_KEY_PARAMETER" not in environment
 
         bedrock = [s for s in function.statements if s.allows("bedrock:InvokeModel")]

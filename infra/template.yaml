@@ -448,7 +448,6 @@ Resources:
           BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
           BEDROCK_SERVICE_TIER: default
           BEDROCK_MAX_PROMPT_CHARS: "30000"
-          BEDROCK_MAX_OUTPUT_TOKENS: "4096"
           REDDIT_CLIENT_ID_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-id
           REDDIT_CLIENT_SECRET_PARAMETER: !Sub ${ParameterPathPrefix}/reddit-client-secret
           PUBLIC_DISCUSSION_FEED_URLS_PARAMETER: !Sub ${ParameterPathPrefix}/public-discussion-feed-urls
@@ -648,7 +647,6 @@ Resources:
           BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0
           BEDROCK_SERVICE_TIER: flex
           BEDROCK_MAX_PROMPT_CHARS: "30000"
-          BEDROCK_MAX_OUTPUT_TOKENS: "4096"
       Policies:
         - Statement:
             - Sid: ReadRuntimeParameters

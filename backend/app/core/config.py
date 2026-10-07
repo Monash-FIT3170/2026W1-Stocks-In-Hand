@@ -164,11 +164,6 @@ class Settings:
         30000,
         minimum=1000,
     )
-    BEDROCK_MAX_OUTPUT_TOKENS: int = _env_int(
-        "BEDROCK_MAX_OUTPUT_TOKENS",
-        1024,
-        minimum=128,
-    )
     FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
     MARKETAUX_API_TOKEN: str = _first_env(
         "MARKETAUX_API_TOKEN",
