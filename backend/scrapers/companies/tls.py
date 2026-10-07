@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
 from ..base import Announcement
-from ..fetching import Page, Render, SourceUnavailableError
+from ..fetching import Page, Render
 from ..html import parse_html
 
 # Telstra renders its ASX rows inside a Miraqle iframe.
@@ -18,12 +18,9 @@ LISTING = Render(settle_ms=3_000, frame_url_contains=("events.miraqle.com", "iFr
 class TLSAdapter(SeededBrowserDownload, SourceAdapter):
     hosts = frozenset({"www.telstra.com.au", "telstra.com.au", "events.miraqle.com"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session(ignore_https_errors=True) as web:
-            try:
-                frame = await web.render(self.source_url, LISTING)
-            except SourceUnavailableError:
-                return []
+            frame = await web.render(self.source_url, LISTING)
         return parse_feed_frame(frame, ticker=self.ticker, source_url=self.source_url)
 
 

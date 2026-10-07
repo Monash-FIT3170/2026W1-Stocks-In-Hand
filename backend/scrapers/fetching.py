@@ -84,8 +84,16 @@ _MARK_DISPLAY = """(blockTags) => {
 }"""
 
 
-class SourceUnavailableError(RuntimeError):
-    """The page could not be fetched (network error, timeout or bad status)."""
+class SourceUnreachableError(RuntimeError):
+    """The site could not be reached: a network error, a timeout or an HTTP
+    error status such as an access-denied page. A later attempt may work."""
+
+
+class LayoutChangedError(RuntimeError):
+    """The site answered, but not with the page the adapter knows how to read.
+
+    Retrying will not help; the adapter needs updating for the new layout.
+    """
 
 
 class WebSession(Protocol):
@@ -200,7 +208,7 @@ class LiveSession:
                 response = await client.get(url, params=params, headers=headers)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise SourceUnavailableError(f"Could not fetch {url}: {exc}") from exc
+                raise SourceUnreachableError(f"Could not fetch {url}: {exc}") from exc
             return response.json()
 
     async def get_page(self, url, *, headers=None) -> Page:
@@ -213,7 +221,7 @@ class LiveSession:
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
             except httpx.HTTPError as exc:
-                raise SourceUnavailableError(f"Could not fetch {url}: {exc}") from exc
+                raise SourceUnreachableError(f"Could not fetch {url}: {exc}") from exc
             return Page(url=str(response.url), html=response.text)
 
     async def render(self, url: str, render: Render = Render()) -> Page:
@@ -223,9 +231,13 @@ class LiveSession:
         page = await context.new_page()
         try:
             try:
-                await page.goto(url, wait_until=render.wait_until, timeout=render.timeout_ms)
+                response = await page.goto(
+                    url, wait_until=render.wait_until, timeout=render.timeout_ms
+                )
             except PlaywrightError as exc:
-                raise SourceUnavailableError(f"Could not load {url}: {exc}") from exc
+                raise SourceUnreachableError(f"Could not load {url}: {exc}") from exc
+            if response is not None and response.status >= 400:
+                raise SourceUnreachableError(f"{url} answered HTTP {response.status}")
             if render.wait_for:
                 await self._wait_for(page, render)
             if render.settle_ms:
@@ -257,9 +269,7 @@ class LiveSession:
             except PlaywrightError:
                 break
         if render.required:
-            raise SourceUnavailableError(
-                f"{page.url} never showed {render.wait_for!r}"
-            )
+            raise LayoutChangedError(f"{page.url} never showed {render.wait_for!r}")
 
     async def _frame(self, page, url_parts: tuple[str, ...]) -> Page:
         for _ in range(12):
@@ -268,7 +278,7 @@ class LiveSession:
                     await _mark_display(frame)
                     return Page(url=frame.url, html=await frame.content())
             await page.wait_for_timeout(500)
-        raise SourceUnavailableError(f"{page.url} has no frame from {url_parts!r}")
+        raise LayoutChangedError(f"{page.url} has no frame from {url_parts!r}")
 
     async def request_page(self, url: str) -> Page:
         from playwright.async_api import Error as PlaywrightError
@@ -277,7 +287,7 @@ class LiveSession:
         try:
             response = await context.request.get(url, timeout=60_000)
         except PlaywrightError as exc:
-            raise SourceUnavailableError(f"Could not fetch {url}: {exc}") from exc
+            raise SourceUnreachableError(f"Could not fetch {url}: {exc}") from exc
         from lambdas.download_validation import raise_for_document_status
 
         raise_for_document_status(response.status, response.url)
@@ -472,7 +482,7 @@ class RecordedSession:
         key = request_key(method, url)
         self.requests.append({"method": method, "url": url, **detail})
         if key not in self.answers:
-            raise SourceUnavailableError(f"No recorded response for {key}")
+            raise SourceUnreachableError(f"No recorded response for {key}")
         answer = self.answers[key]
         if isinstance(answer, Exception):
             raise answer

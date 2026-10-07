@@ -16,7 +16,7 @@ from lambdas.common import PermanentDocumentError
 
 from ..adapter import DocumentRequest, SourceAdapter
 from ..base import Announcement
-from ..fetching import Page, Render, SourceUnavailableError
+from ..fetching import Page, Render, SourceUnreachableError
 from ..html import Element, parse_html
 
 # BHP keeps some page resources open indefinitely; the committed HTML is
@@ -43,11 +43,11 @@ def clean_bhp_title(raw_title: str, article_url: str) -> str:
 class BHPAdapter(SourceAdapter):
     hosts = frozenset({"www.bhp.com", "bhp.com"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session(disable_http2=True, ignore_https_errors=True) as web:
             try:
                 page = await web.render(self.source_url, LISTING)
-            except SourceUnavailableError:
+            except SourceUnreachableError:
                 # Some Chromium/AWS networks fail BHP's HTTP/2 negotiation
                 # even though the same public page works over HTTP/1.1.
                 fetched = await web.get_page(

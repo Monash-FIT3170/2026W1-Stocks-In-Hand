@@ -8,6 +8,7 @@ pinned URLs must not change, or stored documents would be discovered again.
 """
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -17,8 +18,15 @@ import pytest
 from app.sources import SOURCES
 from lambdas.common import PermanentDocumentError
 from scrapers.adapter import DocumentRequest
+from scrapers.companies import org
 from scrapers.companies.wes import ROWS
-from scrapers.fetching import Page, RecordedFetcher, request_key
+from scrapers.fetching import (
+    LayoutChangedError,
+    Page,
+    RecordedFetcher,
+    SourceUnreachableError,
+    request_key,
+)
 from scrapers.registry import ADAPTER_TYPES
 
 FIXTURES = Path(__file__).parent / "fixtures" / "sources"
@@ -384,6 +392,80 @@ def test_bhp_article_without_a_document_is_permanent() -> None:
     assert error.value.code == "document_link_not_found"
 
 
-def test_bhp_listing_recorded_from_a_blocked_network_lists_nothing() -> None:
-    # BHP answered this network with an Akamai "Access Denied" page.
-    assert _listed("BHP")[1] == []
+def test_a_blocked_site_is_unreachable_not_empty() -> None:
+    # BHP answered our network on 2026-10-07 with an Akamai "Access Denied"
+    # page (HTTP 403), which the old scraper reported as no announcements.
+    denied = SourceUnreachableError("answered HTTP 403")
+    adapter, _fetcher = _adapter(
+        "BHP",
+        answers={
+            request_key("RENDER", SOURCES["BHP"].source_url): denied,
+            request_key("GET", SOURCES["BHP"].source_url): denied,
+        },
+        recorded=False,
+    )
+
+    with pytest.raises(SourceUnreachableError):
+        asyncio.run(adapter.list_documents())
+
+
+@pytest.mark.parametrize("ticker", ["COL", "CSL", "MQG", "TLS", "WES"])
+def test_a_page_without_its_rows_is_a_changed_layout(ticker: str) -> None:
+    source = SOURCES[ticker]
+    adapter, _fetcher = _adapter(
+        ticker,
+        answers={
+            request_key("RENDER", source.source_url): Page(
+                url=source.source_url, html="<html><body><p>Redesigned</p></body></html>"
+            )
+        },
+        recorded=False,
+    )
+
+    with pytest.raises(LayoutChangedError):
+        asyncio.run(adapter.list_documents())
+
+
+def test_later_listing_pages_may_fail_without_losing_the_first() -> None:
+    source = SOURCES["ORG"]
+    page_one = _recorded_pages("org")[request_key("RENDER", source.source_url)]
+    page_two = f"{source.source_url}?query-0-page=2"
+    fetcher = RecordedFetcher(
+        FIXTURES / "org",
+        answers={request_key("RENDER", page_two): SourceUnreachableError("timeout")},
+    )
+    adapter = ADAPTER_TYPES["org"](source, fetcher, clock=lambda: RECORDED_ON)
+
+    listed = asyncio.run(adapter.list_documents())
+
+    first_page_articles = {
+        item["article_url"]
+        for item in org.release_links(
+            page_one, page_url=source.source_url, listing_url=source.source_url
+        )
+    }
+    assert listed
+    assert {item.metadata["article_url"] for item in listed} <= first_page_articles
+
+
+def test_articles_that_all_fail_make_the_source_unreachable() -> None:
+    pages = _recorded_pages("rio")
+    articles = [key for key in pages if "GetPressRelease" in key]
+    fetcher = RecordedFetcher(
+        FIXTURES / "rio",
+        answers={key: SourceUnreachableError("timeout") for key in articles},
+    )
+    adapter = ADAPTER_TYPES["rio"](SOURCES["RIO"], fetcher, clock=lambda: RECORDED_ON)
+
+    assert articles
+    with pytest.raises(SourceUnreachableError):
+        asyncio.run(adapter.list_documents())
+
+
+def _recorded_pages(adapter_name: str) -> dict:
+    directory = FIXTURES / adapter_name
+    index = json.loads((directory / "index.json").read_text())
+    return {
+        key: Page(url=entry["url"], html=(directory / entry["file"]).read_text())
+        for key, entry in index.items()
+    }

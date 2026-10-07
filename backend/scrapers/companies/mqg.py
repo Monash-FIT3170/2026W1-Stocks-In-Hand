@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
 from ..base import Announcement
-from ..fetching import Page, Render, SourceUnavailableError
+from ..fetching import Page, Render, SourceUnreachableError
 from ..html import Element, nearby_text_levels, parse_html
 
 LOGGER = logging.getLogger(__name__)
@@ -33,18 +33,17 @@ ARTICLE = Render(settle_ms=1_000)
 class MQGAdapter(SeededBrowserDownload, SourceAdapter):
     hosts = frozenset({"www.macquarie.com", "macquarie.com"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         announcements: list[Announcement] = []
+        failures: list[SourceUnreachableError] = []
         async with self.fetcher.session(ignore_https_errors=True) as web:
-            try:
-                listing = await web.render(self.source_url, LISTING)
-            except SourceUnavailableError:
-                return []
+            listing = await web.render(self.source_url, LISTING)
             for item in report_links(listing, listing_url=self.source_url):
                 try:
                     pdf_url = await self._pdf_url(web, item["article_url"])
-                except SourceUnavailableError as exc:
+                except SourceUnreachableError as exc:
                     LOGGER.warning("MQG report %s failed: %s", item["article_url"], exc)
+                    failures.append(exc)
                     continue
                 if not pdf_url:
                     continue
@@ -62,6 +61,8 @@ class MQGAdapter(SeededBrowserDownload, SourceAdapter):
                         },
                     )
                 )
+        if failures and not announcements:
+            raise failures[0]
         return _dedupe(announcements)
 
     async def _pdf_url(self, web, article_url: str) -> str | None:

@@ -27,7 +27,7 @@ def feed_url(year: int) -> str:
 class COHAdapter(SeededBrowserDownload, SourceAdapter):
     hosts = frozenset({"www.cochlear.com", "cochlear.com", "coh.live.irmau.com"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         current_year = self.clock().year
         async with self.fetcher.session(ignore_https_errors=True) as web:
             seed = await web.render(feed_url(current_year), YEAR_PAGE)

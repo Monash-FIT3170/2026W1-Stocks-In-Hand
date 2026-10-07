@@ -14,7 +14,7 @@ from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
 from ..base import Announcement
-from ..fetching import Page, Render, SourceUnavailableError
+from ..fetching import Page, Render, SourceUnreachableError
 from ..html import Element, nearby_text_levels, parse_html
 
 LOGGER = logging.getLogger(__name__)
@@ -35,15 +35,18 @@ def listing_page_url(listing_url: str, page_number: int) -> str:
 class WDSAdapter(SeededBrowserDownload, SourceAdapter):
     hosts = frozenset({"www.woodside.com", "woodside.com"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         announcements: list[Announcement] = []
+        failures: list[SourceUnreachableError] = []
         async with self.fetcher.session(ignore_https_errors=True) as web:
             article_links: list[dict] = []
             for page_number in range(1, MAX_PAGES + 1):
                 page_url = listing_page_url(self.source_url, page_number)
                 try:
                     listing = await web.render(page_url, LISTING)
-                except SourceUnavailableError:
+                except SourceUnreachableError:
+                    if page_number == 1:
+                        raise
                     break
                 known = {item["article_url"] for item in article_links}
                 new_items = [
@@ -58,8 +61,9 @@ class WDSAdapter(SeededBrowserDownload, SourceAdapter):
             for item in article_links:
                 try:
                     pdf_url = await self._pdf_url(web, item["article_url"])
-                except SourceUnavailableError as exc:
+                except SourceUnreachableError as exc:
                     LOGGER.warning("WDS announcement %s failed: %s", item["article_url"], exc)
+                    failures.append(exc)
                     continue
                 if not pdf_url:
                     continue
@@ -77,6 +81,8 @@ class WDSAdapter(SeededBrowserDownload, SourceAdapter):
                         },
                     )
                 )
+        if failures and not announcements:
+            raise failures[0]
         return _dedupe(announcements)
 
     async def _pdf_url(self, web, article_url: str) -> str | None:

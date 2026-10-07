@@ -17,7 +17,7 @@ LISTING = Render(settle_ms=2_500)
 class COLAdapter(SeededBrowserDownload, SourceAdapter):
     hosts = frozenset({"www.colesgroup.com.au", "colesgroup.com.au"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session(ignore_https_errors=True) as web:
             page = await web.render(self.source_url, LISTING)
         return parse_listing(page, ticker=self.ticker, source_url=self.source_url)

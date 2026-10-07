@@ -17,6 +17,7 @@ from lambdas.common import (
 )
 from lambdas.pipeline_stage import StageRecord, discovery_run, run_stage
 from scrapers import registry as scraper_registry
+from scrapers.adapter import LayoutChangedError
 
 STAGE = "discovery"
 
@@ -77,9 +78,13 @@ def _discover(current: StageRecord) -> None:
             )
         mark_run_discovery_started(db, message.scrape_run_id)
 
-    announcements = _bounded_announcements(
-        asyncio.run(scraper_registry.discover(message.ticker))
-    )
+    try:
+        listed = asyncio.run(scraper_registry.discover(message.ticker))
+    except LayoutChangedError as exc:
+        # Retrying cannot help until the source adapter is updated. An
+        # unreachable site (SourceUnreachableError) is retried as usual.
+        raise PermanentDocumentError(str(exc), code="source_layout_changed") from exc
+    announcements = _bounded_announcements(listed)
     queue_url = os.environ["DOWNLOAD_QUEUE_URL"]
     sqs = boto3.client("sqs")
     seen_urls: set[str] = set()

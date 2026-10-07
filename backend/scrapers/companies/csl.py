@@ -19,7 +19,7 @@ class CSLAdapter(SourceAdapter):
         {"investors.csl.com", "announcements.asx.com.au", "wcsecure.weblink.com.au"}
     )
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session() as web:
             page = await web.render(self.source_url, LISTING)
         return parse_listing(page, ticker=self.ticker, source_url=self.source_url)

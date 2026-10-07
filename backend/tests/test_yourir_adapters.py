@@ -14,7 +14,7 @@ import pytest
 
 from app.sources import SOURCES
 from lambdas.common import PermanentDocumentError
-from scrapers.adapter import DocumentRequest
+from scrapers.adapter import DocumentRequest, LayoutChangedError
 from scrapers.companies.anz import ANZAdapter
 from scrapers.companies.cba import CBAAdapter
 from scrapers.companies.tcl import TCLAdapter
@@ -127,7 +127,7 @@ def test_a_feed_without_its_item_arrays_is_rejected() -> None:
         _feed_answer(ANZAdapter, {"items": {"heading": ["Results"]}}),
     )
 
-    with pytest.raises(ValueError, match="invalid item schema"):
+    with pytest.raises(LayoutChangedError, match="invalid item schema"):
         asyncio.run(adapter.list_documents())
 
 

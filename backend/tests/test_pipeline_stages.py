@@ -50,7 +50,7 @@ from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
 from parsing.analysis import AnalysisOutput, ParsedDocument
 from parsing.classification import ClassificationInput, classify_document
 from scrapers import registry as scraper_registry
-from scrapers.adapter import SourceAdapter
+from scrapers.adapter import SourceAdapter, SourceUnreachableError
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
@@ -147,7 +147,7 @@ class FakeAdapter(SourceAdapter):
         self.documents = documents
         self.fetch = fetch
 
-    async def list_documents(self):
+    async def _list_documents(self):
         if isinstance(self.documents, Exception):
             raise self.documents
         return list(self.documents)
@@ -400,6 +400,34 @@ def test_discovery_acknowledges_a_message_it_can_never_process(
     body: str,
 ) -> None:
     assert discovery.handler({"Records": [_record(body)]}, None) == {"processed": 1}
+
+
+def test_a_listing_the_adapter_cannot_read_fails_the_run_at_once(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, queue_a = _requested_run(workers_use)
+
+    sqs = _discover(queue_a, [], monkeypatch)
+
+    workers_use.refresh(run)
+    assert sqs.bodies == []
+    assert run.status == ScrapeRunStatus.FAILED
+    assert run.error_message.startswith("source_layout_changed:")
+
+
+def test_an_unreachable_source_is_retried(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, queue_a = _requested_run(workers_use)
+
+    with pytest.raises(SourceUnreachableError):
+        _discover(queue_a, SourceUnreachableError("HTTP 403"), monkeypatch)
+
+    workers_use.refresh(run)
+    assert run.status == ScrapeRunStatus.DISCOVERING
+    assert "HTTP 403" in run.error_message
 
 
 def test_rerequest_during_discovery_retry_does_not_enqueue_again(

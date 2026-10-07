@@ -22,7 +22,20 @@ from typing import TYPE_CHECKING
 
 from app.sources import SourceDefinition
 from scrapers.base import Announcement
-from scrapers.fetching import Fetcher, LiveFetcher
+from scrapers.fetching import (
+    Fetcher,
+    LayoutChangedError,
+    LiveFetcher,
+    SourceUnreachableError,
+)
+
+__all__ = [
+    "DocumentRequest",
+    "LayoutChangedError",
+    "SeededBrowserDownload",
+    "SourceAdapter",
+    "SourceUnreachableError",
+]
 
 if TYPE_CHECKING:
     from lambdas.download_validation import DownloadedDocument
@@ -60,9 +73,21 @@ class SourceAdapter(ABC):
     def source_url(self) -> str:
         return self.source.source_url
 
-    @abstractmethod
     async def list_documents(self) -> list[Announcement]:
-        """List the company's recent documents without downloading any."""
+        """List the company's recent documents without downloading any.
+
+        Raises SourceUnreachableError when the site cannot be reached and
+        LayoutChangedError when it answers with nothing this adapter can
+        read, instead of reporting "no new documents".
+        """
+        listed = await self._list_documents()
+        if not listed:
+            raise LayoutChangedError(f"{self.ticker}'s listing had no documents to read")
+        return listed
+
+    @abstractmethod
+    async def _list_documents(self) -> list[Announcement]:
+        """Fetch and parse the listing; may return nothing."""
 
     @abstractmethod
     async def fetch_document(

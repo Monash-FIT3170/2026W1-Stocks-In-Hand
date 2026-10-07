@@ -23,7 +23,7 @@ LISTING = Render(wait_for=ROWS, wait_for_timeout_ms=15_000, required=True)
 class WESAdapter(SourceAdapter):
     hosts = frozenset({"www.wesfarmers.com.au", "wesfarmers.com.au"})
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session(ignore_https_errors=True) as web:
             page = await web.render(self.source_url, LISTING)
         return parse_listing(page, ticker=self.ticker, source_url=self.source_url)

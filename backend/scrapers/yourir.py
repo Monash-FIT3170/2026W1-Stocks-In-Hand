@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Literal
 
 from lambdas.common import PermanentDocumentError
 
-from .adapter import DocumentRequest, SourceAdapter
+from .adapter import DocumentRequest, LayoutChangedError, SourceAdapter
 from .base import Announcement
 
 if TYPE_CHECKING:
@@ -56,7 +56,7 @@ class YourIRFeed:
 class YourIRAdapter(SourceAdapter):
     feed: YourIRFeed
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         async with self.fetcher.session() as web:
             payload = await web.get_json(
             self.feed.feed_url,
@@ -156,11 +156,11 @@ class FeedItem:
 def feed_items(payload: object) -> list[FeedItem]:
     """Read a YourIR announcement feed: parallel arrays, one entry per document."""
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), dict):
-        raise ValueError("YourIR announcement feed is missing items")
+        raise LayoutChangedError("YourIR announcement feed is missing items")
     items = payload["items"]
     columns = [items.get(name) for name in ("fileID", "heading", "timestamp", "time")]
     if not all(isinstance(column, list) for column in columns):
-        raise ValueError("YourIR announcement feed has an invalid item schema")
+        raise LayoutChangedError("YourIR announcement feed has an invalid item schema")
 
     parsed: list[FeedItem] = []
     seen: set[str] = set()

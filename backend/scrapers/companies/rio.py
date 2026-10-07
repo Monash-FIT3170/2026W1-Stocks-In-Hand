@@ -16,7 +16,7 @@ from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
 from ..base import Announcement
-from ..fetching import Page, Render, SourceUnavailableError
+from ..fetching import Page, Render, SourceUnreachableError
 from ..html import Element, nearby_text_levels, parse_html
 
 LOGGER = logging.getLogger(__name__)
@@ -52,22 +52,21 @@ class RIOAdapter(SeededBrowserDownload, SourceAdapter):
         }
     )
 
-    async def list_documents(self) -> list[Announcement]:
+    async def _list_documents(self) -> list[Announcement]:
         announcements: list[Announcement] = []
+        failures: list[SourceUnreachableError] = []
         async with self.fetcher.session(ignore_https_errors=True) as web:
             try:
                 feed_url = asx_feed_url(await web.render(self.source_url, WRAPPER), self.source_url)
-            except SourceUnavailableError:
+            except SourceUnreachableError:
                 feed_url = FALLBACK_ASX_FEED_URL
-            try:
-                feed = await web.render(feed_url, feed_render(self.clock().year))
-            except SourceUnavailableError:
-                return []
+            feed = await web.render(feed_url, feed_render(self.clock().year))
             for item in release_links(feed, feed_url=feed_url):
                 try:
                     article = await web.render(item["article_url"], ARTICLE)
-                except SourceUnavailableError as exc:
+                except SourceUnreachableError as exc:
                     LOGGER.warning("RIO release %s failed: %s", item["article_url"], exc)
+                    failures.append(exc)
                     continue
                 pdf_url = article_pdf_url(article, item["article_url"])
                 if not pdf_url:
@@ -86,6 +85,8 @@ class RIOAdapter(SeededBrowserDownload, SourceAdapter):
                         },
                     )
                 )
+        if failures and not announcements:
+            raise failures[0]
         return _dedupe(announcements)
 
 
