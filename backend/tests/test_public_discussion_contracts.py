@@ -7,61 +7,87 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from app.core.config import settings
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.schemas.public_discussion import (
-    ArtifactTickerMentionCreate,
-    CollectionStatus,
-    PublicDiscussionAdapter,
-    PublicDiscussionCollectionResult,
-    PublicDiscussionPost,
+from app.schemas.public_discussion import ArtifactTickerMentionCreate
+from app.services.discussion_sources.base import (
+    CollectedPost,
+    DiscussionSource,
+    InvalidTargetError,
+    MalformedPostError,
 )
+from app.services.discussion_sources.blog import BLOG
+from app.services.discussion_sources.bluesky import BLUESKY
+from app.services.discussion_sources.mastodon import MASTODON
+from app.services.discussion_sources.reddit import REDDIT
 from app.services.public_discussion import find_ticker_mentions
 
+FEED = "https://blog.example.test/feed.xml"
+RAW_POSTS = {
+    "reddit": {
+        "id": "abc123",
+        "title": "$BHP shares rise",
+        "body": "Investors discuss earnings.",
+        "score": 12,
+        "url": "https://reddit.com/r/ASX/comments/abc123/bhp/",
+        "author": "investor",
+        "created_utc": 1787961600.0,
+        "subreddit": "ASX",
+    },
+    "bluesky": {
+        "uri": "at://did:plc:test/app.bsky.feed.post/one",
+        "text": "$BHP shares rise",
+        "created_at": "2026-08-29T00:00:00Z",
+        "author": "investor.test",
+        "like_count": 5,
+    },
+    "mastodon": {
+        "id": "114123456789",
+        "text": "$BHP shares rise",
+        "created_at": "2026-08-29T00:00:00Z",
+        "url": "https://aus.social/@investor/114123456789",
+        "author": "investor",
+        "favourites_count": 2,
+        "reblogs_count": 1,
+        "replies_count": 1,
+    },
+    "blog": {
+        "id": "entry-1",
+        "title": "ASX:BHP profit rose",
+        "url": "https://blog.example.test/entry-1",
+        "author": None,
+        "raw_text": "BHP Group Limited reported higher profit.",
+        "published_at": None,
+    },
+}
+SOURCES = {"reddit": REDDIT, "bluesky": BLUESKY, "mastodon": MASTODON, "blog": BLOG}
+TARGETS = {"reddit": "ASX", "bluesky": "ASX", "mastodon": "ASX", "blog": FEED}
+INVALID_TARGETS = {"reddit": "AS X", "bluesky": "  ", "mastodon": "#", "blog": "https://unlisted.test/feed"}
 
-class ExampleAdapter:
-    source_type = "example_blog"
 
-    def collect(
-        self,
-        query: str,
-        *,
-        limit: int,
-        cursor: str | None = None,
-    ) -> PublicDiscussionCollectionResult:
-        return PublicDiscussionCollectionResult(
-            status=CollectionStatus.COMPLETED,
-            posts=[
-                PublicDiscussionPost(
-                    source_type=self.source_type,
-                    source_id="post-1",
-                    title=f"Discussion about {query}",
-                    url="https://example.test/post-1",
-                )
-            ][:limit],
-            next_cursor=cursor,
-        )
+@pytest.mark.parametrize("name", sorted(SOURCES))
+def test_every_source_keeps_the_discussion_source_contract(name: str) -> None:
+    source = SOURCES[name]
+    with patch.object(settings, "PUBLIC_DISCUSSION_FEED_URLS", [FEED]):
+        target = source.target(TARGETS[name], 10)
 
+        post = source.post(RAW_POSTS[name], target)
 
-def test_source_adapter_contract_normalises_collection_results() -> None:
-    adapter = ExampleAdapter()
-
-    result = adapter.collect("BHP", limit=10)
-
-    assert isinstance(adapter, PublicDiscussionAdapter)
-    assert result.status == CollectionStatus.COMPLETED
-    assert result.posts[0].source_type == "example_blog"
-    assert result.posts[0].source_id == "post-1"
-
-
-def test_collection_status_contract_covers_each_pipeline_state() -> None:
-    assert {status.value for status in CollectionStatus} == {
-        "queued",
-        "running",
-        "completed",
-        "partial",
-        "failed",
-    }
+        with pytest.raises(InvalidTargetError):
+            source.target(INVALID_TARGETS[name], 10)
+        with pytest.raises(InvalidTargetError):
+            source.target(TARGETS[name], 0)
+    assert isinstance(source, DiscussionSource)
+    assert isinstance(post, CollectedPost)
+    assert post.artifact.source_type == source.source_type
+    assert len(post.content_hash) == 64
+    assert isinstance(post.engagement, int)
+    assert source.platform(target).name
+    assert source.source_url(target).startswith("https://")
+    with pytest.raises(MalformedPostError):
+        source.post({}, target)
 
 
 def test_ticker_mention_contract_rejects_invalid_confidence() -> None:
@@ -141,130 +167,8 @@ def test_ticker_matcher_accepts_asx_subreddit_as_finance_context() -> None:
     assert [match.symbol for match in matches] == ["ANZ"]
 
 
-@pytest.mark.parametrize(
-    ("route_name", "arguments", "post"),
-    [
-        (
-            "reddit",
-            ("ASX", 1),
-            {
-                "id": "reddit-1",
-                "title": "$BHP shares rise",
-                "body": "Investors discuss earnings.",
-                "score": 2,
-                "upvote_ratio": 0.9,
-                "num_comments": 1,
-                "url": "https://reddit.test/post-1",
-                "external_url": None,
-                "author": "investor",
-                "flair": "Discussion",
-                "is_self": True,
-                "created_utc": 1787961600.0,
-                "subreddit": "ASX",
-            },
-        ),
-        (
-            "bluesky",
-            ("BHP", 1),
-            {
-                "uri": "at://did:plc:test/app.bsky.feed.post/one",
-                "text": "$BHP shares rise",
-                "created_at": "2026-08-29T00:00:00Z",
-                "author": "investor.test",
-                "display_name": "Investor",
-                "reply_count": 1,
-                "repost_count": 1,
-                "like_count": 2,
-                "quote_count": 0,
-                "langs": ["en"],
-                "tags": ["ASX"],
-            },
-        ),
-        (
-            "mastodon",
-            ("BHP", 1),
-            {
-                "id": "mastodon-1",
-                "text": "$BHP shares rise",
-                "created_at": "2026-08-29T00:00:00Z",
-                "url": "https://aus.social/@investor/one",
-                "author": "investor",
-                "display_name": "Investor",
-                "replies_count": 1,
-                "reblogs_count": 1,
-                "favourites_count": 2,
-                "language": "en",
-                "tags": ["ASX"],
-                "sensitive": False,
-                "spoiler_text": "",
-            },
-        ),
-    ],
-)
-def test_social_collectors_link_each_saved_artifact(
-    route_name: str,
-    arguments: tuple[str, int],
-    post: dict,
-) -> None:
-    from importlib import import_module
-
-    route = import_module(f"app.api.routes.{route_name}")
-    db = MagicMock()
-    session_context = MagicMock()
-    session_context.__enter__.return_value = db
-    artifact = MagicMock(id=uuid.uuid4())
-    platform = MagicMock(id=uuid.uuid4())
-    platform_function = getattr(route, f"_get_or_create_{route_name}_platform")
-
-    credential_patches = []
-    if route_name == "reddit":
-        credential_patches = [
-            patch.object(route.settings, "REDDIT_CLIENT_ID", "client"),
-            patch.object(route.settings, "REDDIT_CLIENT_SECRET", "secret"),
-        ]
-
-    for credential_patch in credential_patches:
-        credential_patch.start()
-    try:
-        with patch.object(route, "SessionLocal", return_value=session_context), patch.object(
-            route,
-            platform_function.__name__,
-            return_value=platform,
-        ), patch.object(route, "_fetch_posts", return_value=[post]), patch.object(
-            route.artifact_crud,
-            "get_artifact_by_hash",
-            return_value=None,
-        ), patch.object(
-            route.artifact_crud,
-            "create_artifact",
-            return_value=artifact,
-        ), patch.object(
-            route.public_discussion_service,
-            "link_artifact_to_tickers",
-            return_value=[MagicMock()],
-        ) as link_artifact:
-            with patch.object(
-                route.public_discussion_service,
-                "queue_artifact_analysis",
-                return_value=True,
-            ) as queue_analysis:
-                result = route._scrape_and_store_posts(*arguments)
-    finally:
-        for credential_patch in credential_patches:
-            credential_patch.stop()
-
-    assert result == {
-        "saved": 1,
-        "skipped_duplicates": 0,
-        "mentions_linked": 1,
-        "analysis_queued": 1,
-    }
-    link_artifact.assert_called_once_with(db, artifact)
-    queue_analysis.assert_called_once_with(db, artifact, link_artifact.return_value)
-
-
 def test_reddit_client_uses_configured_user_agent() -> None:
-    from app.api.routes import reddit
+    from app.services.discussion_sources import reddit
 
     with patch.object(reddit.settings, "REDDIT_CLIENT_ID", "client"), patch.object(
         reddit.settings,
@@ -275,36 +179,13 @@ def test_reddit_client_uses_configured_user_agent() -> None:
         "REDDIT_USER_AGENT",
         "windows:test-client:1.0.0 (read-only test)",
     ), patch.object(reddit.praw, "Reddit") as praw_client:
-        reddit._get_reddit_client()
+        reddit.REDDIT.client()
 
     praw_client.assert_called_once_with(
         client_id="client",
         client_secret="secret",
         user_agent="windows:test-client:1.0.0 (read-only test)",
     )
-
-
-def test_public_discussion_analysis_queue_does_not_require_a_ticker_match() -> None:
-    from app.services import public_discussion
-
-    artifact = SimpleNamespace(id=uuid.uuid4(), analysis_status="pending")
-    db = MagicMock()
-    with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", ""):
-        assert (
-            public_discussion.queue_artifact_analysis(db, artifact, [MagicMock()])
-            is False
-        )
-
-    with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", "queue-url"), patch(
-        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
-        return_value="message-1",
-    ) as enqueue, patch(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
-    ) as mark_queued:
-        assert public_discussion.queue_artifact_analysis(db, artifact, []) is True
-
-    enqueue.assert_called_once_with(artifact.id)
-    mark_queued.assert_called_once_with(db, artifact.id)
 
 
 def test_public_discussion_status_aggregates_analysis_states() -> None:
@@ -385,7 +266,10 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
     from app.services import public_discussion
 
     db = MagicMock()
-    artifacts = [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
+    artifacts = [
+        SimpleNamespace(id=uuid.uuid4(), analysis_status="pending", raw_text="text", title="")
+        for _ in range(2)
+    ]
     with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", "queue-url"), patch.object(
         public_discussion,
         "_pending_analysis_artifacts",
@@ -409,73 +293,8 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
     assert result["artifact_ids"] == [artifact.id for artifact in artifacts]
 
 
-def test_public_discussion_requeue_route_requires_admin_dependency() -> None:
-    from app.api.deps import require_admin_investor
-    from app.api.routes import public_discussion
-
-    route = next(
-        route
-        for route in public_discussion.router.routes
-        if getattr(route, "path", None) == "/public-discussion/analysis/requeue"
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
-@pytest.mark.parametrize("route_name", ["reddit", "bluesky", "mastodon", "blog"])
-def test_public_discussion_collectors_require_admin_dependency(
-    route_name: str,
-) -> None:
-    from importlib import import_module
-
-    from app.api.deps import require_admin_investor
-
-    module = import_module(f"app.api.routes.{route_name}")
-    route = next(
-        route
-        for route in module.router.routes
-        if getattr(route, "path", "").endswith("/scrape")
-        and "POST" in getattr(route, "methods", set())
-    )
-
-    assert require_admin_investor in {
-        dependency.call for dependency in route.dependant.dependencies
-    }
-
-
-def test_no_public_discussion_does_not_report_neutral_sentiment() -> None:
-    from app.api.routes import category_sentiment
-
-    with patch.object(
-        category_sentiment.artifact_crud,
-        "get_reddit_posts_for_ticker",
-        return_value=[],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_bluesky_posts_for_ticker",
-        return_value=[],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_mastodon_posts_for_ticker",
-        return_value=[],
-    ):
-        result = category_sentiment._summarise_recent_public_discussion(
-            ticker="BHP",
-            db=MagicMock(),
-            days=30,
-            reddit_limit=20,
-            bluesky_limit=20,
-            mastodon_limit=20,
-        )
-
-    assert result["dominant_sentiment"] is None
-    assert "No public discussion" in result["summary"]
-
-
 def test_blog_adapter_parses_rss_and_atom_entries() -> None:
-    from app.api.routes import blog
+    from app.services.discussion_sources import blog
 
     rss = b"""<?xml version="1.0"?>
     <rss version="2.0"><channel><item>
@@ -493,8 +312,8 @@ def test_blog_adapter_parses_rss_and_atom_entries() -> None:
       <author><name>Reporter</name></author>
     </entry></feed>"""
 
-    rss_posts = blog._parse_feed(rss, limit=10)
-    atom_posts = blog._parse_feed(atom, limit=10)
+    rss_posts = blog.parse_feed(rss, limit=10)
+    atom_posts = blog.parse_feed(atom, limit=10)
 
     assert rss_posts[0]["id"] == "rss-1"
     assert rss_posts[0]["raw_text"] == "$BHP profit rose."
@@ -504,19 +323,19 @@ def test_blog_adapter_parses_rss_and_atom_entries() -> None:
 
 
 def test_blog_adapter_rejects_xml_entity_declarations() -> None:
-    from app.api.routes import blog
+    from app.services.discussion_sources import blog
 
     unsafe_feed = b"""<!DOCTYPE rss [<!ENTITY x "unsafe">]>
     <rss version="2.0"><channel><item><title>&x;</title></item></channel></rss>"""
 
     with pytest.raises(ValueError, match="declarations are not allowed"):
-        blog._parse_feed(unsafe_feed, limit=10)
+        blog.parse_feed(unsafe_feed, limit=10)
 
 
 def test_blog_scrape_endpoint_rejects_unconfigured_feed() -> None:
     from app.api.routes import blog
 
-    with patch.object(blog.settings, "PUBLIC_DISCUSSION_FEED_URLS", []):
+    with patch.object(settings, "PUBLIC_DISCUSSION_FEED_URLS", []):
         with pytest.raises(Exception) as exc_info:
             blog.scrape_and_store(
                 background_tasks=MagicMock(),
@@ -529,7 +348,7 @@ def test_blog_scrape_endpoint_rejects_unconfigured_feed() -> None:
 
 
 def test_bluesky_public_search_uses_public_appview() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     response = MagicMock()
     response.json.return_value = {"posts": []}
@@ -542,7 +361,7 @@ def test_bluesky_public_search_uses_public_appview() -> None:
         "BLUESKY_PUBLIC_API_URL",
         "https://public.api.bsky.test",
     ), patch.object(bluesky.httpx, "get", return_value=response) as get:
-        assert bluesky._fetch_posts("BHP", 5) == []
+        assert bluesky.BLUESKY.fetch("BHP", 5) == []
 
     get.assert_called_once_with(
         "https://public.api.bsky.test/xrpc/app.bsky.feed.searchPosts",
@@ -553,7 +372,7 @@ def test_bluesky_public_search_uses_public_appview() -> None:
 
 
 def test_bluesky_authenticated_search_uses_app_password_session() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     session_response = MagicMock()
     session_response.json.return_value = {"accessJwt": "access-token"}
@@ -576,7 +395,7 @@ def test_bluesky_authenticated_search_uses_app_password_session() -> None:
         "get",
         return_value=search_response,
     ) as get:
-        assert bluesky._fetch_posts("BHP", 5) == []
+        assert bluesky.BLUESKY.fetch("BHP", 5) == []
 
     post.assert_called_once_with(
         "https://bsky.test/xrpc/com.atproto.server.createSession",
@@ -592,7 +411,7 @@ def test_bluesky_authenticated_search_uses_app_password_session() -> None:
 
 
 def test_bluesky_rejects_half_configured_credentials() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     with patch.object(bluesky.settings, "BLUESKY_IDENTIFIER", "user.bsky.social"), patch.object(
         bluesky.settings,
@@ -600,7 +419,7 @@ def test_bluesky_rejects_half_configured_credentials() -> None:
         "",
     ):
         with pytest.raises(RuntimeError, match="must be configured together"):
-            bluesky._search_request_config()
+            bluesky.BLUESKY.search_request()
 
 
 def test_public_discussion_run_records_collection_counts() -> None:

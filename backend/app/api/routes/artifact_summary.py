@@ -8,7 +8,10 @@ from app.crud import artifact_summary as crud
 router = APIRouter(prefix="/artifact-summaries", tags=["artifact-summaries"])
 
 @router.post("/", response_model=ArtifactSummaryResponse)
-def create_artifact_summary(summary: ArtifactSummaryCreate, db: Session = Depends(get_db)):
+def create_artifact_summary(
+    summary: ArtifactSummaryCreate,
+    db: Session = Depends(get_db),
+):
     return crud.create_artifact_summary(db=db, summary=summary)
 
 @router.get("/artifact/{artifact_id}", response_model=list[ArtifactSummaryResponse])

@@ -72,10 +72,10 @@ The deployment starts with these fixed limits:
 | Amazon Bedrock access | Disabled |
 | Amazon Bedrock model | GPT-OSS 120B only |
 | Bedrock prompt per request | 30,000 characters |
-| Bedrock output per request | 1,024 tokens |
+| Bedrock output per request | 4,096 tokens |
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
-| Document size | 10 MiB |
+| Document size | 25 MiB |
 | PDF pages | 100 |
 | OCR pages | 5 |
 | Sentiment input | 50,000 characters |
@@ -110,7 +110,7 @@ Bedrock is restricted to on-demand `openai.gpt-oss-120b-1:0` in Sydney. No
 Provisioned Throughput is created. API requests use Standard tier. Queued
 analysis uses Flex tier. `AnalysisEnabled=false` stops Queue C from starting new
 work, while `BedrockEnabled=false` removes Bedrock permission. Prompts over
-30,000 characters are rejected and generated output is capped at 1,024 tokens.
+30,000 characters are rejected and generated output is capped at 4,096 tokens.
 Local FinBERT remains responsible for sentiment analysis.
 
 The deployment intentionally avoids paid-by-default features such as

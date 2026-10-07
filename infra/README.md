@@ -488,7 +488,7 @@ summaries and evidence categorisation:
 - IAM permits only regional `openai.gpt-oss-120b-1:0`;
 - API requests use Standard tier and cost-bearing routes require authentication;
 - queued analysis uses Flex tier, concurrency one, and SQS batch size one;
-- prompts are capped at 30,000 characters and completions at 1,024 tokens; and
+- prompts are capped at 30,000 characters and completions at 4,096 tokens; and
 - responses must pass the existing strict JSON schemas before storage.
 
 Use on-demand inference only. Do not create Provisioned Throughput. When the
@@ -580,7 +580,9 @@ earlier successful stages.
 ## Rollback
 
 ECR keeps the two newest image versions. Use **Prepare staging backend rollback**
-with the previous full SHA. Person 1 reviews that change set before Person 2
+with the previous full SHA. The change set keeps every parameter the live stack
+runs with (auth provider, feature switches, custom domain, alert sender) and
+swaps only the three image URIs. Person 1 reviews that change set before Person 2
 executes it. Each Lambda publishes through its `live` alias. Use **Roll back
 staging frontend** to restore the matching S3 release snapshot and invalidate
 CloudFront. Do not downgrade the database automatically. Use a forward-fix

@@ -1,364 +1,80 @@
-import re
-from pathlib import Path
-from datetime import datetime
-from urllib.parse import urljoin
+"""Origin Energy (ORG): media releases on Origin's investor pages.
 
-from playwright.async_api import async_playwright, BrowserContext
+The listing is a server-rendered WordPress page that paginates with
+?query-0-page=N. Each release's article page links to one or more PDFs;
+when there are several, the one labelled ASX is the lodged document rather
+than a supplementary report.
+"""
 
-from ..base import BaseScraper, Announcement
-from ..browser import chromium_launch_options
+from __future__ import annotations
+
+from ..adapter import SeededBrowserDownload, SourceAdapter
+from ..article_listings import (
+    MONTH_FIRST_DATES,
+    ArticleLink,
+    article_pdf_url,
+    dated_links,
+    resolved_announcements,
+    walk_listing_pages,
+)
+from ..base import Announcement
+from ..fetching import Page, Render
+
+# The listing goes back about 66 pages; keep to the recent ones.
+MAX_PAGES = 2
+# The listing is server-rendered and never reaches network idle, so wait for
+# the DOM and the release links.
+LISTING = Render(wait_for="a[href*='/about/investors-media/']")
+ARTICLE = Render(settle_ms=1_000)
 
 
-class ORGScraper(BaseScraper):
-    """
-    Origin Energy Limited (ORG) scraper.
+def listing_page_url(listing_url: str, page_number: int) -> str:
+    return listing_url if page_number == 1 else f"{listing_url}?query-0-page={page_number}"
 
-    Unlike WDS/RIO, originenergy.com.au is a plain server-rendered
-    WordPress site — the listing at /about/investors-media/media-releases/
-    already contains every card's title, date, and article link with no
-    client-side JS required, and paginates via `?query-0-page=N`. Each
-    article page (e.g. .../quarterly-report-june-2026/) then links directly
-    to one or more PDFs, e.g. "Quarterly Report June 2026 (PDF)" and
-    "Quarterly Report June 2026 ASX/Media Release (PDF)" — when an article
-    has more than one attachment, the one whose link text/href mentions
-    "ASX" is preferred, since that's the actual lodged regulatory document
-    rather than a supplementary report.
 
-    Still uses Playwright (rather than plain httpx) for consistency with
-    every other scraper in this repo, and because the exact WordPress
-    theme's markup/classes weren't inspected live — row discovery is done
-    defensively by scanning anchors and filtering by URL shape, same as
-    WDS/RIO, rather than betting on unverified CSS selectors.
-    """
+class ORGAdapter(SeededBrowserDownload, SourceAdapter):
+    hosts = frozenset({"www.originenergy.com.au", "originenergy.com.au"})
 
-    LISTING_BASE_URL = "https://www.originenergy.com.au/about/investors-media/media-releases/"
-
-    # `?query-0-page=N` goes up to ~66 on the live site; kept small here to
-    # mirror the "recent announcements" scope every other scraper uses.
-    MAX_PAGES = 2
-
-    @property
-    def ticker(self) -> str:
-        return "ORG"
-
-    @property
-    def source_url(self) -> str:
-        return self.LISTING_BASE_URL
-
-    async def fetch_announcements(self) -> list[Announcement]:
-        announcements: list[Announcement] = []
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(**chromium_launch_options())
-
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1366, "height": 768},
-                locale="en-AU",
-                ignore_https_errors=True,
+    async def _list_documents(self) -> list[Announcement]:
+        async with self.fetcher.session(ignore_https_errors=True) as web:
+            links = await walk_listing_pages(
+                web,
+                [listing_page_url(self.source_url, number) for number in range(1, MAX_PAGES + 1)],
+                LISTING,
+                lambda page, url: release_links(page, page_url=url, listing_url=self.source_url),
             )
 
-            article_links: list[dict] = []
+            async def pdf_url_for(link: ArticleLink) -> str | None:
+                article = await web.render(link.article_url, ARTICLE)
+                return article_pdf_url(article, link.article_url, prefer=_asx_labelled)
 
-            for page_no in range(1, self.MAX_PAGES + 1):
-                page_url = (
-                    self.LISTING_BASE_URL
-                    if page_no == 1
-                    else f"{self.LISTING_BASE_URL}?query-0-page={page_no}"
-                )
-
-                page = await context.new_page()
-                try:
-                    await page.goto(page_url, wait_until="networkidle", timeout=60000)
-                except Exception as e:
-                    print(f"[ORG] Failed to load page {page_no} ({page_url}): {e}")
-                    await page.close()
-                    break
-
-                try:
-                    await page.wait_for_selector(
-                        "a[href*='/about/investors-media/']",
-                        timeout=15000,
-                    )
-                except Exception:
-                    pass
-
-                page_items = await self._extract_article_links(page, page_url)
-                await page.close()
-
-                new_items = [
-                    item
-                    for item in page_items
-                    if item["article_url"] not in {a["article_url"] for a in article_links}
-                ]
-
-                print(f"[ORG] Page {page_no}: found {len(page_items)} candidate links, {len(new_items)} new")
-
-                if not new_items:
-                    break
-
-                article_links.extend(new_items)
-
-            for item in article_links:
-                try:
-                    pdf_url = await self._resolve_pdf_url(context, item["article_url"])
-
-                    if not pdf_url:
-                        print(f"[ORG] No PDF found for: {item['title']}")
-                        continue
-
-                    announcements.append(
-                        Announcement(
-                            ticker=self.ticker,
-                            title=item["title"],
-                            date=item["date"],
-                            pdf_url=pdf_url,
-                            source_url=item["article_url"],
-                            metadata={
-                                "listing_url": self.LISTING_BASE_URL,
-                                "article_url": item["article_url"],
-                                "raw_date": item["raw_date"],
-                            },
-                        )
-                    )
-                except Exception as e:
-                    print(f"[ORG] Failed to process link {item['article_url']}: {e}")
-
-            announcements = self._dedupe_announcements(announcements)
-
-            await browser.close()
-
-        return announcements
-
-    async def _extract_article_links(self, page, page_url: str) -> list[dict]:
-        items = []
-
-        links = await page.query_selector_all("a[href]")
-
-        for link in links:
-            href = await link.get_attribute("href")
-            text = (await link.inner_text()).strip()
-
-            if not href:
-                continue
-
-            full_url = urljoin(page_url, href)
-
-            if not self._looks_like_org_release(full_url, text):
-                continue
-
-            date = await self._extract_nearby_date(link)
-
-            if not date:
-                print(f"[ORG] Skipping link because no date found nearby: {text}")
-                continue
-
-            items.append(
-                {
-                    "title": text,
-                    "date": date,
-                    "raw_date": date.isoformat(),
-                    "article_url": full_url,
-                }
+            return await resolved_announcements(
+                links, pdf_url_for, ticker=self.ticker, listing_url=self.source_url
             )
 
-        return self._dedupe_article_links(items)
 
-    def _looks_like_org_release(self, url: str, text: str) -> bool:
+def release_links(listing: Page, *, page_url: str, listing_url: str) -> list[ArticleLink]:
+    def title_for(url: str, text: str) -> str | None:
         url_lower = url.lower().split("#", 1)[0]
-
         if not text:
-            return False
-
-        if url_lower.startswith("http") and "originenergy.com.au" not in url_lower:
-            return False
-
-        if "/about/investors-media/" not in url_lower:
-            return False
-
-        # Exclude tag chips ("Asx", "Media Release", ...), pagination
-        # controls, and the listing page linking to itself (e.g. a
-        # breadcrumb back to "Media Releases").
-        if "/tag/" in url_lower:
-            return False
-
-        if "query-0-page" in url_lower:
-            return False
-
-        if url_lower.rstrip("/") == self.LISTING_BASE_URL.lower().rstrip("/"):
-            return False
-
-        return True
-
-    async def _resolve_pdf_url(self, context: BrowserContext, article_url: str) -> str | None:
-        page = await context.new_page()
-        try:
-            await page.goto(article_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(1000)
-
-            pdf_links = await page.query_selector_all("a[href*='.pdf']")
-
-            candidates: list[tuple[str, str]] = []  # (full_url, link_text)
-            for link in pdf_links:
-                href = await link.get_attribute("href")
-                if not href:
-                    continue
-                full_url = urljoin(article_url, href)
-                if ".pdf" in full_url.lower():
-                    text = (await link.inner_text()).strip()
-                    candidates.append((full_url, text))
-
-            if not candidates:
-                html = await page.content()
-                match = re.search(r'https?://[^"\']+\.pdf(?:\?[^"\']*)?', html)
-                if match:
-                    return match.group(0)
-
-                relative_match = re.search(r'["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']', html)
-                if relative_match:
-                    return urljoin(article_url, relative_match.group(1))
-
-                return None
-
-            # An article can carry more than one attachment (e.g. a
-            # standalone quarterly report plus the actual "ASX/Media
-            # Release" PDF that was lodged with the exchange) — prefer
-            # whichever one is explicitly ASX-labelled, since that's the
-            # regulatory document, not a supplementary report.
-            for full_url, text in candidates:
-                if "asx" in text.lower() or "asx" in full_url.lower():
-                    return full_url
-
-            return candidates[0][0]
-        finally:
-            await page.close()
-
-    def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
-        seen: set[str] = set()
-        result = []
-        for item in items:
-            key = item["article_url"]
-            if key not in seen:
-                seen.add(key)
-                result.append(item)
-        return result
-
-    def _dedupe_announcements(self, announcements: list[Announcement]) -> list[Announcement]:
-        seen: set[str] = set()
-        result = []
-        for ann in announcements:
-            key = ann.pdf_url or ann.source_url or ann.title
-            if key not in seen:
-                seen.add(key)
-                result.append(ann)
-        return result
-
-    async def _extract_nearby_date(self, link) -> datetime | None:
-        """
-        Same narrowest-ancestor-first climb used by the WDS/RIO scrapers:
-        check each ancestor level's own text, nearest first, and stop at
-        the first level that contains a date, so a wider multi-card
-        listing container is never consulted and can't hand back a
-        neighbouring card's date.
-        """
-        result = await link.evaluate(
-            """
-            el => {
-                const levels = [];
-                let node = el;
-                let timeAttr = null;
-                for (let i = 0; i < 8 && node && node.parentElement; i++) {
-                    node = node.parentElement;
-                    if (!timeAttr) {
-                        const t = node.querySelector('time[datetime]');
-                        if (t) timeAttr = t.getAttribute('datetime');
-                    }
-                    levels.push(node.innerText || '');
-                }
-                return { timeAttr, levels };
-            }
-            """
-        )
-
-        time_attr = (result or {}).get("timeAttr")
-        if time_attr:
-            parsed = self._parse_date_str(time_attr.strip()[:19].replace("T", " "))
-            if parsed:
-                return parsed
-
-        for text in (result or {}).get("levels") or []:
-            if len(text) > 2000:
-                break
-            parsed = self._first_date_in_text(text)
-            if parsed:
-                return parsed
-
-        return None
-
-    def _first_date_in_text(self, text: str) -> datetime | None:
-        date_patterns = [
-            r"[A-Za-z]+\s+\d{1,2},\s*\d{4}",  # July 31, 2026 (listing page)
-            r"\d{1,2}\s+[A-Za-z]+\s+\d{4}",   # 31 July 2026 (article page)
-            r"\d{1,2}/\d{1,2}/\d{4}",         # 31/07/2026
-            r"\d{1,2}\.\d{1,2}\.\d{2}\b",     # 31.07.26
-            r"\d{4}-\d{2}-\d{2}",             # 2026-07-31
-        ]
-
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if match:
-                parsed = self._parse_date_str(match.group(0))
-                if parsed:
-                    return parsed
-
-        return None
-
-    def _parse_date_str(self, date_str: str) -> datetime | None:
-        date_str = date_str.strip()
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d",
-            "%B %d, %Y",
-            "%b %d, %Y",
-            "%d %B %Y",
-            "%d %b %Y",
-            "%d/%m/%Y",
-            "%d.%m.%y",
-        ):
-            try:
-                return datetime.strptime(date_str, fmt)
-            except ValueError:
-                continue
-
-        try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except ValueError:
             return None
+        if url_lower.startswith("http") and "originenergy.com.au" not in url_lower:
+            return None
+        if "/about/investors-media/" not in url_lower:
+            return None
+        # Not tag chips, pagination or the listing linking to itself.
+        if "/tag/" in url_lower or "query-0-page" in url_lower:
+            return None
+        if url_lower.rstrip("/") == listing_url.lower().rstrip("/"):
+            return None
+        return text
 
-    async def _download_via_browser(self, context: BrowserContext, announcement: Announcement) -> Path:
-        date_str = announcement.date.strftime("%Y-%m-%d")
-        clean_title = re.sub(r"[^\w\-_]", "_", " ".join(announcement.title.split()))
-        clean_title = clean_title[:120].strip("_") or "announcement"
-        filename = f"{date_str}_{clean_title}.pdf"
-        dest = self.output_dir / filename
+    # The listing prints "July 31, 2026" and article pages "31 July 2026".
+    return dated_links(
+        listing, base_url=page_url, rules=MONTH_FIRST_DATES, title_for=title_for
+    )
 
-        response = await context.request.get(
-            announcement.pdf_url,
-            headers={"Referer": self.LISTING_BASE_URL},
-        )
 
-        if not response.ok:
-            raise RuntimeError(f"HTTP {response.status} for {announcement.pdf_url}")
-
-        body = await response.body()
-
-        if body[:4] != b"%PDF":
-            raise ValueError(f"Downloaded file is not a PDF: {announcement.pdf_url}")
-
-        dest.write_bytes(body)
-        print(f"[ORG] Saved: {dest}")
-        return dest
+def _asx_labelled(url: str, text: str) -> bool:
+    # The ASX-labelled attachment is the document lodged with the exchange.
+    return "asx" in text.lower() or "asx" in url.lower()

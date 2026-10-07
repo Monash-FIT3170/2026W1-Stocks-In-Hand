@@ -102,7 +102,6 @@ export) shows up locally instead of only after a deploy.
 | `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
 | `BEDROCK_SERVICE_TIER` | No | `default`, `flex`, or `priority`. AWS queued analysis uses `flex`. |
 | `BEDROCK_MAX_PROMPT_CHARS` | No | Rejects prompts over 30,000 characters by default. |
-| `BEDROCK_MAX_OUTPUT_TOKENS` | No | Caps generated output at 1,024 tokens by default. |
 | `GROQ_API_KEY` | Local rollback only | Not loaded by the AWS deployment. |
 | `GROQ_MODEL` | Local rollback only | Defaults to `openai/gpt-oss-120b`. |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
@@ -196,10 +195,14 @@ signed email link, so they do not need to be added to Brevo first. See the
 | GET | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker |
 | POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
-### Bedrock analysis routes
+### LLM routes
+Admin only. Each answers 503 when no LLM provider is switched on.
+
 | Method | Path | Description |
 |---|---|---|
-| POST | `/gemini/categorise/recent` | Admin-only legacy route name. Uses Bedrock on recent ASX artifacts and classifies them into financial categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no current summary. Params: `limit` |
+| POST | `/llm/summarise/artifact/{artifact_id}` | Summarises one artifact, replacing its summary |
 
 ### Scraping
 | Method | Path | Description |
@@ -353,7 +356,9 @@ deployment to validate anything AWS-specific (IAM, throttling, budgets).
 ### Verifying it's working
 
 **1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session,
-so sign up, promote yourself in Postgres, then sign back in:
+like every other write route except sign-up, sign-in, sign-out, email
+verification and unsubscribe. Sign up, promote yourself in Postgres, then sign
+back in:
 
 ```bash
 curl -c cookies.txt -X POST http://localhost:8000/auth/sign-up \

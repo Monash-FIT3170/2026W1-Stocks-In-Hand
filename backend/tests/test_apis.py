@@ -190,7 +190,7 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
         created_at=published_at,
     )
 
-    with patch.object(ticker, "_ensure_default_tickers"), patch.object(
+    with patch.object(
         ticker.crud,
         "get_ticker_by_symbol",
         return_value=ticker_record,
@@ -213,61 +213,6 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
     assert result["overview"]["latest_signal_confidence_pct"] == "91%"
     assert result["overview"]["sentiment_status"] == "available"
     assert result["aside"]["key_numbers"][0]["value"] == "$150.00"
-
-
-def test_deep_dive_initializes_default_ticker_before_returning_empty_timeline() -> None:
-    """A direct deep-dive request must work before another ticker endpoint runs."""
-    import uuid
-
-    from app.api.routes import ticker
-
-    db = MagicMock()
-    ticker_record = MagicMock(id=uuid.uuid4(), symbol="BHP")
-
-    with patch.object(
-        ticker.crud,
-        "get_ticker_by_symbol",
-        side_effect=[None, ticker_record],
-    ) as get_ticker, patch.object(
-        ticker,
-        "_ensure_default_tickers",
-    ) as ensure_defaults, patch.object(
-        ticker,
-        "_ticker_artifacts",
-        return_value=[],
-    ):
-        result = ticker.get_ticker_deep_dive_timeline("bhp", db=db)
-
-    ensure_defaults.assert_called_once_with(db)
-    assert get_ticker.call_count == 2
-    assert result == []
-
-
-def test_deep_dive_does_not_reinitialize_an_existing_ticker() -> None:
-    """Normal timeline reads should not perform unnecessary database writes."""
-    import uuid
-
-    from app.api.routes import ticker
-
-    db = MagicMock()
-    ticker_record = MagicMock(id=uuid.uuid4(), symbol="ANZ")
-
-    with patch.object(
-        ticker.crud,
-        "get_ticker_by_symbol",
-        return_value=ticker_record,
-    ), patch.object(
-        ticker,
-        "_ensure_default_tickers",
-    ) as ensure_defaults, patch.object(
-        ticker,
-        "_ticker_artifacts",
-        return_value=[],
-    ):
-        result = ticker.get_ticker_deep_dive_timeline("ANZ", db=db)
-
-    ensure_defaults.assert_not_called()
-    assert result == []
 
 
 # --- Reddit route tests ---
@@ -302,14 +247,21 @@ def _make_mock_submission(
     return s
 
 
+def _fetch_reddit(submission) -> list[dict]:
+    from app.services.discussion_sources import reddit
+
+    with patch.object(reddit.settings, "REDDIT_CLIENT_ID", "client"), patch.object(
+        reddit.settings, "REDDIT_CLIENT_SECRET", "secret"
+    ), patch.object(reddit.RedditSource, "client") as client:
+        client.return_value.subreddit.return_value.hot.return_value = [submission]
+        return reddit.REDDIT.fetch("ASX", 1)
+
+
 def test_list_reddit_posts_returns_posts() -> None:
     """GET /reddit/ returns a list of posts from the subreddit."""
     mock_post = _make_mock_submission()
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert len(result) == 1
     assert result[0]["id"] == "abc123"
@@ -323,10 +275,7 @@ def test_list_reddit_posts_truncates_body() -> None:
     long_body = "x" * 2000
     mock_post = _make_mock_submission(selftext=long_body)
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert len(result[0]["body"]) == 1000
 
@@ -335,10 +284,7 @@ def test_list_reddit_posts_empty_body() -> None:
     """Posts with no body text return an empty string."""
     mock_post = _make_mock_submission(selftext="")
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert result[0]["body"] == ""
 
@@ -350,10 +296,7 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
         url="https://example.com/article"
     )
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert result[0]["external_url"] == "https://example.com/article"
     assert result[0]["is_self"] is False
@@ -381,9 +324,9 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
         }],
     }
 
-    with patch("app.api.routes.bluesky.httpx.get", return_value=mock_response):
-        from app.api.routes.bluesky import _fetch_posts
-        result = _fetch_posts(query="ANZ", limit=1)
+    with patch("app.services.discussion_sources.bluesky.httpx.get", return_value=mock_response):
+        from app.services.discussion_sources.bluesky import BLUESKY
+        result = BLUESKY.fetch("ANZ", 1)
 
     assert len(result) == 1
     assert result[0]["uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
@@ -391,28 +334,6 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
     assert result[0]["author"] == "investor.bsky.social"
     assert result[0]["like_count"] == 4
     assert result[0]["tags"] == ["ASX"]
-
-
-def test_bluesky_ticker_filter_requires_financial_context() -> None:
-    """Posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_bluesky_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_bluesky_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_bluesky_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
-
-
-def test_mastodon_ticker_filter_requires_financial_context() -> None:
-    """Mastodon posts need a ticker mention and a finance-related signal."""
-    from app.crud.artifact import _is_mastodon_ticker_post
-
-    relevant = MagicMock(title="ANZ shares rise after earnings", raw_text="ASX investors react.")
-    unrelated = MagicMock(title="Thank you Anz", raw_text="")
-
-    assert _is_mastodon_ticker_post(relevant, "ANZ", "ANZ Group Holdings Limited")
-    assert not _is_mastodon_ticker_post(unrelated, "ANZ", "ANZ Group Holdings Limited")
 
 
 def test_stored_sentiment_groups_forum_sources_as_public_discussion() -> None:
@@ -444,9 +365,9 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
         "spoiler_text": "",
     }]
 
-    with patch("app.api.routes.mastodon.httpx.get", return_value=mock_response):
-        from app.api.routes.mastodon import _fetch_posts
-        result = _fetch_posts(tag="ANZ", limit=1)
+    with patch("app.services.discussion_sources.mastodon.httpx.get", return_value=mock_response):
+        from app.services.discussion_sources.mastodon import MASTODON
+        result = MASTODON.fetch("ANZ", 1)
 
     assert len(result) == 1
     assert result[0]["id"] == "114123456789"
@@ -454,106 +375,6 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
     assert result[0]["author"] == "investor"
     assert result[0]["favourites_count"] == 4
     assert result[0]["tags"] == ["ASX"]
-
-
-def test_public_discussion_summary_combines_all_sources() -> None:
-    """All public discussion sources are included in one summary request."""
-    from app.api.routes import category_sentiment
-
-    reddit_post = MagicMock(
-        title="ANZ earnings discussion",
-        raw_text="Investors are watching the result.",
-        url="https://reddit.com/example",
-        artifact_metadata={"score": 7},
-    )
-    bluesky_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="ASX investors are positive.",
-        url="https://bsky.app/example",
-        artifact_metadata={
-            "like_count": 3,
-            "repost_count": 2,
-            "reply_count": 1,
-            "quote_count": 0,
-        },
-    )
-    mastodon_post = MagicMock(
-        title="ANZ shares rise",
-        raw_text="Investors are positive about the result.",
-        url="https://aus.social/example",
-        artifact_metadata={
-            "favourites_count": 4,
-            "reblogs_count": 2,
-            "replies_count": 1,
-        },
-    )
-    captured_posts = []
-
-    def fake_summary(**kwargs):
-        captured_posts.extend(kwargs["posts"])
-        return {"summary": "Discussion is positive.", "dominant_sentiment": "bullish"}
-
-    with patch.object(
-        category_sentiment.artifact_crud,
-        "get_reddit_posts_for_ticker",
-        return_value=[reddit_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_bluesky_posts_for_ticker",
-        return_value=[bluesky_post],
-    ), patch.object(
-        category_sentiment.artifact_crud,
-        "get_mastodon_posts_for_ticker",
-        return_value=[mastodon_post],
-    ), patch.object(
-        category_sentiment.reddit_route,
-        "_summarise_reddit_posts",
-        side_effect=fake_summary,
-    ):
-        result = category_sentiment._summarise_recent_public_discussion(
-            ticker="ANZ",
-            db=MagicMock(),
-            days=30,
-            reddit_limit=50,
-            bluesky_limit=50,
-            mastodon_limit=50,
-        )
-
-    assert result["summary"] == "Discussion is positive."
-    assert len(captured_posts) == 3
-    assert captured_posts[0]["score"] == 7
-    assert captured_posts[1]["score"] == 6
-    assert captured_posts[2]["score"] == 7
-
-
-def test_summarise_reddit_posts_uses_provider_routing() -> None:
-    """Reddit summaries should use the shared provider boundary."""
-    from app.api.routes import reddit
-
-    with patch.object(
-        reddit.llm_service,
-        "summarise_reddit_digest",
-        return_value={
-            "summary": "Retail investors are mixed on BHP.",
-            "dominant_sentiment": "mixed",
-            "key_themes": ["iron ore"],
-        },
-    ) as summarise:
-        result = reddit._summarise_reddit_posts(
-            "BHP",
-            [
-                {
-                    "title": "BHP outlook",
-                    "body": "Investors are debating iron ore demand.",
-                    "score": 12,
-                }
-            ],
-        )
-
-    assert result["summary"] == "Retail investors are mixed on BHP."
-    assert result["post_count"] == 1
-    summarise.assert_called_once()
-    assert summarise.call_args.kwargs["ticker_symbol"] == "BHP"
 
 
 def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
@@ -598,10 +419,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
         category_sentiment,
         "_stored_sentiment_rows",
         return_value=[(revenue_artifact, positive), (reddit_artifact, neutral)],
-    ), patch.object(
-        category_sentiment.sentiment_service,
-        "analyse_categories",
-    ) as analyse_categories:
+    ), patch("app.services.sentiment.analyse_text") as analyse_text:
         result = category_sentiment.get_ticker_category_sentiments("anz", db=db)
 
     assert result["ticker"] == "ANZ"
@@ -623,7 +441,7 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
     validated = CategorySentimentResponse.model_validate(result)
     assert validated.status == "partial"
     assert validated.categories["risk"].sentiment_label is None
-    analyse_categories.assert_not_called()
+    analyse_text.assert_not_called()
 
 
 def test_sentiment_route_reports_unavailable_without_stored_analysis() -> None:
@@ -660,170 +478,9 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
     assert "analysis pipeline" in error.value.detail
 
 
-def test_gemini_summary_response_parser_accepts_strict_json() -> None:
-    """Gemini summary parsing should preserve text and clarity fields."""
-    from app.services.gemini import parse_summary_response
-
-    result = parse_summary_response(
-        """
-        {
-          "summary": "The company announced an updated dividend timetable.",
-          "about": "The filing explains the dividend key dates.",
-          "changed": "The payment date was confirmed.",
-          "matters": "Investors can use the dates to plan income expectations.",
-          "confirmed_facts": ["The payment date is 2 January 2040."],
-          "speculation": ["Investors may use the date to plan future income."]
-        }
-        """
-    )
-
-    assert result == {
-        "summary": "The company announced an updated dividend timetable.",
-        "about": "The filing explains the dividend key dates.",
-        "changed": "The payment date was confirmed.",
-        "matters": "Investors can use the dates to plan income expectations.",
-        "confirmed_facts": ["The payment date is 2 January 2040."],
-        "speculation": ["Investors may use the date to plan future income."],
-    }
-
-
-def test_gemini_summary_response_parser_rejects_missing_keys() -> None:
-    """Incomplete Gemini JSON should fail before storage uses it."""
-    import pytest
-
-    from app.services.gemini import parse_summary_response
-
-    with pytest.raises(ValueError, match="missing keys"):
-        parse_summary_response('{"summary": "Only one field"}')
-
-
-def test_gemini_summary_response_parser_rejects_non_list_clarity_fields() -> None:
-    """Clarity fields must remain structured so the UI can label each claim."""
-    import pytest
-
-    from app.services.gemini import parse_summary_response
-
-    with pytest.raises(ValueError, match="confirmed_facts.*list of strings"):
-        parse_summary_response(
-            """
-            {
-              "summary": "A summary.",
-              "about": "An announcement.",
-              "changed": "A change.",
-              "matters": "An impact.",
-              "confirmed_facts": "This should be a list.",
-              "speculation": []
-            }
-            """
-        )
-
-
-def test_summarise_artifact_route_stores_summary_and_metadata() -> None:
-    """Manual summary backfill should update artifact metadata and create a row."""
-    import uuid
-
-    from app.api.routes import gemini
-
-    artifact = MagicMock()
-    artifact.id = uuid.uuid4()
-    artifact.title = "Dividend update"
-    artifact.artifact_type = "dividend_announcement"
-    artifact.raw_text = "The company confirmed a dividend payment date."
-    artifact.artifact_metadata = {
-        "category": "DividendAnnouncement",
-        "extracted_data": {"payment_date": "2040-01-02"},
-    }
-    db = MagicMock()
-
-    with patch.object(
-        gemini.artifact_crud,
-        "get_artifact",
-        return_value=artifact,
-    ), patch.object(
-        gemini.llm_service,
-        "summarise_announcement",
-        return_value={
-            "summary": "The company confirmed its dividend timetable.",
-            "about": "The filing explains dividend timing.",
-            "changed": "The payment date was confirmed.",
-            "matters": "Investors can plan income timing.",
-            "confirmed_facts": ["The payment date is 2 January 2040."],
-            "speculation": ["The dividend may affect future income expectations."],
-        },
-    ), patch.object(
-        gemini.artifact_summary_crud,
-        "upsert_artifact_summary",
-        return_value=MagicMock(
-            id=uuid.uuid4(),
-            model_used="test-gemini",
-            prompt_version="test-v1",
-        ),
-    ) as mock_upsert:
-        result = gemini.summarise_artifact(
-            artifact_id=artifact.id,
-            db=db,
-        )
-
-    assert artifact.artifact_metadata["about"] == "The filing explains dividend timing."
-    assert artifact.artifact_metadata["changed"] == "The payment date was confirmed."
-    assert artifact.artifact_metadata["matters"] == "Investors can plan income timing."
-    assert artifact.artifact_metadata["confirmed_facts"] == [
-        "The payment date is 2 January 2040."
-    ]
-    assert artifact.artifact_metadata["speculation"] == [
-        "The dividend may affect future income expectations."
-    ]
-    assert result["summary"] == "The company confirmed its dividend timetable."
-    mock_upsert.assert_called_once()
-
-
-def test_summarise_news_artifact_uses_news_prompt() -> None:
-    """News artifacts should not be summarised as official ASX filings."""
-    import uuid
-
-    from app.api.routes import gemini
-
-    artifact = MagicMock()
-    artifact.id = uuid.uuid4()
-    artifact.title = "BHP production story"
-    artifact.source_type = "news"
-    artifact.artifact_type = "news_article"
-    artifact.raw_text = "BHP reported an increase in quarterly copper production."
-    artifact.artifact_metadata = {"source_name": "Example News"}
-    db = MagicMock()
-
-    with patch.object(
-        gemini.artifact_crud,
-        "get_artifact",
-        return_value=artifact,
-    ), patch.object(
-        gemini.llm_service,
-        "summarise_news_article",
-        return_value={
-            "summary": "BHP reported higher copper production.",
-            "about": "The story covers BHP's quarterly copper output.",
-            "changed": "Reported production increased.",
-            "matters": "The increase may affect revenue expectations.",
-        },
-    ) as summarise_news, patch.object(
-        gemini.llm_service,
-        "summarise_announcement",
-    ) as summarise_announcement:
-        result = gemini.summarise_artifact(artifact.id, db=db)
-
-    assert result["about"] == "The story covers BHP's quarterly copper output."
-    assert result["prompt_version"] == "llm-news-summary-v2"
-    summarise_news.assert_called_once_with(
-        title="BHP production story",
-        source_name="Example News",
-        raw_text=artifact.raw_text,
-    )
-    summarise_announcement.assert_not_called()
-
-
 def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
     """A later summary can replace old clarity classifications with empty lists."""
-    from app.api.routes.gemini import _summary_metadata
+    from app.api.routes.llm import _summary_metadata
 
     metadata = {
         "category": "DividendAnnouncement",
@@ -848,7 +505,7 @@ def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> N
 
 def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
     """Ticker-wide backfills should revisit summaries created before clarity v2."""
-    from app.api.routes.gemini import _has_current_summary
+    from app.api.routes.llm import _has_current_summary
 
     assert not _has_current_summary({"about": "An existing legacy summary."})
     assert _has_current_summary(
@@ -891,7 +548,7 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
     artifact.published_at = datetime(2040, 1, 2, tzinfo=timezone.utc)
     artifact.created_at = artifact.published_at
 
-    with patch.object(ticker_route, "_ensure_default_tickers"), patch.object(
+    with patch.object(
         ticker_route.crud,
         "get_ticker_by_symbol",
         return_value=ticker,
@@ -904,7 +561,7 @@ def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
         "_latest_sentiment_for_ticker",
         return_value=None,
     ), patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_overview("anz", db=MagicMock())
+        result = ticker_route.get_ticker_brief("anz", db=MagicMock())["overview"]
 
     assert result["clarity"] == {
         "is_classified": True,

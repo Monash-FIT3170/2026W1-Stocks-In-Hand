@@ -1,20 +1,6 @@
 import { TickerBriefShell } from "../../components/ticker/TickerBriefShell"
-
-const DEPLOYED_TICKERS = [
-  "ANZ",
-  "BHP",
-  "CBA",
-  "COL",
-  "COH",
-  "CSL",
-  "MQG",
-  "ORG",
-  "RIO",
-  "TCL",
-  "TLS",
-  "WDS",
-  "WES",
-]
+// Generated from the backend ticker catalogue: run `python -m tools.sync_tickers` in backend/.
+import DEPLOYED_TICKERS from "../tickers.json"
 
 export const dynamicParams = false
 

@@ -26,7 +26,6 @@ services:
       DATABASE_URL: postgresql://user:password@db:5432/spike
       # Local Docker uses the existing Groq fallback unless explicitly overridden.
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
-      SEED_TICKERS: ${SEED_TICKERS:-ANZ,CBA,BHP,WES,CSL,COL,TLS,TCL,COH,WDS,MQG,ORG,RIO}
       AWS_REGION: ap-southeast-2
       AWS_DEFAULT_REGION: ap-southeast-2
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
@@ -71,8 +70,6 @@ services:
       - scripts.populate_local_content
       - --sources
       - asx
-      - --tickers
-      - ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES
       - --lookback-days
       - "365"
       - --max-documents

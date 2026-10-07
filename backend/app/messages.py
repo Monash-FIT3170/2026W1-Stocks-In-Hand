@@ -14,7 +14,8 @@ from pydantic import (
     model_validator,
 )
 
-from app.sources import SourceAdapter, adapter_matches_ticker
+from app.alert_vocabulary import AlertSentimentLabel
+from app.sources import AdapterName, adapter_matches_ticker
 
 _FORBIDDEN_METADATA_KEYS = {
     "authorization",
@@ -56,7 +57,7 @@ class QueueAMessage(BaseModel):
     scrape_run_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     source_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: AdapterName
     requested_at: datetime = Field(default_factory=_utcnow)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -92,7 +93,7 @@ class QueueBMessage(BaseModel):
     source_url: HttpUrl
     document_url: HttpUrl
     canonical_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: AdapterName
     source_id: str | None = Field(default=None, max_length=512)
     title: str | None = Field(default=None, max_length=1000)
     published_at: datetime | None = None
@@ -128,7 +129,7 @@ class NotificationMessage(BaseModel):
     artifact_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     scrape_run_id: UUID
-    sentiment_label: Literal["positive", "negative"]
+    sentiment_label: AlertSentimentLabel
     confidence_score: Decimal = Field(ge=0, le=1)
 
     model_config = {"extra": "forbid"}

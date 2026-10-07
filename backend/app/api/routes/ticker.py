@@ -11,113 +11,11 @@ from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.models.ticker import Ticker
-from app.schemas.ticker import TickerCreate, TickerResponse
+from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
-DEFAULT_TICKERS = {
-    "ANZ": {
-        "company_name": "ANZ Group Holdings Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "BHP": {
-        "company_name": "BHP Group Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-    "CBA": {
-        "company_name": "Commonwealth Bank of Australia",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "COL": {
-        "company_name": "Coles Group Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Staples",
-        "industry": "Food & Staples Retailing",
-    },
-    "COH": {
-        "company_name": "Cochlear Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Health Care Equipment & Supplies",
-    },
-    "CSL": {
-        "company_name": "CSL Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Biotechnology",
-    },
-    "TCL": {
-        "company_name": "Transurban Group",
-        "exchange": "ASX",
-        "sector": "Industrials",
-        "industry": "Highways & Railtracks",
-    },
-    "TLS": {
-        "company_name": "Telstra Group Limited",
-        "exchange": "ASX",
-        "sector": "Communication Services",
-        "industry": "Diversified Telecommunication Services",
-    },
-    "WES": {
-        "company_name": "Wesfarmers Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Discretionary",
-        "industry": "Consumer Staples Distribution & Retail",
-    },
-    "WDS": {
-        "company_name": "Woodside Energy Group Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "MQG": {
-        "company_name": "Macquarie Group Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Capital Markets",
-    },
-    "ORG": {
-        "company_name": "Origin Energy Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "RIO": {
-        "company_name": "Rio Tinto Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-}
-
-
-def _ensure_default_tickers(db: Session) -> None:
-    changed = False
-
-    for symbol, defaults in DEFAULT_TICKERS.items():
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
-        if not ticker:
-            db.add(Ticker(symbol=symbol, **defaults))
-            changed = True
-            continue
-
-        for key, value in defaults.items():
-            current = getattr(ticker, key)
-            if not current or (key == "company_name" and current == symbol):
-                setattr(ticker, key, value)
-                changed = True
-
-    if changed:
-        db.commit()
-
 
 QUOTE_CACHE_TTL_SECONDS = 300
 QUOTE_FAILURE_TTL_SECONDS = 60
@@ -358,7 +256,6 @@ def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[st
 
 
 def _ticker_brief_payload(symbol: str, db: Session) -> dict:
-    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -444,7 +341,10 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
 
 
 @router.post("/", response_model=TickerResponse)
-def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
+def create_ticker(
+    ticker: TickerCreate,
+    db: Session = Depends(get_db),
+):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
     if existing:
         raise HTTPException(status_code=400, detail="Ticker symbol already exists")
@@ -453,13 +353,11 @@ def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     return crud.get_tickers(db, skip=skip, limit=limit)
 
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -475,21 +373,19 @@ def get_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{ticker_id}", response_model=TickerResponse)
-def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
+def update_ticker(
+    ticker_id: UUID,
+    data: TickerUpdate,
+    db: Session = Depends(get_db),
+):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    return crud.update_ticker(db=db, ticker_id=ticker_id, data=data)
-
-
-@router.get("/symbol/{symbol}/overview")
-def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["overview"]
-
-
-@router.get("/symbol/{symbol}/brief-aside")
-def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["aside"]
+    return crud.update_ticker(
+        db=db,
+        ticker_id=ticker_id,
+        data=data.model_dump(exclude_unset=True),
+    )
 
 
 @router.get("/symbol/{symbol}/brief")
@@ -552,12 +448,6 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
     """Return only persisted filing events; an empty history stays empty."""
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        # Deep-dive can be the first ticker endpoint requested by the client.
-        # Keep it consistent with the brief endpoints instead of relying on a
-        # separate request to create the deployed ticker records first.
-        _ensure_default_tickers(db)
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 

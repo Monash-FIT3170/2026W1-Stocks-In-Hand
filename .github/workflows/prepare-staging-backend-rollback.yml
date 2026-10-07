@@ -59,14 +59,13 @@ jobs:
           ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
-          FRONTEND_BASE_URL="$(aws cloudformation describe-stacks \
+          # A rollback swaps image tags only. Every other parameter (auth
+          # provider, feature switches, custom domain, alert sender, schedules)
+          # keeps the value the live stack runs with now.
+          aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='FrontendUrl'].OutputValue" \
-            --output text)"
-          if [ -z "$FRONTEND_BASE_URL" ] || [ "$FRONTEND_BASE_URL" = "None" ]; then
-            echo "The existing stack does not expose FrontendUrl" >&2
-            exit 1
-          fi
+            --query "Stacks[0].Parameters" \
+            --output json > current-stack-parameters.json
           for image in api scraper analysis; do
             aws ecr describe-images \
               --repository-name "stocks-in-hand-$image" \
@@ -76,7 +75,6 @@ jobs:
             echo "ECR_REGISTRY=$ECR_REGISTRY"
             echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
             echo "RELEASE_SHA=$RELEASE_SHA"
-            echo "FRONTEND_BASE_URL=$FRONTEND_BASE_URL"
           } >> "$GITHUB_ENV"
 
       - name: Set up AWS SAM
@@ -89,6 +87,20 @@ jobs:
       - name: Create the rollback change set without executing it
         shell: bash
         run: |
+          mapfile -t PARAMETER_OVERRIDES < <(
+            jq -r '.[]
+              | select(.ParameterKey | IN("ApiImageUri", "ScraperImageUri", "AnalysisImageUri") | not)
+              | "\(.ParameterKey)=\(.ParameterValue)"' current-stack-parameters.json
+          )
+          if [ "${#PARAMETER_OVERRIDES[@]}" -eq 0 ]; then
+            echo "Could not read the current stack parameters" >&2
+            exit 1
+          fi
+          PARAMETER_OVERRIDES+=(
+            "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA"
+            "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA"
+            "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+          )
           sam deploy \
             --template-file infra/template.yaml \
             --stack-name "$STACK_NAME" \
@@ -101,27 +113,11 @@ jobs:
             --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
             --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
+            --image-repositories "NotificationFunction=$ECR_REGISTRY/stocks-in-hand-api" \
             --no-confirm-changeset \
             --no-execute-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              "Environment=staging" \
-              "ParameterPathPrefix=$PARAMETER_PATH_PREFIX" \
-              "OperationsEmail=${{ vars.OPERATIONS_EMAIL }}" \
-              "FrontendBaseUrl=$FRONTEND_BASE_URL" \
-              "AuthProvider=legacy" \
-              "ScheduleEnabled=false" \
-              "PublicDiscussionScheduleEnabled=false" \
-              "MarketauxEnabled=false" \
-              "MarketauxPerTickerLimit=10" \
-              "AnalysisEnabled=true" \
-              "BedrockEnabled=false" \
-              "ScheduledTickers=ANZ,BHP,CBA,CSL,WES" \
-              "ScheduledPublicDiscussionSources=bluesky,mastodon" \
-              "PublicDiscussionPerSourceLimit=10" \
-              "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
-              "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-              "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+            --parameter-overrides "${PARAMETER_OVERRIDES[@]}"
 
       - name: Export the rollback change set
         id: change_set

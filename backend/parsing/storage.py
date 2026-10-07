@@ -14,18 +14,18 @@ if str(_BACKEND_DIR) not in sys.path:
 
 # db components
 from app.database.connection import SessionLocal
-from app.models.ticker import Ticker
 from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
-from app.models.artifact_summary import ArtifactSummary
-from app.services import llm as llm_service
+from app.services import generation
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
+from app.crud.artifact_summary import upsert_artifact_summary
 from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
 from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
+from parsing.classification.taxonomy import artifact_type_for
 
 try:
     from .classification_metadata import merge_classification_metadata
@@ -35,14 +35,6 @@ except ImportError:  # Support direct CLI execution.
 if TYPE_CHECKING:
     from scrapers.base import Announcement
     from parsing.classification import ClassificationResult
-
-# Maps parsing category class names to typed ArtifactType enum values.
-# Categories not listed here are stored as ASX_ANNOUNCEMENT_OTHER.
-_CATEGORY_TO_ARTIFACT_TYPE: dict[str, ArtifactType] = {
-    "DividendAnnouncement": ArtifactType.DIVIDEND_ANNOUNCEMENT,
-    "SecurityNotification": ArtifactType.SECURITY_NOTIFICATION,
-    "LeadershipChange":     ArtifactType.LEADERSHIP_CHANGE,
-}
 
 
 def _fallback_summary_text(title: str, summary: dict[str, str]) -> str:
@@ -66,18 +58,11 @@ def _artifact_has_summary_fields(artifact: Artifact) -> bool:
 
 
 def _artifact_sentiment_text(artifact: Artifact, raw_text: str) -> str:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    parts = [
+    # Same input as the analysis worker, never the LLM summary.
+    return sentiment_service.sentiment_input(
         artifact.title,
-        metadata.get("summary"),
-        metadata.get("about"),
-        metadata.get("changed"),
-        metadata.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    if cleaned:
-        return "\n\n".join(cleaned)
-    return raw_text or artifact.raw_text or ""
+        raw_text or artifact.raw_text,
+    )
 
 
 def _artifact_has_sentiment(db, artifact: Artifact) -> bool:
@@ -131,11 +116,13 @@ def _summarise_and_store_artifact(
         return
 
     try:
-        summary = llm_service.summarise_announcement(
-            title=artifact.title or "Untitled ASX announcement",
-            category=category_name,
-            extracted_data=extracted_data,
-            raw_text=raw_text,
+        generated = generation.generate(
+            generation.AnnouncementSummary(
+                title=artifact.title or "Untitled ASX announcement",
+                category=category_name,
+                extracted_data=extracted_data,
+                raw_text=raw_text,
+            )
         )
     except RuntimeError as exc:
         print(f"[SUMMARY] Skipped for artifact {artifact.id}: {exc}")
@@ -145,6 +132,11 @@ def _summarise_and_store_artifact(
         print(f"[SUMMARY] Failed for artifact {artifact.id}: {exc}")
         _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
         return
+    if isinstance(generated, generation.Unavailable):
+        print(f"[SUMMARY] Skipped for artifact {artifact.id}: {generated.reason}")
+        _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
+        return
+    summary = generated.value
 
     metadata = dict(artifact.artifact_metadata or {})
     for key in ("summary", "about", "changed", "matters"):
@@ -153,15 +145,15 @@ def _summarise_and_store_artifact(
             metadata[key] = value
     artifact.artifact_metadata = metadata
 
-    db.add(ArtifactSummary(
+    upsert_artifact_summary(
+        db,
         artifact_id=artifact.id,
         summary_text=_fallback_summary_text(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=llm_service.active_model_name(),
-    ))
-    db.commit()
+        model_used=generated.model,
+    )
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
     _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
     time.sleep(3)
@@ -186,20 +178,6 @@ def should_replace_artifact_title(
             or (len(existing) > MAX_TITLE_LENGTH and len(incoming) < len(existing))
         )
     )
-
-
-def get_or_create_ticker(db, ticker_symbol: str) -> Ticker:
-    ticker = ticker_crud.get_ticker_by_symbol(db, ticker_symbol)
-    if not ticker:
-        from app.schemas.ticker import TickerCreate
-        ticker_data = TickerCreate(
-            symbol=ticker_symbol,
-            company_name=ticker_symbol,
-            exchange="ASX",
-        )
-        ticker = ticker_crud.create_ticker(db, ticker_data)
-        print(f"[STORAGE] Created new ticker: {ticker_symbol}")
-    return ticker
 
 
 def get_or_create_platform(db, platform_name: str = "ASX") -> InformationPlatform:
@@ -232,7 +210,7 @@ def store(
 
     db = SessionLocal()
     try:
-        ticker = get_or_create_ticker(db, announcement.ticker)
+        ticker = ticker_crud.ensure_ticker(db, announcement.ticker)
         platform = get_or_create_platform(db, "ASX")
         content_hash = compute_content_hash(raw_text)
 
@@ -281,9 +259,7 @@ def store(
             return
 
         category_name = classification.compatibility_category
-        artifact_type = _CATEGORY_TO_ARTIFACT_TYPE.get(
-            category_name, ArtifactType.ASX_ANNOUNCEMENT_OTHER
-        )
+        artifact_type = ArtifactType(artifact_type_for(category_name))
 
         metadata = merge_classification_metadata({
             "pdf_url": announcement.pdf_url,

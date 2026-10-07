@@ -12,7 +12,10 @@ def list_artifacts(limit: int = 200, offset: int = 0, db: Session = Depends(get_
     return crud.get_all_artifacts(db, limit=limit, offset=offset)
 
 @router.post("/", response_model=ArtifactResponse)
-def create_artifact(artifact: ArtifactCreate, db: Session = Depends(get_db)):
+def create_artifact(
+    artifact: ArtifactCreate,
+    db: Session = Depends(get_db),
+):
     return crud.create_artifact(db=db, artifact=artifact)
 
 @router.get("/ticker/{ticker_id}", response_model=list[ArtifactResponse])

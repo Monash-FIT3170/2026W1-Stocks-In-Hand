@@ -1,10 +1,9 @@
-import re
 from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Integer, and_, cast, func, or_
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -104,7 +103,7 @@ def store_artifact_analysis(
     transaction, which serializes concurrent `store_artifact_analysis` calls
     for the same artifact. That lock does not cover the admin API's
     unlocked `upsert_artifact_summary`/`upsert_artifact_sentiment` routes
-    (`app/api/routes/gemini.py`), so a summary/sentiment insert can still
+    (`app/api/routes/llm.py`), so a summary/sentiment insert can still
     race a concurrent writer between our lookup and commit — retried once
     below, the same way the standalone upsert functions retry.
     """
@@ -203,13 +202,20 @@ CONTENT:
 
     return "\n\n---\n\n".join(sections)
 
-def get_reddit_posts_for_ticker(
+def get_discussion_posts_for_ticker(
     db: Session,
     ticker_symbol: str,
+    *,
+    source_types: Sequence[str],
     days: int = 30,
     limit: int = 50,
 ) -> list[Artifact]:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    """Recent public discussion about a ticker, most engaging first.
+
+    A post is about the ticker when it is stored against it or a ticker
+    mention links it. Engagement is the collector's stored
+    ``artifact_metadata["engagement"]``.
+    """
     ticker = (
         db.query(Ticker)
         .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
@@ -218,6 +224,7 @@ def get_reddit_posts_for_ticker(
     if not ticker:
         return []
 
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     return (
         db.query(Artifact)
         .outerjoin(
@@ -227,7 +234,7 @@ def get_reddit_posts_for_ticker(
                 ArtifactTickerMention.ticker_id == ticker.id,
             ),
         )
-        .filter(Artifact.source_type == SourceType.REDDIT.value)
+        .filter(Artifact.source_type.in_(tuple(source_types)))
         .filter(Artifact.published_at >= cutoff)
         .filter(
             or_(
@@ -236,129 +243,8 @@ def get_reddit_posts_for_ticker(
             )
         )
         .order_by(
-            Artifact.artifact_metadata["score"].as_integer().desc().nullslast()
+            Artifact.artifact_metadata["engagement"].as_integer().desc().nullslast()
         )
         .limit(limit)
         .all()
     )
-
-
-def _is_bluesky_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
-    text = " ".join((artifact.title or "", artifact.raw_text or ""))
-    if not re.search(rf"(?<![A-Za-z0-9]){re.escape(ticker_symbol)}(?![A-Za-z0-9])", text, re.IGNORECASE):
-        return False
-
-    company_terms = tuple(
-        term
-        for term in (company_name, company_name.replace(" Holdings Limited", ""))
-        if term.lower() != ticker_symbol.lower()
-    )
-    finance_terms = (
-        "asx",
-        "share",
-        "stock",
-        "dividend",
-        "earnings",
-        "profit",
-        "revenue",
-        "investor",
-        "market",
-        "bank",
-        "portfolio",
-    )
-    lower_text = text.lower()
-    return any(
-        term.lower() in lower_text
-        for term in (*company_terms, f"{ticker_symbol} bank", *finance_terms)
-        if term
-    )
-
-
-def get_bluesky_posts_for_ticker(
-    db: Session,
-    ticker_symbol: str,
-    days: int = 30,
-    limit: int = 50,
-) -> list[Artifact]:
-    ticker = (
-        db.query(Ticker)
-        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
-        .first()
-    )
-    if not ticker:
-        return []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    candidates = (
-        db.query(Artifact)
-        .outerjoin(
-            ArtifactTickerMention,
-            and_(
-                ArtifactTickerMention.artifact_id == Artifact.id,
-                ArtifactTickerMention.ticker_id == ticker.id,
-            ),
-        )
-        .filter(Artifact.source_type == SourceType.BLUESKY.value)
-        .filter(Artifact.published_at >= cutoff)
-        .filter(
-            or_(
-                Artifact.ticker_id == ticker.id,
-                ArtifactTickerMention.ticker_id == ticker.id,
-            )
-        )
-        .order_by(
-            Artifact.artifact_metadata["like_count"].as_integer().desc().nullslast()
-        )
-        .limit(limit * 3)
-        .all()
-    )
-    return candidates[:limit]
-
-
-def _is_mastodon_ticker_post(artifact: Artifact, ticker_symbol: str, company_name: str) -> bool:
-    return _is_bluesky_ticker_post(artifact, ticker_symbol, company_name)
-
-
-def get_mastodon_posts_for_ticker(
-    db: Session,
-    ticker_symbol: str,
-    days: int = 30,
-    limit: int = 50,
-) -> list[Artifact]:
-    ticker = (
-        db.query(Ticker)
-        .filter(func.lower(Ticker.symbol) == ticker_symbol.lower())
-        .first()
-    )
-    if not ticker:
-        return []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    candidates = (
-        db.query(Artifact)
-        .outerjoin(
-            ArtifactTickerMention,
-            and_(
-                ArtifactTickerMention.artifact_id == Artifact.id,
-                ArtifactTickerMention.ticker_id == ticker.id,
-            ),
-        )
-        .filter(Artifact.source_type == SourceType.MASTODON.value)
-        .filter(Artifact.published_at >= cutoff)
-        .filter(
-            or_(
-                Artifact.ticker_id == ticker.id,
-                ArtifactTickerMention.ticker_id == ticker.id,
-            )
-        )
-        .order_by(
-            (
-                Artifact.artifact_metadata["favourites_count"].as_integer()
-                + Artifact.artifact_metadata["reblogs_count"].as_integer()
-                + Artifact.artifact_metadata["replies_count"].as_integer()
-            ).desc().nullslast()
-        )
-        .limit(limit * 3)
-        .all()
-    )
-    return candidates[:limit]

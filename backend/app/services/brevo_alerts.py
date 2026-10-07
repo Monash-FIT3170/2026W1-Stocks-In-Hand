@@ -158,9 +158,9 @@ def send_email(  # pylint: disable=too-many-arguments,too-many-locals
 
     headers: dict[str, str] = {}
     if safe_unsubscribe_url:
+        # No List-Unsubscribe-Post: the link is a static CloudFront page that
+        # only accepts GET, so an RFC 8058 one-click POST would fail.
         headers["List-Unsubscribe"] = f"<{safe_unsubscribe_url}>"
-        if settings.ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED:
-            headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
     payload: dict[str, Any] = {
         "sender": {

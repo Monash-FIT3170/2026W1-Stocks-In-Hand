@@ -69,8 +69,8 @@ This keeps each resource easy to find.
 
 Handles artifact lookups and the text-assembly helpers the analysis routes use.
 `build_recent_artifact_chunk` concatenates recent artifacts into a single block
-of text for the configured LLM, and `get_reddit_posts_for_ticker` finds Reddit posts
-mentioning a symbol. Duplicate artifacts are rejected at insert time by
+of text for the configured LLM, and `get_discussion_posts_for_ticker` finds public discussion
+about a symbol, most engaging first. Duplicate artifacts are rejected at insert time by
 `content_hash`, so reads do not filter them.
 
 `scrape_run.py`
@@ -79,8 +79,9 @@ The largest module in this folder, and the one to read first to understand the
 discovery -> download -> analysis pipeline. It owns the `scrape_runs` state
 machine (`enqueueing -> queued -> discovering -> downloading -> analyzing ->
 completed/partial/failed`) and the per-artifact `download_status`/
-`analysis_status` sub-states, called from `main.py` (enqueueing a run) and from
-every `lambdas/*.py` worker (marking progress as a message is processed).
+`analysis_status` sub-states, called from `app/services/scrape_runs.py`
+(requesting a run, for both the API and the schedule) and from every
+`lambdas/*.py` worker (marking progress as a message is processed).
 
 Two properties make it safe under SQS's at-least-once delivery:
 
@@ -93,6 +94,13 @@ Two properties make it safe under SQS's at-least-once delivery:
   `_lock_artifact` via `with_for_update()`) plus the `RUN_DOWNSTREAM_OF_DISCOVERY`
   check (from `app.status`) stop an out-of-order retry from moving a run's
   status *backwards* once a later stage has already advanced it.
+- **Terminal only when SQS gives up.** A retryable worker error calls
+  `record_run_discovery_retry` / `record_artifact_download_retry` /
+  `record_artifact_analysis_retry`, which store the error but keep the stage
+  open. Only the receive that equals the queues' `maxReceiveCount`
+  (`lambdas.common.MAX_RECEIVE_COUNT`) or a permanent error calls the
+  `mark_*_failed` transition, so a run is never reported finished, or
+  re-enqueued by the API or scheduler, while a message is still being retried.
 
 Status values themselves (`ScrapeRunStatus`, `DownloadStatus`, `AnalysisStatus`)
 live in `app/status.py`, not here — that module is shared by this file,

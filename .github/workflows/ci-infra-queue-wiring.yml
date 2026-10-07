@@ -18,11 +18,17 @@ on:
       - "infra/samconfig.toml"
       - "infra/github-oidc.yaml"
       - "backend/app/messages.py"
+      - "backend/app/sources.py"
+      - "backend/tools/sync_tickers.py"
+      - "frontend/src/app/ticker/tickers.json"
       - "backend/app/services/scrape_queue.py"
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
+      - "backend/tools/template_model.py"
+      - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
+      - ".github/workflows/deploy-staging.yml"
       - ".github/workflows/verify-staging-queue-wiring.yml"
   pull_request:
     paths:
@@ -30,11 +36,17 @@ on:
       - "infra/samconfig.toml"
       - "infra/github-oidc.yaml"
       - "backend/app/messages.py"
+      - "backend/app/sources.py"
+      - "backend/tools/sync_tickers.py"
+      - "frontend/src/app/ticker/tickers.json"
       - "backend/app/services/scrape_queue.py"
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
+      - "backend/tools/template_model.py"
+      - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
+      - ".github/workflows/deploy-staging.yml"
       - ".github/workflows/verify-staging-queue-wiring.yml"
 
 permissions:
@@ -84,9 +96,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install pytest
+      - name: Install pytest and PyYAML
         shell: bash
-        run: pip install --disable-pip-version-check pytest==9.0.3
+        # PyYAML parses the template for the deployment contract tests.
+        run: pip install --disable-pip-version-check pytest==9.0.3 PyYAML==6.0.3
 
       - name: Run queue wiring and deployment contract tests
         shell: bash

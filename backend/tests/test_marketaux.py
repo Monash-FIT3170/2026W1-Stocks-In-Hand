@@ -128,8 +128,8 @@ def test_duplicate_article_is_skipped() -> None:
     existing.artifact_metadata = {"about": "Existing summary"}
 
     with patch.object(marketaux, "fetch_news", return_value=[article]), patch.object(
-        marketaux,
-        "_get_or_create_ticker",
+        marketaux.ticker_crud,
+        "ensure_ticker",
         return_value=ticker,
     ), patch.object(
         marketaux,
@@ -160,8 +160,8 @@ def test_correct_news_artifact_is_created() -> None:
     article = _article(raw_text="Description-only text", text_used="description")
 
     with patch.object(marketaux, "fetch_news", return_value=[article]), patch.object(
-        marketaux,
-        "_get_or_create_ticker",
+        marketaux.ticker_crud,
+        "ensure_ticker",
         return_value=ticker,
     ), patch.object(
         marketaux,
@@ -205,8 +205,8 @@ def test_scheduled_collection_can_store_without_llm_summary() -> None:
         "fetch_news",
         return_value=[_article()],
     ), patch.object(
-        marketaux,
-        "_get_or_create_ticker",
+        marketaux.ticker_crud,
+        "ensure_ticker",
         return_value=ticker,
     ), patch.object(
         marketaux,
@@ -254,8 +254,8 @@ def test_scheduled_collection_queues_new_news_for_analysis() -> None:
         "fetch_news",
         return_value=[_article()],
     ), patch.object(
-        marketaux,
-        "_get_or_create_ticker",
+        marketaux.ticker_crud,
+        "ensure_ticker",
         return_value=ticker,
     ), patch.object(
         marketaux,
@@ -312,8 +312,8 @@ def test_scheduled_collection_requeues_existing_unsummarised_news() -> None:
         "fetch_news",
         return_value=[_article()],
     ), patch.object(
-        marketaux,
-        "_get_or_create_ticker",
+        marketaux.ticker_crud,
+        "ensure_ticker",
         return_value=ticker,
     ), patch.object(
         marketaux,

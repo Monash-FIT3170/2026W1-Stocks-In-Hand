@@ -1,0 +1,12 @@
+{
+ "RENDER https://www.woodside.com/media-centre/announcements": {
+  "file": "aab55660424d93cb.html",
+  "kind": "page",
+  "url": "https://www.woodside.com/media-centre/announcements"
+ },
+ "RENDER https://www.woodside.com/media-centre/announcements?pageNo=2": {
+  "file": "9c3940766bbcf195.html",
+  "kind": "page",
+  "url": "https://www.woodside.com/media-centre/announcements?pageNo=2"
+ }
+}

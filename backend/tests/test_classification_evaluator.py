@@ -46,7 +46,7 @@ def test_evaluator_reports_quality_and_ambiguity_metrics() -> None:
 def test_labelled_manifest_has_required_fixture_coverage() -> None:
     manifest = Path(__file__).parent / "fixtures" / "classification" / "manifest.json"
 
-    report = evaluate_manifest(manifest, classifier="legacy")
+    report = evaluate_manifest(manifest, classifier="legacy-baseline")
 
     assert report["fixture_count"] == 85
     assert report["category_counts"]["expected"]["unknown"] == 20
@@ -57,6 +57,31 @@ def test_labelled_manifest_has_required_fixture_coverage() -> None:
     }
     assert len(supported_counts) == 13
     assert set(supported_counts.values()) == {5}
+
+
+def test_frozen_legacy_baseline_reproduces_the_recorded_report() -> None:
+    """docs/advanced-content-classification-baseline-report.md, recorded at dabaaf0."""
+    manifest = Path(__file__).parent / "fixtures" / "classification" / "manifest.json"
+
+    report = evaluate_manifest(manifest, classifier="legacy-baseline")
+
+    assert round(report["macro_f1"], 4) == 0.4765
+    assert report["unknown_false_positive_rate"] == 0.15
+    assert report["ambiguous_count"] == 0
+    recorded_f1 = {
+        "corporate_action": 0.9091,
+        "dividend_announcement": 0.8,
+        "executive_transcript": 0.8889,
+        "half_year_results": 0.9091,
+        "leadership_change": 0.8889,
+        "quarterly_trading_update": 0.9091,
+        "security_notification": 0.8889,
+    }
+    assert {
+        category: round(metrics["f1"], 4)
+        for category, metrics in report["per_category"].items()
+        if metrics["f1"]
+    } == recorded_f1
 
 
 def test_acceptable_alternative_does_not_hide_unknown_false_positive() -> None:

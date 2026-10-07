@@ -64,12 +64,20 @@ Examples:
 
 ## How Routes Are Registered
 
-The routers are imported and registered in `backend/main.py`:
+The routers are imported and registered in `backend/main.py`, in one of four
+access policy groups. The group decides who may call every route in the
+router, so route handlers do not add their own login dependency:
 
-```python
-app.include_router(artifact.router)
-app.include_router(watchlist.router)
-```
+- `PUBLIC_READ_ROUTERS`: reads are open unless the route asks for a login,
+  and every other method needs an admin.
+- `INVESTOR_ROUTERS`: every route needs a signed-in investor.
+- `ADMIN_ROUTERS`: every route needs an admin.
+- `SELF_MANAGED_ROUTERS`: `auth.py` and `notification_preferences.py` set
+  access per route, because some of their routes must work without a session.
+
+`tests/test_access_policy.py` fails if a router is included without a group
+(other than the self-managed ones), or if a write route is not admin-only
+and not on its short allowlists.
 
 If a route module is not included in `main.py`, its endpoints will not be
 available in the running API.
@@ -86,7 +94,7 @@ Investor and watchlist routes:
 Ticker routes:
 
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
-  endpoints the frontend reads (`/overview`, `/brief-aside`, `/news-feed`,
+  endpoints the frontend reads (`/brief`, `/news-feed`,
   `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
   stored, so there is no market data route.
 
@@ -103,7 +111,7 @@ Analysis routes:
 
 - `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
-- `gemini.py`: Legacy route name for provider-routed summarisation and categorisation.
+- `llm.py`: admin summaries and category splits generated on request.
 
 Operational routes:
 

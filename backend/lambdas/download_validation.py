@@ -6,7 +6,8 @@ import ipaddress
 import os
 import socket
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
@@ -17,11 +18,8 @@ from lambdas.common import PermanentDocumentError
 PDF_MAGIC = b"%PDF-"
 ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 REDIRECT_CODES = {301, 302, 303, 307, 308}
-DEFAULT_ALLOWED_HOSTS = (
-    "investors.csl.com",
-    "announcements.asx.com.au",
-    "wcsecure.weblink.com.au",
-)
+# Client errors a later attempt can still succeed after.
+RETRYABLE_CLIENT_ERRORS = frozenset({408, 409, 425, 429})
 DocumentFormat = Literal["pdf", "txt", "html", "docx"]
 DOCUMENT_EXTENSIONS: dict[DocumentFormat, str] = {
     "pdf": "pdf",
@@ -50,32 +48,75 @@ FORMAT_CONTENT_TYPES: dict[DocumentFormat, frozenset[str]] = {
     ),
 }
 SUPPORTED_CONTENT_TYPES = frozenset().union(*FORMAT_CONTENT_TYPES.values())
+# Defaults match the Lambda environment in infra/template.yaml, so a worker
+# that runs without the variable enforces the same limits as the deployed one.
+DEFAULT_MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_DOCX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024
+
+
+def document_size_limit() -> int:
+    return int(os.getenv("MAX_DOCUMENT_BYTES", str(DEFAULT_MAX_DOCUMENT_BYTES)))
+
+
+def docx_uncompressed_limit() -> int:
+    return int(
+        os.getenv(
+            "MAX_DOCX_UNCOMPRESSED_BYTES",
+            str(DEFAULT_MAX_DOCX_UNCOMPRESSED_BYTES),
+        )
+    )
+
+
+_VALIDATED = object()
 
 
 @dataclass(frozen=True)
 class DownloadedDocument:
+    """Downloaded bytes that passed validation.
+
+    ``validated_document`` is the only way to build one, so holding a
+    DownloadedDocument proves the bytes are within the size limit and are the
+    supported format they claim to be. The checksum and canonical content
+    type follow from the bytes, so nothing downstream checks them again.
+    """
+
     content: bytes
-    checksum: str
     final_url: str
-    content_type: str
-    document_format: DocumentFormat = "pdf"
+    document_format: DocumentFormat
+    _proof: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._proof is not _VALIDATED:
+            raise TypeError("Build a DownloadedDocument with validated_document()")
+
+    @cached_property
+    def checksum(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+    @property
+    def content_type(self) -> str:
+        return DOCUMENT_CONTENT_TYPES[self.document_format]
 
     @property
     def extension(self) -> str:
         return DOCUMENT_EXTENSIONS[self.document_format]
 
 
-# Kept as a source-compatible name for existing worker tests and callers.
-DownloadedPdf = DownloadedDocument
+def ensure_within_size_limit(
+    size: int,
+    max_bytes: int,
+    *,
+    subject: str = "Document",
+) -> None:
+    if size > max_bytes:
+        raise PermanentDocumentError(
+            f"{subject} is larger than the configured limit",
+            code="document_too_large",
+        )
 
 
-def allowed_hosts() -> frozenset[str]:
-    configured = os.getenv("DOWNLOAD_ALLOWED_HOSTS", "")
-    hosts = configured.split(",") if configured else DEFAULT_ALLOWED_HOSTS
-    return frozenset(host.strip().lower().rstrip(".") for host in hosts if host.strip())
-
-
-def validate_download_url(url: str, hosts: frozenset[str] | None = None) -> str:
+def validate_download_url(url: str, *, hosts: frozenset[str]) -> str:
+    """Accept only an HTTPS URL on one of the source's hosts."""
     parsed = urlsplit(url)
     host = (parsed.hostname or "").lower().rstrip(".")
     try:
@@ -91,7 +132,7 @@ def validate_download_url(url: str, hosts: frozenset[str] | None = None) -> str:
         or parsed.username is not None
         or parsed.password is not None
         or port not in (None, 443)
-        or host not in (hosts or allowed_hosts())
+        or host not in hosts
     ):
         raise PermanentDocumentError(
             "Document URL is not an allowlisted HTTPS URL",
@@ -116,6 +157,34 @@ def _reject_private_resolution(url: str) -> None:
                 "Document host resolved to a non-public address",
                 code="unsafe_document_host",
             )
+
+
+def raise_for_document_status(status: int, url: str) -> None:
+    """Classify a document response's HTTP status as permanent or retryable.
+
+    A missing document, and a client error a retry cannot fix, are
+    permanent. Any other status outside 2xx is retried.
+    """
+    if status == 404:
+        raise PermanentDocumentError(
+            "Document no longer exists",
+            code="document_not_found",
+        )
+    if 400 <= status < 500 and status not in RETRYABLE_CLIENT_ERRORS:
+        raise PermanentDocumentError(
+            f"Document request was permanently rejected ({status})",
+            code="document_rejected",
+        )
+    if not 200 <= status < 300:
+        raise RuntimeError(f"Document request failed with HTTP {status}: {url}")
+
+
+def declared_length(headers) -> int:
+    """The Content-Length a response declares, or 0 when it has none."""
+    try:
+        return int(headers.get("content-length") or 0)
+    except ValueError:
+        return 0
 
 
 def _content_type(response: httpx.Response) -> str:
@@ -198,7 +267,6 @@ def validate_document_content(
     content: bytes,
     *,
     declared_content_type: str,
-    final_url: str,
     expected_format: DocumentFormat | None = None,
     max_docx_uncompressed_bytes: int | None = None,
 ) -> DocumentFormat:
@@ -220,7 +288,7 @@ def validate_document_content(
         _validate_docx_archive(
             content,
             max_uncompressed_bytes=max_docx_uncompressed_bytes
-            or int(os.getenv("MAX_DOCX_UNCOMPRESSED_BYTES", "52428800")),
+            or docx_uncompressed_limit(),
         )
         detected = "docx"
     elif _looks_like_html(content):
@@ -247,14 +315,35 @@ def validate_document_content(
     return detected
 
 
+def validated_document(
+    content: bytes,
+    *,
+    declared_content_type: str,
+    final_url: str,
+    max_bytes: int,
+) -> DownloadedDocument:
+    """Check the size and real format of downloaded bytes, the one way in."""
+    ensure_within_size_limit(len(content), max_bytes)
+    document_format = validate_document_content(
+        content,
+        declared_content_type=declared_content_type,
+    )
+    return DownloadedDocument(
+        content=content,
+        final_url=final_url,
+        document_format=document_format,
+        _proof=_VALIDATED,
+    )
+
+
 def download_document(
     url: str,
     *,
     max_bytes: int,
+    hosts: frozenset[str],
+    referer: str,
     client: httpx.Client | None = None,
     resolve_hosts: bool = True,
-    hosts: frozenset[str] | None = None,
-    referer: str = "https://investors.csl.com/",
 ) -> DownloadedDocument:
     """Download one bounded, allowlisted document and validate its real format."""
     if max_bytes <= len(PDF_MAGIC):
@@ -290,20 +379,7 @@ def download_document(
                     )
                     continue
 
-                if response.status_code == 404:
-                    raise PermanentDocumentError(
-                        "Document no longer exists",
-                        code="document_not_found",
-                    )
-                if (
-                    400 <= response.status_code < 500
-                    and response.status_code not in {408, 409, 425, 429}
-                ):
-                    raise PermanentDocumentError(
-                        "Document request was permanently rejected",
-                        code="document_rejected",
-                    )
-                response.raise_for_status()
+                raise_for_document_status(response.status_code, current_url)
 
                 content_type = _content_type(response)
                 if content_type not in SUPPORTED_CONTENT_TYPES:
@@ -312,65 +388,25 @@ def download_document(
                         code="invalid_content_type",
                     )
 
-                length = response.headers.get("content-length")
-                if length:
-                    try:
-                        declared_length = int(length)
-                    except ValueError:
-                        declared_length = 0
-                    if declared_length > max_bytes:
-                        raise PermanentDocumentError(
-                            "Document is larger than the configured limit",
-                            code="document_too_large",
-                        )
-
+                ensure_within_size_limit(
+                    declared_length(response.headers),
+                    max_bytes,
+                )
                 chunks: list[bytes] = []
                 size = 0
                 for chunk in response.iter_bytes():
                     size += len(chunk)
-                    if size > max_bytes:
-                        raise PermanentDocumentError(
-                            "Document is larger than the configured limit",
-                            code="document_too_large",
-                        )
+                    # Stop reading as soon as the limit is passed.
+                    ensure_within_size_limit(size, max_bytes)
                     chunks.append(chunk)
 
-                content = b"".join(chunks)
-                document_format = validate_document_content(
-                    content,
+                return validated_document(
+                    b"".join(chunks),
                     declared_content_type=content_type,
                     final_url=current_url,
-                )
-                return DownloadedDocument(
-                    content=content,
-                    checksum=hashlib.sha256(content).hexdigest(),
-                    final_url=current_url,
-                    content_type=DOCUMENT_CONTENT_TYPES[document_format],
-                    document_format=document_format,
+                    max_bytes=max_bytes,
                 )
         raise PermanentDocumentError("Too many redirects", code="too_many_redirects")
     finally:
         if owned_client:
             http_client.close()
-
-
-def download_pdf(
-    url: str,
-    *,
-    max_bytes: int,
-    client: httpx.Client | None = None,
-    resolve_hosts: bool = True,
-) -> DownloadedDocument:
-    """Compatibility wrapper retained for callers that require PDF specifically."""
-    downloaded = download_document(
-        url,
-        max_bytes=max_bytes,
-        client=client,
-        resolve_hosts=resolve_hosts,
-    )
-    if downloaded.document_format != "pdf":
-        raise PermanentDocumentError(
-            "Document does not contain a PDF header",
-            code="invalid_pdf",
-        )
-    return downloaded

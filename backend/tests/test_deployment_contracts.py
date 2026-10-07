@@ -1,44 +1,45 @@
 import re
 from pathlib import Path
 
-from app.sources import SOURCES
+from tools import sync_tickers
+from tools.template_model import possible_strings, template_model
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_all_canonical_tickers_are_deployable_but_schedule_stays_conservative() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
+def test_ticker_list_copies_match_the_catalogue() -> None:
+    """The frontend pages, CloudFront route and schedule defaults follow app.sources."""
+    stale = sync_tickers.stale_copies()
+
+    assert not stale, (
+        "Run `python -m tools.sync_tickers` in backend/ to update:\n" + "\n".join(stale)
     )
-    expected = "ANZ,BHP,CBA,COH,COL,CSL,MQG,ORG,RIO,TCL,TLS,WDS,WES"
 
-    assert set(SOURCES) == set(expected.split(","))
-    assert f"SUPPORTED_TICKERS: {expected}" in template
-    scheduled_parameter = template.split("  ScheduledTickers:", 1)[1].split(
-        "  ScheduledPublicDiscussionSources:", 1
-    )[0]
-    assert "Default: ANZ,BHP,CBA,CSL,WES" in scheduled_parameter
 
-    ticker_layout = (
-        REPOSITORY_ROOT
-        / "frontend"
-        / "src"
-        / "app"
-        / "ticker"
-        / "[symbol]"
-        / "layout.jsx"
+def test_ticker_sync_rewrites_a_stale_copy(tmp_path: Path) -> None:
+    for relative in (
+        sync_tickers.FRONTEND_TICKERS,
+        sync_tickers.TEMPLATE,
+        sync_tickers.DEPLOY_WORKFLOW,
+    ):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(
+            (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    template = tmp_path / sync_tickers.TEMPLATE
+    template.write_text(
+        template.read_text(encoding="utf-8").replace("|WDS|WES)", "|WDS)"),
+        encoding="utf-8",
+    )
+
+    [stale] = sync_tickers.stale_copies(tmp_path)
+    assert "CloudFront ticker route" in stale
+    assert sync_tickers.write_copies(tmp_path) == [sync_tickers.TEMPLATE]
+    assert sync_tickers.stale_copies(tmp_path) == []
+    assert template.read_text(encoding="utf-8") == (
+        REPOSITORY_ROOT / sync_tickers.TEMPLATE
     ).read_text(encoding="utf-8")
-    deployed_list = ticker_layout.split("const DEPLOYED_TICKERS = [", 1)[1].split(
-        "]", 1
-    )[0]
-    for ticker in SOURCES:
-        assert f'"{ticker}"' in deployed_list
-
-    cloudfront_ticker_pattern = template.split("var tickerRoute = ", 1)[1].split(
-        ";", 1
-    )[0]
-    for ticker in SOURCES:
-        assert ticker in cloudfront_ticker_pattern
 
 
 def test_local_backend_installs_cognito_jwt_dependency() -> None:
@@ -80,20 +81,26 @@ def test_analysis_image_keeps_finbert_out_of_lambda_opt_mount() -> None:
 
 
 def test_cloudfront_routes_unknown_pages_to_exported_404() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
+    model = template_model()
+    route_code = model.properties("FrontendRouteFunction")["FunctionCode"]
+    response_code = model.properties("FrontendResponseFunction")["FunctionCode"]
+    associations = model.properties("FrontendDistribution")["DistributionConfig"][
+        "DefaultCacheBehavior"
+    ]["FunctionAssociations"]
 
-    assert "request.uri = '/404.html'" in template
-    assert "x-stonks-not-found" in template
-    assert "response.statusCode = 404" in template
-    assert "EventType: viewer-response" in template
+    assert "request.uri = '/404.html'" in route_code
+    assert "x-stonks-not-found" in route_code
+    assert "response.statusCode = 404" in response_code
+    assert {
+        "EventType": "viewer-response",
+        "FunctionARN": {"Fn::GetAtt": ["FrontendResponseFunction", "FunctionARN"]},
+    } in associations
 
 
 def test_cloudfront_allows_every_exported_static_page() -> None:
     """Every non-dynamic frontend page must survive the viewer-request rewrite."""
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
-    routes_block = template.split("var staticRoutes = {", 1)[1].split("};", 1)[0]
+    route_code = template_model().properties("FrontendRouteFunction")["FunctionCode"]
+    routes_block = route_code.split("var staticRoutes = {", 1)[1].split("};", 1)[0]
     configured_routes = set(re.findall(r"'([^']+)': true", routes_block))
 
     app_root = REPOSITORY_ROOT / "frontend" / "src" / "app"
@@ -112,92 +119,53 @@ def test_cloudfront_allows_every_exported_static_page() -> None:
 
 
 def test_brevo_notification_infrastructure_contract() -> None:
-    """Notification infrastructure must stay disabled, scoped, and retry-safe."""
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
+    """Notification infrastructure must stay disabled, scoped, and retry-safe.
 
-    api_function = template.split("  ApiFunction:", 1)[1].split(
-        "  DiscoveryFunction:", 1
-    )[0]
-    analysis_function = template.split("  AnalysisFunction:", 1)[1].split(
-        "  NotificationFunction:", 1
-    )[0]
-    notification_function = template.split("  NotificationFunction:", 1)[1].split(
-        "  SchedulerFunction:", 1
-    )[0]
-    notification_queue = template.split("  NotificationQueue:", 1)[1].split(
-        "  AnalysisQueuePolicy:", 1
-    )[0]
-    notification_alarm = template.split("  NotificationDlqAlarm:", 1)[1].split(
-        "  FrontendOriginAccessControl:", 1
-    )[0]
+    Queue, dead-letter, alarm, output and grant wiring are checked for every
+    queue by the rules in test_queue_wiring.py.
+    """
+    model = template_model()
+    api = model.function("ApiFunction")
+    analysis = model.function("AnalysisFunction")
+    notification = model.function("NotificationFunction")
+    brevo_key = {
+        "Fn::If": [
+            "IsNotificationsEnabled",
+            {"Fn::Sub": "${ParameterPathPrefix}/brevo-api-key"},
+            "",
+        ]
+    }
 
-    assert 'NotificationsEnabled:' in template
-    assert 'Default: "false"' in template.split("  NotificationsEnabled:", 1)[1]
-    assert (
-        'IsNotificationsEnabled: !Equals [!Ref NotificationsEnabled, "true"]'
-        in template
-    )
-    assert "AlertSenderRequiredWhenNotificationsEnabled:" in template
-    assert "NotificationDeadLetterQueue:" in template
-    assert "Type: AWS::SQS::Queue" in notification_queue
-    assert "VisibilityTimeout: 1800" in notification_queue
-    assert (
-        "deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn"
-        in notification_queue
-    )
-    assert "maxReceiveCount: 5" in notification_queue
+    assert model.parameters["NotificationsEnabled"]["Default"] == "false"
+    assert model.document["Conditions"]["IsNotificationsEnabled"] == {
+        "Fn::Equals": [{"Ref": "NotificationsEnabled"}, "true"]
+    }
+    assert "AlertSenderRequiredWhenNotificationsEnabled" in model.document["Rules"]
 
-    assert "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in api_function
-    assert "ALERT_SENDER_EMAIL: !Ref AlertSenderEmail" in api_function
-    assert "BREVO_API_KEY_PARAMETER: !If" in api_function
-    assert "${ParameterPathPrefix}/brevo-api-key" in api_function
-    assert "- IsNotificationsEnabled" in api_function
-    assert (
-        "FRONTEND_BASE_URL: !Ref FrontendBaseUrl"
-        in api_function
-    )
-    assert "ses:" not in api_function.lower()
+    for function in (api, notification):
+        assert function.environment["NOTIFICATIONS_ENABLED"] == {"Ref": "NotificationsEnabled"}
+        assert function.environment["ALERT_SENDER_EMAIL"] == {"Ref": "AlertSenderEmail"}
+        assert function.environment["BREVO_API_KEY_PARAMETER"] == brevo_key
+        assert function.environment["FRONTEND_BASE_URL"] == {"Ref": "FrontendBaseUrl"}
+    for function in model.functions().values():
+        assert not any(
+            action.lower().startswith("ses:")
+            for statement in function.statements
+            for action in statement.actions
+        ), function.logical_id
 
-    assert (
-        "NOTIFICATIONS_ENABLED: !Ref NotificationsEnabled" in analysis_function
-    )
-    assert "NOTIFICATION_QUEUE_URL: !Ref NotificationQueue" in analysis_function
-    assert "Sid: EnqueueNotifications" in analysis_function
-    assert "Resource: !GetAtt NotificationQueue.Arn" in analysis_function
-    assert "- IsNotificationsEnabled" in analysis_function
+    assert analysis.environment["NOTIFICATIONS_ENABLED"] == {"Ref": "NotificationsEnabled"}
+    [enqueue] = [s for s in analysis.statements if s.sid == "EnqueueNotifications"]
+    assert enqueue.condition == "IsNotificationsEnabled"
 
-    assert "ImageUri: !Ref ApiImageUri" in notification_function
-    assert "lambdas.notify.handler" in notification_function
-    assert "ReservedConcurrentExecutions" not in notification_function
-    assert "ALERT_DAILY_BUDGET: !Ref AlertDailyBudget" in notification_function
-    assert (
-        "ALERT_MAX_PER_INVESTOR_PER_RUN: !Ref AlertMaxPerInvestorPerRun"
-        in notification_function
-    )
-    assert (
-        "FRONTEND_BASE_URL: !Ref FrontendBaseUrl"
-        in notification_function
-    )
-    assert "BREVO_API_KEY_PARAMETER: !If" in notification_function
-    assert "${ParameterPathPrefix}/brevo-api-key" in notification_function
-    assert "Sid: ReadNotificationParameters" in notification_function
-    assert "ssm:GetParameter" in notification_function
-    assert "ses:" not in notification_function.lower()
-    assert "- IsNotificationsEnabled" in notification_function
-    assert "BatchSize: 10" in notification_function
-    assert (
-        "Enabled: !If [IsNotificationsEnabled, true, false]"
-        in notification_function
-    )
-    assert "ReportBatchItemFailures" in notification_function
-
-    assert "NotificationLogGroup:" in template
-    assert "AlarmActions:" in notification_alarm
-    assert "!Ref AlarmTopic" in notification_alarm
-    assert "NotificationQueueUrl:" in template
-    assert "NotificationDeadLetterQueueUrl:" in template
+    assert notification.properties["ImageUri"] == {"Ref": "ApiImageUri"}
+    assert notification.properties["ImageConfig"]["Command"] == ["lambdas.notify.handler"]
+    assert "ReservedConcurrentExecutions" not in notification.properties
+    assert notification.environment["ALERT_DAILY_BUDGET"] == {"Ref": "AlertDailyBudget"}
+    assert notification.environment["ALERT_MAX_PER_INVESTOR_PER_RUN"] == {
+        "Ref": "AlertMaxPerInvestorPerRun"
+    }
+    assert "NotificationLogGroup" in model.resources
 
 
 def test_staging_workflow_wires_brevo_notification_parameters() -> None:
@@ -308,54 +276,43 @@ def test_cloudformation_role_can_poll_route53_dns_changes() -> None:
 
 def test_custom_domain_certificate_parameter_is_lint_constrained() -> None:
     """SAM lint must know that the optional certificate value is an ACM ARN."""
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
-    certificate_parameter = template.split("  SiteCertificateArn:", 1)[1].split(
-        "  SiteHostedZoneId:", 1
-    )[0]
+    model = template_model()
+    certificate_parameter = model.parameters["SiteCertificateArn"]
+    lint_config = model.resource("FrontendDistribution")["Metadata"]["cfn-lint"]["config"]
 
-    assert "AllowedPattern:" in certificate_parameter
-    assert "arn:aws[a-zA-Z-]*:acm:us-east-1:" in certificate_parameter
-    assert "CustomDomainValuesRequiredTogether:" in template
-    distribution = template.split("  FrontendDistribution:", 1)[1].split(
-        "  FrontendBucketPolicy:", 1
-    )[0]
-    assert "ignore_checks:" in distribution
-    assert "- W1030" in distribution
+    assert "arn:aws[a-zA-Z-]*:acm:us-east-1:" in certificate_parameter["AllowedPattern"]
+    assert "CustomDomainValuesRequiredTogether" in model.document["Rules"]
+    assert "W1030" in lint_config["ignore_checks"]
 
 
 def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
     """Bedrock must be opt-in, model-scoped, and free of Groq secrets."""
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
-    api_function = template.split("  ApiFunction:", 1)[1].split(
-        "  DiscoveryFunction:", 1
-    )[0]
-    analysis_function = template.split("  AnalysisFunction:", 1)[1].split(
-        "  NotificationFunction:", 1
-    )[0]
+    model = template_model()
+    api = model.function("ApiFunction")
+    analysis = model.function("AnalysisFunction")
 
-    assert 'Default: "false"' in template.split("  BedrockEnabled:", 1)[1]
-    for function in (api_function, analysis_function):
-        assert "LLM_PROVIDER: bedrock" in function
-        assert "BEDROCK_ENABLED: !Ref BedrockEnabled" in function
-        assert "BEDROCK_MODEL_ID: openai.gpt-oss-120b-1:0" in function
-        assert 'BEDROCK_MAX_PROMPT_CHARS: "30000"' in function
-        assert "- IsBedrockEnabled" in function
-        assert "Action: bedrock:InvokeModel" in function
-        assert (
-            "foundation-model/openai.gpt-oss-120b-1:0"
-            in function
+    assert model.parameters["BedrockEnabled"]["Default"] == "false"
+    for function in (api, analysis):
+        environment = function.environment
+        assert environment["LLM_PROVIDER"] == "bedrock"
+        assert environment["BEDROCK_ENABLED"] == {"Ref": "BedrockEnabled"}
+        assert environment["BEDROCK_MODEL_ID"] == "openai.gpt-oss-120b-1:0"
+        assert environment["BEDROCK_MAX_PROMPT_CHARS"] == "30000"
+        # Each summary kind sets its own output budget. A per-function budget
+        # let the admin routes truncate summaries the worker completed.
+        assert "BEDROCK_MAX_OUTPUT_TOKENS" not in environment
+        assert "GROQ_API_KEY_PARAMETER" not in environment
+
+        bedrock = [s for s in function.statements if s.allows("bedrock:InvokeModel")]
+        assert [s.condition for s in bedrock] == ["IsBedrockEnabled"]
+        assert bedrock[0].actions == ("bedrock:InvokeModel",)
+        [resource] = bedrock[0].resources
+        assert possible_strings(resource)[0].endswith(
+            "::foundation-model/openai.gpt-oss-120b-1:0"
         )
-        assert "GROQ_API_KEY_PARAMETER" not in function
-        assert "bedrock:CountTokens" not in function
 
-    assert "BEDROCK_SERVICE_TIER: default" in api_function
-    assert "BEDROCK_SERVICE_TIER: flex" in analysis_function
-    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "1024"' in api_function
-    assert 'BEDROCK_MAX_OUTPUT_TOKENS: "4096"' in analysis_function
+    assert api.environment["BEDROCK_SERVICE_TIER"] == "default"
+    assert analysis.environment["BEDROCK_SERVICE_TIER"] == "flex"
 
     runtime_requirements = (
         REPOSITORY_ROOT / "backend" / "requirements-api.txt"
@@ -364,26 +321,15 @@ def test_bedrock_provider_is_bounded_and_iam_scoped() -> None:
 
 
 def test_legacy_release_retains_cognito_foundation() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(encoding="utf-8")
+    """The legacy-auth release keeps the Cognito pool and client deployed."""
+    model = template_model()
 
-    user_pool = template.split("  CognitoUserPool:", 1)[1].split(
-        "  CognitoUserPoolClient:", 1
-    )[0]
-    app_client = template.split("  CognitoUserPoolClient:", 1)[1].split(
-        "  ServerlessHttpApi:", 1
-    )[0]
-
-    assert "Type: AWS::Cognito::UserPool" in user_pool
-    assert "DeletionPolicy: Retain" in user_pool
-    assert "UpdateReplacePolicy: Retain" in user_pool
-    assert "DeletionProtection: ACTIVE" in user_pool
-
-    assert "Type: AWS::Cognito::UserPoolClient" in app_client
-    assert "DeletionPolicy: Retain" in app_client
-    assert "UpdateReplacePolicy: Retain" in app_client
-    assert "GenerateSecret: false" in app_client
-    assert "CognitoUserPoolId:" in template
-    assert "CognitoUserPoolClientId:" in template
+    for logical_id in ("CognitoUserPool", "CognitoUserPoolClient"):
+        resource = model.resource(logical_id)
+        assert resource["DeletionPolicy"] == "Retain", logical_id
+        assert resource["UpdateReplacePolicy"] == "Retain", logical_id
+    assert model.outputs_referencing("CognitoUserPool") == ["CognitoUserPoolId"]
+    assert model.outputs_referencing("CognitoUserPoolClient") == ["CognitoUserPoolClientId"]
 
 
 def test_frontend_uses_read_only_sentiment_contract() -> None:
@@ -398,24 +344,22 @@ def test_frontend_uses_read_only_sentiment_contract() -> None:
 
 
 def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
+    model = template_model()
+    function = model.function("PublicDiscussionSchedulerFunction")
+    schedule = model.properties("WeekdayPublicDiscussionSchedule")
     dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile.api").read_text(
         encoding="utf-8"
     )
 
-    parameter = template.split("  PublicDiscussionScheduleEnabled:", 1)[1].split(
-        "  AnalysisEnabled:", 1
-    )[0]
-    function = template.split("  PublicDiscussionSchedulerFunction:", 1)[1].split(
-        "  SchedulerInvokeRole:", 1
-    )[0]
-
-    assert 'Default: "false"' in parameter
-    assert "ReservedConcurrentExecutions" not in function
-    assert "PublicDiscussionPerSourceLimit" in function
-    assert "MaximumRetryAttempts: 2" in template
+    assert model.parameters["PublicDiscussionScheduleEnabled"]["Default"] == "false"
+    assert "ReservedConcurrentExecutions" not in function.properties
+    assert function.environment["PUBLIC_DISCUSSION_PER_SOURCE_LIMIT"] == {
+        "Ref": "PublicDiscussionPerSourceLimit"
+    }
+    assert schedule["State"] == {
+        "Fn::If": ["IsPublicDiscussionScheduleEnabled", "ENABLED", "DISABLED"]
+    }
+    assert schedule["Target"]["RetryPolicy"]["MaximumRetryAttempts"] == 2
     assert "lambdas/public_discussion_schedule.py" in dockerfile
 
 
@@ -435,44 +379,117 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     assert "PublicDiscussionPerSourceLimit=" in deploy
     assert "OutputKey=='FrontendUrl'" in deploy
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in deploy
-    assert '"PublicDiscussionScheduleEnabled=false"' in rollback
     assert "PublicDiscussionSchedulerFunction=" in rollback
-    assert "OutputKey=='FrontendUrl'" in rollback
-    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in rollback
+
+
+IMAGE_URI_PARAMETERS = {"ApiImageUri", "ScraperImageUri", "AnalysisImageUri"}
+
+
+def _workflow(name: str) -> str:
+    return (REPOSITORY_ROOT / ".github" / "workflows" / name).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_release_workflows_map_every_image_function_to_a_repository() -> None:
+    functions = template_model().image_functions()
+
+    assert "NotificationFunction" in functions
+    for workflow in ("deploy-staging.yml", "prepare-staging-backend-rollback.yml"):
+        text = _workflow(workflow)
+        missing = [
+            function
+            for function in functions
+            if f'--image-repositories "{function}=' not in text
+        ]
+        assert missing == [], workflow
+
+
+def test_deploy_supplies_every_parameter_without_a_default() -> None:
+    deploy = _workflow("deploy-staging.yml")
+    required = [
+        name
+        for name, parameter in template_model().parameters.items()
+        if "Default" not in parameter
+    ]
+
+    assert required
+    for name in required:
+        assert f'"{name}=' in deploy, name
+
+
+def test_rollback_keeps_live_parameters_and_swaps_only_images() -> None:
+    rollback = _workflow("prepare-staging-backend-rollback.yml")
+
+    assert '--query "Stacks[0].Parameters"' in rollback
+    assert '--parameter-overrides "${PARAMETER_OVERRIDES[@]}"' in rollback
+    for name in IMAGE_URI_PARAMETERS:
+        assert f'"{name}=$ECR_REGISTRY/' in rollback
+    # Any other literal override would replace the live value, as the old
+    # hard-coded AuthProvider=legacy and feature switches did.
+    hard_coded = [
+        name
+        for name in template_model().parameters
+        if name not in IMAGE_URI_PARAMETERS and f'"{name}=' in rollback
+    ]
+    assert hard_coded == []
+
+
+def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:
+    deploy = _workflow("deploy-staging.yml")
+    values = deploy.split("      - name: Resolve immutable release values", 1)[1].split(
+        "      - name:", 1
+    )[0]
+
+    assert "SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}" in values
+    assert 'FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"' in values
+    assert template_model().parameters["SiteDomainName"]["Default"] == ""
+    assert (
+        values.index('FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"')
+        < values.index("OutputKey=='FrontendUrl'")
+    )
+
+
+def test_feature_switches_default_to_off() -> None:
+    switches = {
+        name: parameter["Default"]
+        for name, parameter in template_model().parameters.items()
+        if sorted(parameter.get("AllowedValues", [])) == ["false", "true"]
+    }
+
+    assert {"NotificationsEnabled", "PublicDiscussionScheduleEnabled"} <= set(switches)
+    # AnalysisEnabled is a kill switch for work already paid for, so it is on.
+    assert {name for name, default in switches.items() if default != "false"} == {
+        "AnalysisEnabled"
+    }
 
 
 def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
-    template = (REPOSITORY_ROOT / "infra" / "template.yaml").read_text(
-        encoding="utf-8"
-    )
+    model = template_model()
     workflow = (
         REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
     ).read_text(encoding="utf-8")
     oidc = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
         encoding="utf-8"
     )
-    api_function = template.split("  ApiFunction:", 1)[1].split(
-        "  DiscoveryFunction:", 1
-    )[0]
-    scheduler_function = template.split("  SchedulerFunction:", 1)[1].split(
-        "  PublicDiscussionSchedulerFunction:", 1
-    )[0]
+    marketaux_token = {
+        "Fn::If": [
+            "IsMarketauxEnabled",
+            {"Fn::Sub": "${ParameterPathPrefix}/marketaux-api-token"},
+            "",
+        ]
+    }
+    scheduler = model.function("SchedulerFunction")
 
-    marketaux_parameter = template.split("  MarketauxEnabled:", 1)[1].split(
-        "  AnalysisEnabled:", 1
-    )[0]
-    assert 'Default: "false"' in marketaux_parameter
-    assert "MarketauxPerTickerLimit" in marketaux_parameter
-    assert "MaxValue: 25" in marketaux_parameter
-
-    for function in (api_function, scheduler_function):
-        assert "MARKETAUX_API_TOKEN_PARAMETER: !If" in function
-        assert "${ParameterPathPrefix}/marketaux-api-token" in function
-    assert "MARKETAUX_ENABLED: !Ref MarketauxEnabled" in scheduler_function
-    assert "MARKETAUX_PER_TICKER_LIMIT: !Ref MarketauxPerTickerLimit" in scheduler_function
-    assert "ANALYSIS_QUEUE_URL: !Ref AnalysisQueue" in scheduler_function
-    assert "Sid: EnqueueStoredArtifactAnalysis" in scheduler_function
-    assert "Resource: !GetAtt AnalysisQueue.Arn" in scheduler_function
+    assert model.parameters["MarketauxEnabled"]["Default"] == "false"
+    assert model.parameters["MarketauxPerTickerLimit"]["MaxValue"] == 25
+    for function_id in ("ApiFunction", "SchedulerFunction"):
+        environment = model.function(function_id).environment
+        assert environment["MARKETAUX_API_TOKEN_PARAMETER"] == marketaux_token, function_id
+    assert scheduler.environment["MARKETAUX_ENABLED"] == {"Ref": "MarketauxEnabled"}
+    assert scheduler.environment["MARKETAUX_PER_TICKER_LIMIT"] == {
+        "Ref": "MarketauxPerTickerLimit"
+    }
 
     assert "enable_marketaux:" in workflow
     assert "AUTO_DEPLOY_ENABLE_MARKETAUX" in workflow
@@ -488,22 +505,6 @@ def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
 
     assert "Sid: ReadMarketauxParameterMetadata" in oidc
     assert "parameter/stocks-in-hand/staging/marketaux-api-token" in oidc
-
-
-def test_infra_queue_workflow_keeps_backend_on_python_import_path() -> None:
-    workflow = (
-        REPOSITORY_ROOT
-        / ".github"
-        / "workflows"
-        / "ci-infra-queue-wiring.yml"
-    ).read_text(encoding="utf-8")
-    command = " ".join(workflow.split())
-
-    assert (
-        "python -m pytest tests/test_queue_wiring.py "
-        "tests/test_deployment_contracts.py -v"
-        in command
-    )
 
 
 def test_staging_validation_workflow_cannot_deploy() -> None:

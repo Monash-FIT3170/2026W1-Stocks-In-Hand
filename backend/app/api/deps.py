@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import Cookie, Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -142,3 +142,21 @@ def require_admin_investor(
             detail="Administrator multi-factor authentication required",
         )
     return current_investor
+
+
+READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def require_admin_for_writes(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=settings.SESSION_COOKIE_NAME),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> Investor | None:
+    """Router policy for public data: reads stay open, every other method needs an admin.
+
+    A route that needs a login to read asks for one itself.
+    """
+    if request.method in READ_METHODS:
+        return None
+    return require_admin_investor(get_current_investor(session_token, authorization, db))

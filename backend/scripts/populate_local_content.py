@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
@@ -17,13 +18,15 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.api.routes import reddit
 from app.core.config import settings
 from app.database.connection import SessionLocal
-from app.services import marketaux
+from app.services import discussion_collector, marketaux
+from app.services.discussion_sources.reddit import REDDIT
+from lambdas.download_validation import document_size_limit
 from parsing.pipeline import process_announcement
+from scrapers.adapter import DocumentRequest
 from scrapers.base import Announcement
-from scrapers.registry import get_scraper
+from scrapers.registry import adapter_for
 
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "db", "localhost", "postgres"}
@@ -67,6 +70,29 @@ def require_local_database() -> None:
         )
 
 
+async def download_announcement(announcement: Announcement, directory: Path) -> Path:
+    """Fetch one document the way the download worker does and save it locally."""
+    downloaded = await adapter_for(announcement.ticker).fetch_document(
+        DocumentRequest(
+            document_url=announcement.pdf_url,
+            title=announcement.title,
+            metadata=announcement.metadata,
+        ),
+        max_bytes=document_size_limit(),
+    )
+    clean_title = "".join(
+        character if character.isalnum() or character in "._-" else "_"
+        for character in announcement.title
+    ).strip("_")[:120] or "announcement"
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = (
+        directory
+        / f"{announcement.date:%Y-%m-%d}_{clean_title}.{downloaded.extension}"
+    )
+    destination.write_bytes(downloaded.content)
+    return destination
+
+
 async def collect_asx(
     tickers: list[str],
     *,
@@ -76,9 +102,8 @@ async def collect_asx(
 ) -> dict:
     result = {"found": 0, "processed": 0, "errors": []}
     for ticker in tickers:
-        scraper = get_scraper(ticker, output_dir)
         try:
-            discovered = await scraper.fetch_announcements()
+            discovered = await adapter_for(ticker).list_documents()
             selected = bounded_announcements(
                 discovered,
                 lookback_days=lookback_days,
@@ -91,7 +116,10 @@ async def collect_asx(
 
         for announcement in selected:
             try:
-                announcement.local_path = await scraper.download_pdf(announcement)
+                announcement.local_path = await download_announcement(
+                    announcement,
+                    output_dir / ticker,
+                )
                 process_announcement(announcement)
                 result["processed"] += 1
             except Exception as exc:  # noqa: BLE001
@@ -126,10 +154,10 @@ def collect_reddit(*, subreddit: str, limit: int) -> dict:
             "status": "skipped",
             "reason": "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are not configured",
         }
-    return {
-        "status": "completed",
-        **reddit._scrape_and_store_posts(subreddit=subreddit, limit=limit),
-    }
+    result = discussion_collector.collect(
+        REDDIT, subreddit, limit, session_scope=SessionLocal
+    )
+    return asdict(result)
 
 
 async def populate(args: argparse.Namespace) -> dict:

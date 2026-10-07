@@ -1,13 +1,39 @@
+"""BHP: market announcements on BHP's investor hub.
+
+Discovery lists each announcement's article page. Resolving the article to
+its PDF is download work, so Queue B carries the stable article URL and
+discovery makes no document requests.
+"""
+
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from urllib.parse import urljoin
 
-import httpx
-from playwright.async_api import Error as PlaywrightError, async_playwright
-
 from app.services.title_normalization import normalise_title
-from ..base import BaseScraper, Announcement
-from ..browser import chromium_launch_options
+from lambdas.common import PermanentDocumentError
+
+from ..adapter import DocumentRequest, SourceAdapter
+from ..base import Announcement
+from ..fetching import Page, Render, SourceUnreachableError
+from ..html import Element, parse_html
+from ..parsing import DAY_MONTH_YEAR, ISO, SLASHED, first_date, unique
+
+# BHP keeps some page resources open indefinitely; the committed HTML is
+# enough for the links.
+LISTING = Render(wait_until="commit", timeout_ms=30_000, settle_ms=3_000)
+USEFUL_TERMS = (
+    "market-announcements",
+    "investor",
+    "asx",
+    "announcement",
+    "results",
+    "dividend",
+    "operational review",
+    "annual report",
+    "quarterly",
+)
 
 
 def clean_bhp_title(raw_title: str, article_url: str) -> str:
@@ -15,204 +41,96 @@ def clean_bhp_title(raw_title: str, article_url: str) -> str:
     return normalise_title(raw_title, article_url)
 
 
-class BHPScraper(BaseScraper):
+class BHPAdapter(SourceAdapter):
+    hosts = frozenset({"www.bhp.com", "bhp.com"})
 
-    @property
-    def ticker(self) -> str:
-        return "BHP"
-
-    @property
-    def source_url(self) -> str:
-        return "https://www.bhp.com/investor-hub/market-announcements"
-
-    async def fetch_announcements(self) -> list[Announcement]:
-        announcements: list[Announcement] = []
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                **chromium_launch_options(extra_args=("--disable-http2",))
-            )
-
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1366, "height": 768},
-                locale="en-AU",
-                ignore_https_errors=True,
-            )
-
-            page = await context.new_page()
-
+    async def _list_documents(self) -> list[Announcement]:
+        async with self.fetcher.session(disable_http2=True, ignore_https_errors=True) as web:
             try:
-                await page.goto(
-                    self.source_url,
-                    # BHP currently keeps some page resources open
-                    # indefinitely; the committed HTML is enough for links.
-                    wait_until="commit",
-                    timeout=30_000,
-                )
-            except PlaywrightError:
+                page = await web.render(self.source_url, LISTING)
+            except SourceUnreachableError:
                 # Some Chromium/AWS networks fail BHP's HTTP/2 negotiation
                 # even though the same public page works over HTTP/1.1.
-                await page.close()
-                page = await context.new_page()
-                async with httpx.AsyncClient(
-                    timeout=30.0,
-                    headers={"User-Agent": "Mozilla/5.0"},
-                ) as client:
-                    response = await client.get(self.source_url)
-                    response.raise_for_status()
-                static_html = re.sub(
-                    r"<script\b[^>]*>.*?</script>",
-                    "",
-                    response.text,
-                    flags=re.IGNORECASE | re.DOTALL,
+                fetched = await web.get_page(
+                    self.source_url, headers={"User-Agent": "Mozilla/5.0"}
                 )
-                await page.set_content(
-                    static_html,
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
+                page = Page(url=fetched.url, html=_without_scripts(fetched.html))
+        return parse_listing(page, ticker=self.ticker, source_url=self.source_url)
 
-            await page.wait_for_timeout(3000)
-
-            article_links = await self._extract_article_links(page)
-
-            print(f"[BHP] Found {len(article_links)} article links")
-
-            # Resolving each article to its final document is downloader work.
-            # Queue B carries the stable article URL so discovery remains fast
-            # and performs no document requests.
-            for item in article_links:
-                announcements.append(
-                    Announcement(
-                        ticker=self.ticker,
-                        title=item["title"],
-                        date=item["date"],
-                        pdf_url=item["article_url"],
-                        source_url=self.source_url,
-                        metadata={
-                            "article_url": item["article_url"],
-                            "source_id": item["article_url"],
-                        },
-                    )
-                )
-
-            announcements = self._dedupe_announcements(announcements)
-
-            await browser.close()
-
-        return announcements
-
-    async def _extract_article_links(self, page) -> list[dict]:
-        items = []
-
-        # Start broad, then replace with the exact BHP card selector once known.
-        links = await page.query_selector_all("a[href]")
-
-        for link in links:
-            href = await link.get_attribute("href")
-            text = (await link.inner_text()).strip()
-
-            if not href or not text:
-                continue
-
-            full_url = urljoin(self.source_url, href)
-            title = clean_bhp_title(text, full_url)
-
-            if not self._looks_like_bhp_article(full_url, title):
-                continue
-
-            date = await self._extract_nearby_date(link)
-
-            if not date:
-                print(f"[BHP] Skipping article because no date found: {title}")
-                continue
-
-            items.append(
-                {
-                    "title": title,
-                    "date": date,
-                    "article_url": full_url,
-                }
+    async def fetch_document(self, request: DocumentRequest, *, max_bytes: int):
+        article_url = self._validated(request.document_url)
+        async with self.fetcher.session(disable_http2=True) as web:
+            article = await web.request_page(article_url)
+            document_url = self._validated(article_pdf_url(Page(
+                url=self._validated(article.url), html=article.html
+            )))
+            return await web.request_document(
+                document_url,
+                hosts=self.hosts,
+                referer=article_url,
+                max_bytes=max_bytes,
             )
 
-        return self._dedupe_article_links(items)
 
-    def _looks_like_bhp_article(self, url: str, text: str) -> bool:
-        url_lower = url.lower()
-        text_lower = text.lower()
+def _without_scripts(html: str) -> str:
+    return re.sub(r"<script\b[^>]*>.*?</script>", "", html, flags=re.IGNORECASE | re.DOTALL)
 
-        if "bhp.com" not in url_lower and url_lower.startswith("http"):
-            return False
 
-        useful_terms = [
-            "market-announcements",
-            "investor",
-            "asx",
-            "announcement",
-            "results",
-            "dividend",
-            "operational review",
-            "annual report",
-            "quarterly",
-        ]
-
-        return any(term in url_lower or term in text_lower for term in useful_terms)
-
-    def _dedupe_article_links(self, items: list[dict]) -> list[dict]:
-        seen: set[str] = set()
-        result = []
-        for item in items:
-            key = item["article_url"]
-            if key not in seen:
-                seen.add(key)
-                result.append(item)
-        return result
-
-    def _dedupe_announcements(self, announcements: list) -> list:
-        seen: set[str] = set()
-        result = []
-        for ann in announcements:
-            key = ann.pdf_url or ann.source_url or ann.title
-            if key not in seen:
-                seen.add(key)
-                result.append(ann)
-        return result
-
-    async def _extract_nearby_date(self, link) -> datetime | None:
-
-        container = await link.evaluate_handle(
-            """
-            el => el.closest('article, li, .card, .search-result, .result, div')
-            """
+def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcement]:
+    announcements: list[Announcement] = []
+    for link in parse_html(page.html).select("a[href]"):
+        href = link.get("href")
+        text = link.text.strip()
+        if not href or not text:
+            continue
+        article_url = urljoin(source_url, href)
+        title = clean_bhp_title(text, article_url)
+        if not _looks_like_article(article_url, title):
+            continue
+        date = _nearby_date(link)
+        if date is None:
+            continue
+        announcements.append(
+            Announcement(
+                ticker=ticker,
+                title=title,
+                date=date,
+                pdf_url=article_url,
+                source_url=source_url,
+                metadata={"article_url": article_url, "source_id": article_url},
+            )
         )
+    return unique(announcements, key=lambda item: item.pdf_url)
 
-        try:
-            text = await container.evaluate("el => el.innerText")
-        except Exception:
-            return None
 
-        date_patterns = [
-            r"\b\d{1,2}\s+[A-Za-z]+\s+\d{4}\b",   # 7 May 2026
-            r"\b\d{1,2}/\d{1,2}/\d{4}\b",         # 07/05/2026
-            r"\b\d{4}-\d{2}-\d{2}\b",             # 2026-05-07
-        ]
+def article_pdf_url(article: Page) -> str:
+    """The document an article page links to."""
+    absolute = re.search(r"""https?://[^"'<>\\\s]+\.pdf(?:\?[^"'<>\\\s]*)?""", article.html)
+    if absolute:
+        return absolute.group(0)
+    relative = re.search(r"""["']([^"'<>]+\.pdf(?:\?[^"'<>]*)?)["']""", article.html)
+    if relative:
+        return urljoin(article.url, relative.group(1))
+    raise PermanentDocumentError(
+        "BHP article does not contain a supported document link",
+        code="document_link_not_found",
+    )
 
-        for pattern in date_patterns:
-            match = re.search(pattern, text)
-            if not match:
-                continue
 
-            date_str = match.group(0)
+def _looks_like_article(url: str, text: str) -> bool:
+    url_lower = url.lower()
+    text_lower = text.lower()
+    if "bhp.com" not in url_lower and url_lower.startswith("http"):
+        return False
+    return any(term in url_lower or term in text_lower for term in USEFUL_TERMS)
 
-            for fmt in ["%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%Y-%m-%d"]:
-                try:
-                    return datetime.strptime(date_str, fmt)
-                except ValueError:
-                    pass
 
+def _nearby_date(link: Element) -> datetime | None:
+    container = link.closest("article, li, .card, .search-result, .result, div")
+    if container is None:
         return None
+    return first_date(
+        container.text,
+        (rf"\b{DAY_MONTH_YEAR}\b", rf"\b{SLASHED}\b", rf"\b{ISO}\b"),
+        ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%Y-%m-%d"),
+    )
