@@ -144,10 +144,15 @@ def _store(
                 continue
             artifact = artifact_crud.get_artifact_by_hash(db, post.content_hash)
             if artifact is None:
+                metadata = {**(post.artifact.artifact_metadata or {}), "engagement": post.engagement}
                 artifact = artifact_crud.create_artifact(
                     db=db,
                     artifact=post.artifact.model_copy(
-                        update={"platform_id": platform.id, "scrape_run_id": run_id}
+                        update={
+                            "platform_id": platform.id,
+                            "scrape_run_id": run_id,
+                            "artifact_metadata": metadata,
+                        }
                     ),
                 )
                 saved += 1

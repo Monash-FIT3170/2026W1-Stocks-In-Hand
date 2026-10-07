@@ -7,6 +7,7 @@ from app.api.deps import get_current_investor
 from app.crud import artifact as artifact_crud
 from app.database.connection import SessionLocal, get_db
 from app.models.investor import Investor
+from app.schemas.artifact import SourceType
 from app.services import discussion_collector
 from app.services import llm as llm_service
 from app.services.discussion_sources.base import InvalidTargetError
@@ -74,9 +75,10 @@ def reddit_ticker_sentiment(
     db: Session = Depends(get_db),
     _investor: Investor = Depends(get_current_investor),
 ):
-    posts = artifact_crud.get_reddit_posts_for_ticker(
-        db=db,
-        ticker_symbol=ticker_symbol.upper(),
+    posts = artifact_crud.get_discussion_posts_for_ticker(
+        db,
+        ticker_symbol.upper(),
+        source_types=(SourceType.REDDIT.value,),
         days=days,
         limit=limit,
     )

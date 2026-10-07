@@ -10,6 +10,7 @@ here, because changing one would store every existing post again:
 """
 
 import hashlib
+import importlib.util
 import sys
 import uuid
 from collections.abc import Iterator
@@ -18,13 +19,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
+from app.crud import artifact as artifact_crud
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
@@ -254,7 +256,7 @@ def test_blog_entries_are_identified_by_feed_and_entry(db_session: Session, monk
     assert entry.source_adapter == "rss_atom"
     assert entry.source_id == entry_id
     assert entry.canonical_url == f"https://blog.example.test/{entry_id}"
-    assert entry.artifact_metadata == {"feed_url": FEED_URL}
+    assert entry.artifact_metadata == {"feed_url": FEED_URL, "engagement": 0}
     assert linked.source_id == link_only
     assert _mentions(db_session, entry) == {"BHP"}
 
@@ -450,3 +452,64 @@ def test_collected_text_is_queued_for_analysis_once_whether_or_not_it_names_a_ti
     assert again.analysis_queued == 0
     assert len(sent) == 2
     assert stored.analysis_status == "queued"
+
+
+# Posts for a ticker, ranked by the engagement the collector stored.
+
+
+def test_posts_for_a_ticker_rank_by_stored_engagement(db_session: Session, monkeypatch) -> None:
+    quiet, busy = _unique("r"), _unique("r")
+    posts = [reddit_post(quiet), reddit_post(busy)]
+    posts[0]["score"], posts[1]["score"] = 3, 40
+    _collect("reddit", posts, db_session, monkeypatch)
+    _collect("bluesky", [bluesky_post(f"at://x/{_unique('b')}")], db_session, monkeypatch)
+
+    found = artifact_crud.get_discussion_posts_for_ticker(
+        db_session, "bhp", source_types=("reddit",), days=36500, limit=50
+    )
+
+    ours = [post.artifact_metadata["reddit_id"] for post in found if post.source_type == "reddit"]
+    assert {post.source_type for post in found} == {"reddit"}
+    assert ours.index(busy) < ours.index(quiet)
+    assert _stored(db_session, f"reddit:{busy}").artifact_metadata["engagement"] == 40
+
+
+def _backfill_migration():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "86d9engagement_store_discussion_engagement.py"
+    )
+    spec = importlib.util.spec_from_file_location("engagement_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("source", "raw"),
+    [
+        ("reddit", reddit_post("backfill")),
+        ("bluesky", bluesky_post("at://x/backfill")),
+        ("mastodon", mastodon_post("backfill", url="https://aus.social/@a/backfill")),
+        ("blog", blog_post("backfill", url="https://blog.example.test/backfill")),
+    ],
+)
+def test_backfilled_engagement_matches_what_each_source_stores(
+    db_session: Session,
+    source: str,
+    raw: dict,
+) -> None:
+    post = SOURCES[source].post(raw, TARGETS[source])
+    artifact = Artifact(
+        **post.artifact.model_dump(exclude={"content_hash"}),
+        content_hash=f"backfill-{uuid.uuid4()}",
+    )
+    db_session.add(artifact)
+    db_session.commit()
+
+    db_session.execute(text(_backfill_migration().BACKFILL))
+    db_session.refresh(artifact)
+
+    assert artifact.artifact_metadata["engagement"] == post.engagement

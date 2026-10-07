@@ -38,6 +38,8 @@ class CollectedPost:
     """
 
     artifact: ArtifactCreate
+    # How much attention the post drew, comparable across sources so posts
+    # for a ticker can be ranked together.
     engagement: int
 
     @property

@@ -83,7 +83,7 @@ def test_every_source_keeps_the_discussion_source_contract(name: str) -> None:
     assert isinstance(post, CollectedPost)
     assert post.artifact.source_type == source.source_type
     assert len(post.content_hash) == 64
-    assert post.engagement >= 0
+    assert isinstance(post.engagement, int)
     assert source.platform(target).name
     assert source.source_url(target).startswith("https://")
     with pytest.raises(MalformedPostError):

@@ -69,8 +69,8 @@ This keeps each resource easy to find.
 
 Handles artifact lookups and the text-assembly helpers the analysis routes use.
 `build_recent_artifact_chunk` concatenates recent artifacts into a single block
-of text for the configured LLM, and `get_reddit_posts_for_ticker` finds Reddit posts
-mentioning a symbol. Duplicate artifacts are rejected at insert time by
+of text for the configured LLM, and `get_discussion_posts_for_ticker` finds public discussion
+about a symbol, most engaging first. Duplicate artifacts are rejected at insert time by
 `content_hash`, so reads do not filter them.
 
 `scrape_run.py`

@@ -105,7 +105,7 @@ class RedditSource:
                     "subreddit": raw.get("subreddit"),
                 },
             ),
-            engagement=max(int(raw.get("score") or 0), 0),
+            engagement=int(raw.get("score") or 0),
         )
 
 
