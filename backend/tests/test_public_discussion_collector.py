@@ -32,6 +32,7 @@ from app.models.ticker import Ticker
 from app.services import discussion_collector
 from app.services.discussion_sources.bluesky import BLUESKY
 from app.services.discussion_sources.mastodon import MASTODON
+from app.services.discussion_sources.reddit import REDDIT
 
 FEED_URL = "https://blog.example.test/feed.xml"
 
@@ -75,8 +76,8 @@ class Recorded:
         return self.raw_posts[:limit]
 
 
-SOURCES = {"bluesky": BLUESKY, "mastodon": MASTODON}
-TARGETS = {"bluesky": "ASX", "mastodon": "ASX"}
+SOURCES = {"bluesky": BLUESKY, "mastodon": MASTODON, "reddit": REDDIT}
+TARGETS = {"bluesky": "ASX", "mastodon": "ASX", "reddit": "ASX"}
 
 
 def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, run_id=None):
@@ -93,13 +94,7 @@ def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, ru
     route = import_module(f"app.api.routes.{source}")
     monkeypatch.setattr(route, "_fetch_posts", lambda *_args, **_kwargs: raw_posts)
     monkeypatch.setattr(route, "SessionLocal", lambda: nullcontext(db))
-    monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
-    if source == "reddit":
-        monkeypatch.setattr(settings, "REDDIT_CLIENT_ID", "client")
-        monkeypatch.setattr(settings, "REDDIT_CLIENT_SECRET", "secret")
-        return route._scrape_and_store_posts(subreddit="ASX", limit=10)
-    target = FEED_URL if source == "blog" else "ASX"
-    return route._scrape_and_store_posts(target, 10)
+    return route._scrape_and_store_posts(FEED_URL, 10)
 
 
 def _stored(db: Session, identity: str) -> Artifact:

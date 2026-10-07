@@ -141,94 +141,8 @@ def test_ticker_matcher_accepts_asx_subreddit_as_finance_context() -> None:
     assert [match.symbol for match in matches] == ["ANZ"]
 
 
-@pytest.mark.parametrize(
-    ("route_name", "arguments", "post"),
-    [
-        (
-            "reddit",
-            ("ASX", 1),
-            {
-                "id": "reddit-1",
-                "title": "$BHP shares rise",
-                "body": "Investors discuss earnings.",
-                "score": 2,
-                "upvote_ratio": 0.9,
-                "num_comments": 1,
-                "url": "https://reddit.test/post-1",
-                "external_url": None,
-                "author": "investor",
-                "flair": "Discussion",
-                "is_self": True,
-                "created_utc": 1787961600.0,
-                "subreddit": "ASX",
-            },
-        ),
-    ],
-)
-def test_social_collectors_link_each_saved_artifact(
-    route_name: str,
-    arguments: tuple[str, int],
-    post: dict,
-) -> None:
-    from importlib import import_module
-
-    route = import_module(f"app.api.routes.{route_name}")
-    db = MagicMock()
-    session_context = MagicMock()
-    session_context.__enter__.return_value = db
-    artifact = MagicMock(id=uuid.uuid4())
-    platform = MagicMock(id=uuid.uuid4())
-    platform_function = getattr(route, f"_get_or_create_{route_name}_platform")
-
-    credential_patches = []
-    if route_name == "reddit":
-        credential_patches = [
-            patch.object(route.settings, "REDDIT_CLIENT_ID", "client"),
-            patch.object(route.settings, "REDDIT_CLIENT_SECRET", "secret"),
-        ]
-
-    for credential_patch in credential_patches:
-        credential_patch.start()
-    try:
-        with patch.object(route, "SessionLocal", return_value=session_context), patch.object(
-            route,
-            platform_function.__name__,
-            return_value=platform,
-        ), patch.object(route, "_fetch_posts", return_value=[post]), patch.object(
-            route.artifact_crud,
-            "get_artifact_by_hash",
-            return_value=None,
-        ), patch.object(
-            route.artifact_crud,
-            "create_artifact",
-            return_value=artifact,
-        ), patch.object(
-            route.public_discussion_service,
-            "link_artifact_to_tickers",
-            return_value=[MagicMock()],
-        ) as link_artifact:
-            with patch.object(
-                route.public_discussion_service,
-                "queue_artifact_analysis",
-                return_value=True,
-            ) as queue_analysis:
-                result = route._scrape_and_store_posts(*arguments)
-    finally:
-        for credential_patch in credential_patches:
-            credential_patch.stop()
-
-    assert result == {
-        "saved": 1,
-        "skipped_duplicates": 0,
-        "mentions_linked": 1,
-        "analysis_queued": 1,
-    }
-    link_artifact.assert_called_once_with(db, artifact)
-    queue_analysis.assert_called_once_with(db, artifact, link_artifact.return_value)
-
-
 def test_reddit_client_uses_configured_user_agent() -> None:
-    from app.api.routes import reddit
+    from app.services.discussion_sources import reddit
 
     with patch.object(reddit.settings, "REDDIT_CLIENT_ID", "client"), patch.object(
         reddit.settings,
@@ -239,7 +153,7 @@ def test_reddit_client_uses_configured_user_agent() -> None:
         "REDDIT_USER_AGENT",
         "windows:test-client:1.0.0 (read-only test)",
     ), patch.object(reddit.praw, "Reddit") as praw_client:
-        reddit._get_reddit_client()
+        reddit.REDDIT.client()
 
     praw_client.assert_called_once_with(
         client_id="client",

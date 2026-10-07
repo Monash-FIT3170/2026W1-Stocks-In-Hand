@@ -247,14 +247,21 @@ def _make_mock_submission(
     return s
 
 
+def _fetch_reddit(submission) -> list[dict]:
+    from app.services.discussion_sources import reddit
+
+    with patch.object(reddit.settings, "REDDIT_CLIENT_ID", "client"), patch.object(
+        reddit.settings, "REDDIT_CLIENT_SECRET", "secret"
+    ), patch.object(reddit.RedditSource, "client") as client:
+        client.return_value.subreddit.return_value.hot.return_value = [submission]
+        return reddit.REDDIT.fetch("ASX", 1)
+
+
 def test_list_reddit_posts_returns_posts() -> None:
     """GET /reddit/ returns a list of posts from the subreddit."""
     mock_post = _make_mock_submission()
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert len(result) == 1
     assert result[0]["id"] == "abc123"
@@ -268,10 +275,7 @@ def test_list_reddit_posts_truncates_body() -> None:
     long_body = "x" * 2000
     mock_post = _make_mock_submission(selftext=long_body)
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert len(result[0]["body"]) == 1000
 
@@ -280,10 +284,7 @@ def test_list_reddit_posts_empty_body() -> None:
     """Posts with no body text return an empty string."""
     mock_post = _make_mock_submission(selftext="")
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert result[0]["body"] == ""
 
@@ -295,10 +296,7 @@ def test_list_reddit_posts_external_url_for_link_post() -> None:
         url="https://example.com/article"
     )
 
-    with patch("app.api.routes.reddit._get_reddit_client") as mock_client:
-        mock_client.return_value.subreddit.return_value.hot.return_value = [mock_post]
-        from app.api.routes.reddit import _fetch_posts
-        result = _fetch_posts(subreddit_name="ASX", limit=1)
+    result = _fetch_reddit(mock_post)
 
     assert result[0]["external_url"] == "https://example.com/article"
     assert result[0]["is_self"] is False

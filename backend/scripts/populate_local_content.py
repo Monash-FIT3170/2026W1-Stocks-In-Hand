@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
@@ -17,10 +18,10 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.api.routes import reddit
 from app.core.config import settings
 from app.database.connection import SessionLocal
-from app.services import marketaux
+from app.services import discussion_collector, marketaux
+from app.services.discussion_sources.reddit import REDDIT
 from lambdas.download_validation import document_size_limit
 from parsing.pipeline import process_announcement
 from scrapers.adapter import DocumentRequest
@@ -153,10 +154,10 @@ def collect_reddit(*, subreddit: str, limit: int) -> dict:
             "status": "skipped",
             "reason": "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are not configured",
         }
-    return {
-        "status": "completed",
-        **reddit._scrape_and_store_posts(subreddit=subreddit, limit=limit),
-    }
+    result = discussion_collector.collect(
+        REDDIT, subreddit, limit, session_scope=SessionLocal
+    )
+    return asdict(result)
 
 
 async def populate(args: argparse.Namespace) -> dict:
