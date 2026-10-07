@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from app.sources import SOURCES, SourceAdapter, normalise_symbol
 
 from .base import BaseScraper, Announcement
@@ -48,7 +46,7 @@ REGISTRY: dict[str, type[BaseScraper]] = {
 }
 
 
-def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
+def get_scraper(ticker: str) -> BaseScraper:
     symbol = normalise_symbol(ticker)
     scraper_type = REGISTRY.get(symbol)
     if scraper_type is None:
@@ -56,23 +54,12 @@ def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
             f"No scraper implemented for '{symbol}'. "
             f"Available: {list(REGISTRY.keys())}"
         )
-    return scraper_type(output_dir=output_dir)
+    return scraper_type()
 
 
 async def discover(ticker: str) -> list[Announcement]:
     """Discover announcement metadata without downloading or writing files."""
     return await get_scraper(ticker).fetch_announcements()
-
-
-async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
-    """
-    Public entrypoint for the entire ASX scraper module.
-    When the higher-order platform system is built, this is the function it calls.
-
-    Usage:
-        results = await scrape("ANZ", Path("./output"))
-    """
-    return await get_scraper(ticker, output_dir).scrape()
 
 
 def available_tickers() -> list[str]:

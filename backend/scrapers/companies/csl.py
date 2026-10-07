@@ -1,8 +1,5 @@
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import urljoin, urlsplit
-
-import httpx
 
 from playwright.async_api import async_playwright
 
@@ -76,24 +73,3 @@ class CSLScraper(BaseScraper):
                 await browser.close()
 
         return announcements
-
-    async def download_pdf(self, announcement: Announcement) -> Path:
-        """Legacy local-CLI download; AWS downloads use the hardened worker."""
-        if self.output_dir is None:
-            raise ValueError("output_dir is required when downloading documents")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        filename = f"{announcement.date:%Y-%m-%d}_{announcement.title}.pdf"
-        dest = self.output_dir / "".join(
-            character if character.isalnum() or character in "._-" else "_"
-            for character in filename
-        )
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
-                announcement.pdf_url,
-                headers={"Referer": self.source_url},
-                follow_redirects=True,
-            )
-            response.raise_for_status()
-            dest.write_bytes(response.content)
-        return dest

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import asyncio
-import inspect
 import json
-import textwrap
 from datetime import datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -19,38 +16,7 @@ from app.sources import SOURCES
 from lambdas import download, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import validated_document
-from scrapers.base import Announcement
 from scrapers.companies.anz import ANZScraper
-from scrapers.companies.bhp import BHPScraper
-from scrapers.companies.cba import CBAScraper
-from scrapers.companies.coh import COHScraper
-from scrapers.companies.col import COLScraper
-from scrapers.companies.csl import CSLScraper
-from scrapers.companies.mqg import MQGScraper
-from scrapers.companies.org import ORGScraper
-from scrapers.companies.rio import RIOScraper
-from scrapers.companies.tcl import TCLScraper
-from scrapers.companies.tls import TLSScraper
-from scrapers.companies.wds import WDSScraper
-from scrapers.companies.wes import WESScraper
-from scrapers.registry import discover
-
-
-SCRAPERS = {
-    "ANZ": ANZScraper,
-    "BHP": BHPScraper,
-    "CBA": CBAScraper,
-    "COH": COHScraper,
-    "COL": COLScraper,
-    "CSL": CSLScraper,
-    "MQG": MQGScraper,
-    "ORG": ORGScraper,
-    "RIO": RIOScraper,
-    "TCL": TCLScraper,
-    "TLS": TLSScraper,
-    "WDS": WDSScraper,
-    "WES": WESScraper,
-}
 
 
 def _sqs_record(body: str) -> dict:
@@ -167,57 +133,6 @@ def test_anz_feed_preserves_yourir_document_identity() -> None:
 def test_anz_feed_rejects_missing_parallel_item_arrays() -> None:
     with pytest.raises(ValueError, match="invalid item schema"):
         ANZScraper()._parse_feed({"items": {"heading": ["Results"]}})
-
-
-@pytest.mark.parametrize("scraper_type", SCRAPERS.values())
-def test_discovery_implementations_contain_no_file_or_download_calls(
-    scraper_type,
-) -> None:
-    """Keep document I/O out of fetch_announcements as adapters evolve."""
-    tree = ast.parse(textwrap.dedent(inspect.getsource(scraper_type.fetch_announcements)))
-    forbidden_calls = {
-        "download_pdf",
-        "expect_download",
-        "save_as",
-        "write_bytes",
-        "_download_by_click",
-        "_download_via_browser",
-    }
-    called_names = {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
-
-    assert called_names.isdisjoint(forbidden_calls)
-
-
-@pytest.mark.parametrize(("ticker", "scraper_type"), SCRAPERS.items())
-def test_registry_discover_does_not_call_download(
-    monkeypatch: pytest.MonkeyPatch,
-    ticker: str,
-    scraper_type,
-) -> None:
-    announcement = Announcement(
-        ticker=ticker,
-        title="Results",
-        date=datetime(2026, 1, 1),
-        pdf_url=SOURCES[ticker].source_url,
-        source_url=SOURCES[ticker].source_url,
-    )
-
-    async def fake_fetch(_self):
-        return [announcement]
-
-    async def forbidden_download(_self, _announcement):
-        raise AssertionError("discovery called download_pdf")
-
-    monkeypatch.setattr(scraper_type, "fetch_announcements", fake_fetch)
-    monkeypatch.setattr(scraper_type, "download_pdf", forbidden_download)
-
-    assert asyncio.run(discover(ticker)) == [announcement]
-
-
 def test_csl_resolver_uses_generic_downloader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

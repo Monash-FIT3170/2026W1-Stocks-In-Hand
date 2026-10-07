@@ -401,16 +401,36 @@ async def resolve_session_download(
             await browser.close()
 
 
+async def fetch_document(
+    *,
+    source_adapter: str,
+    source_url: str,
+    document_url: str,
+    title: str | None,
+    metadata: Mapping[str, object],
+    max_bytes: int,
+) -> DownloadedDocument:
+    """Download one document using the minimum strategy for its source."""
+    if source_adapter == "csl":
+        return download_document(document_url, max_bytes=max_bytes)
+    return await resolve_session_download(
+        source_adapter=source_adapter,
+        source_url=source_url,
+        document_url=document_url,
+        title=title,
+        metadata=metadata,
+        max_bytes=max_bytes,
+    )
+
+
 def resolve_download(
     message: QueueBMessage,
     *,
     max_bytes: int,
 ) -> DownloadedDocument:
     """Download one Queue B document using the minimum strategy for its source."""
-    if message.source_adapter == "csl":
-        return download_document(str(message.document_url), max_bytes=max_bytes)
     return asyncio.run(
-        resolve_session_download(
+        fetch_document(
             source_adapter=message.source_adapter,
             source_url=str(message.source_url),
             document_url=str(message.document_url),

@@ -21,6 +21,9 @@ from app.api.routes import reddit
 from app.core.config import settings
 from app.database.connection import SessionLocal
 from app.services import marketaux
+from app.sources import SOURCES
+from lambdas.download_validation import document_size_limit
+from lambdas.source_download import fetch_document
 from parsing.pipeline import process_announcement
 from scrapers.base import Announcement
 from scrapers.registry import get_scraper
@@ -67,6 +70,30 @@ def require_local_database() -> None:
         )
 
 
+async def download_announcement(announcement: Announcement, directory: Path) -> Path:
+    """Fetch one document the way the download worker does and save it locally."""
+    source = SOURCES[announcement.ticker]
+    downloaded = await fetch_document(
+        source_adapter=source.adapter,
+        source_url=source.source_url,
+        document_url=announcement.pdf_url,
+        title=announcement.title,
+        metadata=announcement.metadata,
+        max_bytes=document_size_limit(),
+    )
+    clean_title = "".join(
+        character if character.isalnum() or character in "._-" else "_"
+        for character in announcement.title
+    ).strip("_")[:120] or "announcement"
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = (
+        directory
+        / f"{announcement.date:%Y-%m-%d}_{clean_title}.{downloaded.extension}"
+    )
+    destination.write_bytes(downloaded.content)
+    return destination
+
+
 async def collect_asx(
     tickers: list[str],
     *,
@@ -76,7 +103,7 @@ async def collect_asx(
 ) -> dict:
     result = {"found": 0, "processed": 0, "errors": []}
     for ticker in tickers:
-        scraper = get_scraper(ticker, output_dir)
+        scraper = get_scraper(ticker)
         try:
             discovered = await scraper.fetch_announcements()
             selected = bounded_announcements(
@@ -91,7 +118,10 @@ async def collect_asx(
 
         for announcement in selected:
             try:
-                announcement.local_path = await scraper.download_pdf(announcement)
+                announcement.local_path = await download_announcement(
+                    announcement,
+                    output_dir / ticker,
+                )
                 process_announcement(announcement)
                 result["processed"] += 1
             except Exception as exc:  # noqa: BLE001
