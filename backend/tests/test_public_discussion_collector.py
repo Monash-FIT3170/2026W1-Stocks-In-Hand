@@ -29,6 +29,8 @@ from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
+from app.services import discussion_collector
+from app.services.discussion_sources.bluesky import BLUESKY
 
 FEED_URL = "https://blog.example.test/feed.xml"
 
@@ -58,8 +60,35 @@ def _hash(identity: str) -> str:
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
-def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch) -> dict:
+class Recorded:
+    """A real discussion source whose fetch returns recorded raw posts."""
+
+    def __init__(self, source, raw_posts: list[dict]) -> None:
+        self.source = source
+        self.raw_posts = raw_posts
+
+    def __getattr__(self, name):
+        return getattr(self.source, name)
+
+    def fetch(self, target: str, limit: int) -> list[dict]:
+        return self.raw_posts[:limit]
+
+
+SOURCES = {"bluesky": BLUESKY}
+TARGETS = {"bluesky": "ASX"}
+
+
+def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, run_id=None):
     """Collect recorded posts from one source into the test database."""
+    monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
+    if source in SOURCES:
+        return discussion_collector.collect(
+            Recorded(SOURCES[source], raw_posts),
+            TARGETS[source],
+            10,
+            session_scope=lambda: nullcontext(db),
+            run_id=run_id,
+        )
     route = import_module(f"app.api.routes.{source}")
     monkeypatch.setattr(route, "_fetch_posts", lambda *_args, **_kwargs: raw_posts)
     monkeypatch.setattr(route, "SessionLocal", lambda: nullcontext(db))
@@ -274,3 +303,99 @@ def test_a_post_collected_again_is_not_stored_twice(
         .count()
         == 1
     )
+
+
+# The collector: run lifecycle and counting.
+
+
+def _requested_run(db: Session, source: str, target: str):
+    run, _created = discussion_collector.request_collection(
+        db,
+        SOURCES[source],
+        target,
+        idempotency_key=f"test:{uuid.uuid4()}",
+    )
+    return run
+
+
+def test_a_collection_run_records_what_it_found_and_stored(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    run = _requested_run(db_session, "bluesky", "ASX")
+    uris = [f"at://x/{_unique('b')}" for _ in range(2)]
+
+    result = _collect(
+        "bluesky", [bluesky_post(uri) for uri in uris], db_session, monkeypatch, run_id=run.id
+    )
+
+    db_session.refresh(run)
+    stored = _stored(db_session, f"bluesky:{uris[0]}")
+    assert result.status == "completed"
+    assert (result.found, result.saved, result.failed) == (2, 2, 0)
+    assert run.status == "completed"
+    assert (run.items_found, run.items_saved, run.items_failed) == (2, 2, 0)
+    assert stored.scrape_run_id == run.id
+    assert stored.platform_id == run.platform_id
+
+
+def test_malformed_posts_are_failed_items_and_the_rest_are_stored(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    run = _requested_run(db_session, "bluesky", "ASX")
+    good = f"at://x/{_unique('b')}"
+
+    result = _collect(
+        "bluesky",
+        [
+            bluesky_post(""),
+            bluesky_post(f"at://x/{_unique('b')}", created_at=""),
+            bluesky_post(good),
+        ],
+        db_session,
+        monkeypatch,
+        run_id=run.id,
+    )
+
+    db_session.refresh(run)
+    assert (result.found, result.saved, result.failed) == (3, 1, 2)
+    assert run.status == "partial"
+    assert run.items_failed == 2
+    assert _stored(db_session, f"bluesky:{good}")
+
+
+def test_a_post_already_stored_counts_as_a_duplicate(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    uri = f"at://x/{_unique('b')}"
+    _collect("bluesky", [bluesky_post(uri)], db_session, monkeypatch)
+
+    again = _collect("bluesky", [bluesky_post(uri)], db_session, monkeypatch)
+
+    assert (again.saved, again.skipped_duplicates, again.failed) == (0, 1, 0)
+    assert again.mentions_linked == 1
+
+
+def test_a_source_that_cannot_be_fetched_fails_its_run(
+    db_session: Session,
+) -> None:
+    run = _requested_run(db_session, "bluesky", "ASX")
+
+    class Unreachable(Recorded):
+        def fetch(self, target, limit):
+            raise ConnectionError("AppView unreachable")
+
+    result = discussion_collector.collect(
+        Unreachable(BLUESKY, []),
+        "ASX",
+        10,
+        session_scope=lambda: nullcontext(db_session),
+        run_id=run.id,
+    )
+
+    db_session.refresh(run)
+    assert result.status == "failed"
+    assert run.status == "failed"
+    assert "AppView unreachable" in run.error_message

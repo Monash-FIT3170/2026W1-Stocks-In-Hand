@@ -164,23 +164,6 @@ def test_ticker_matcher_accepts_asx_subreddit_as_finance_context() -> None:
             },
         ),
         (
-            "bluesky",
-            ("BHP", 1),
-            {
-                "uri": "at://did:plc:test/app.bsky.feed.post/one",
-                "text": "$BHP shares rise",
-                "created_at": "2026-08-29T00:00:00Z",
-                "author": "investor.test",
-                "display_name": "Investor",
-                "reply_count": 1,
-                "repost_count": 1,
-                "like_count": 2,
-                "quote_count": 0,
-                "langs": ["en"],
-                "tags": ["ASX"],
-            },
-        ),
-        (
             "mastodon",
             ("BHP", 1),
             {
@@ -464,7 +447,7 @@ def test_blog_scrape_endpoint_rejects_unconfigured_feed() -> None:
 
 
 def test_bluesky_public_search_uses_public_appview() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     response = MagicMock()
     response.json.return_value = {"posts": []}
@@ -477,7 +460,7 @@ def test_bluesky_public_search_uses_public_appview() -> None:
         "BLUESKY_PUBLIC_API_URL",
         "https://public.api.bsky.test",
     ), patch.object(bluesky.httpx, "get", return_value=response) as get:
-        assert bluesky._fetch_posts("BHP", 5) == []
+        assert bluesky.BLUESKY.fetch("BHP", 5) == []
 
     get.assert_called_once_with(
         "https://public.api.bsky.test/xrpc/app.bsky.feed.searchPosts",
@@ -488,7 +471,7 @@ def test_bluesky_public_search_uses_public_appview() -> None:
 
 
 def test_bluesky_authenticated_search_uses_app_password_session() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     session_response = MagicMock()
     session_response.json.return_value = {"accessJwt": "access-token"}
@@ -511,7 +494,7 @@ def test_bluesky_authenticated_search_uses_app_password_session() -> None:
         "get",
         return_value=search_response,
     ) as get:
-        assert bluesky._fetch_posts("BHP", 5) == []
+        assert bluesky.BLUESKY.fetch("BHP", 5) == []
 
     post.assert_called_once_with(
         "https://bsky.test/xrpc/com.atproto.server.createSession",
@@ -527,7 +510,7 @@ def test_bluesky_authenticated_search_uses_app_password_session() -> None:
 
 
 def test_bluesky_rejects_half_configured_credentials() -> None:
-    from app.api.routes import bluesky
+    from app.services.discussion_sources import bluesky
 
     with patch.object(bluesky.settings, "BLUESKY_IDENTIFIER", "user.bsky.social"), patch.object(
         bluesky.settings,
@@ -535,7 +518,7 @@ def test_bluesky_rejects_half_configured_credentials() -> None:
         "",
     ):
         with pytest.raises(RuntimeError, match="must be configured together"):
-            bluesky._search_request_config()
+            bluesky.BLUESKY.search_request()
 
 
 def test_public_discussion_run_records_collection_counts() -> None:

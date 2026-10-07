@@ -326,9 +326,9 @@ def test_fetch_bluesky_posts_returns_normalised_posts() -> None:
         }],
     }
 
-    with patch("app.api.routes.bluesky.httpx.get", return_value=mock_response):
-        from app.api.routes.bluesky import _fetch_posts
-        result = _fetch_posts(query="ANZ", limit=1)
+    with patch("app.services.discussion_sources.bluesky.httpx.get", return_value=mock_response):
+        from app.services.discussion_sources.bluesky import BLUESKY
+        result = BLUESKY.fetch("ANZ", 1)
 
     assert len(result) == 1
     assert result[0]["uri"] == "at://did:plc:test/app.bsky.feed.post/abc123"
