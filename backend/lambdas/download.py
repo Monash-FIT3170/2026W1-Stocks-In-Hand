@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import os
-
-import boto3
-from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from app.messages import QueueBMessage
@@ -15,6 +11,7 @@ from lambdas.common import (
 )
 from lambdas.download_validation import DownloadedDocument, document_size_limit
 from lambdas.pipeline_stage import StageRecord, downloaded_artifact, run_stage
+from lambdas.raw_documents import raw_document_store
 
 STAGE = "download"
 
@@ -59,19 +56,6 @@ def _load_artifact(message: QueueBMessage):
         }
 
 
-def _object_exists(s3, *, bucket: str | None, key: str | None) -> bool:
-    if not bucket or not key:
-        return False
-    try:
-        s3.head_object(Bucket=bucket, Key=key)
-        return True
-    except ClientError as exc:
-        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        if status in {403, 404}:
-            return False
-        raise
-
-
 def _resolve_download(
     message: QueueBMessage,
     *,
@@ -84,38 +68,6 @@ def _resolve_download(
     return resolve_download(message, max_bytes=max_bytes)
 
 
-def _put_immutable_document(
-    s3,
-    *,
-    bucket: str,
-    key: str,
-    downloaded: DownloadedDocument,
-) -> None:
-    key_parts = key.split("/")
-    try:
-        s3.put_object(
-            Bucket=bucket,
-            Key=key,
-            Body=downloaded.content,
-            ContentLength=len(downloaded.content),
-            ContentType=downloaded.content_type,
-            ServerSideEncryption="AES256",
-            Metadata={
-                "artifact-id": key_parts[2],
-                "sha256": downloaded.checksum,
-                "ticker": key_parts[1],
-                "document-format": downloaded.document_format,
-            },
-            IfNoneMatch="*",
-        )
-    except ClientError as exc:
-        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        code = exc.response.get("Error", {}).get("Code")
-        if status == 412 or code in {"PreconditionFailed", "ConditionalRequestConflict"}:
-            return
-        raise
-
-
 def _download(current: StageRecord) -> None:
     message = _parse_message(current.record)
     current.subject = downloaded_artifact(
@@ -123,11 +75,10 @@ def _download(current: StageRecord) -> None:
         artifact_id=message.artifact_id,
     )
     artifact_state = _load_artifact(message)
-    s3 = boto3.client("s3")
-    if artifact_state["status"] == DownloadStatus.STORED and _object_exists(
-        s3,
-        bucket=artifact_state["s3_bucket"],
-        key=artifact_state["s3_key"],
+    store = raw_document_store()
+    if artifact_state["status"] == DownloadStatus.STORED and store.holds(
+        artifact_state["s3_bucket"],
+        artifact_state["s3_key"],
     ):
         current.log("duplicate_skipped")
         return
@@ -139,30 +90,16 @@ def _download(current: StageRecord) -> None:
 
     # A DownloadedDocument has already passed size and format validation.
     downloaded = _resolve_download(message, max_bytes=document_size_limit())
-    bucket = os.environ["RAW_DOCUMENT_BUCKET"]
-    key = (
-        f"raw/{message.ticker}/{message.artifact_id}/"
-        f"{downloaded.checksum}.{downloaded.extension}"
-    )
-    _put_immutable_document(
-        s3,
-        bucket=bucket,
-        key=key,
-        downloaded=downloaded,
+    stored = store.put(
+        ticker=message.ticker,
+        artifact_id=message.artifact_id,
+        document=downloaded,
     )
 
     with database_session() as db:
         from app.crud.scrape_run import mark_artifact_stored
 
-        mark_artifact_stored(
-            db,
-            message.artifact_id,
-            checksum_sha256=downloaded.checksum,
-            s3_bucket=bucket,
-            s3_key=key,
-            content_type=downloaded.content_type,
-            file_size_bytes=len(downloaded.content),
-        )
+        mark_artifact_stored(db, message.artifact_id, **stored.artifact_fields())
     current.log(
         "completed",
         bytes_downloaded=len(downloaded.content),

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
-import re
 import time
 from functools import lru_cache
 from pathlib import PurePosixPath
@@ -34,36 +32,25 @@ from lambdas.common import (
     database_session,
     log_event,
 )
-from app.sources import SOURCES, adapter_matches_ticker
+from app.sources import adapter_matches_ticker
 from app.status import AnalysisStatus, DownloadStatus
-from lambdas.download_validation import (
-    DOCUMENT_CONTENT_TYPES,
-    DocumentFormat,
-    document_size_limit,
-    validate_document_content,
-)
+from lambdas.download_validation import document_size_limit
 from lambdas.pipeline_stage import (
     StageRecord,
     analysed_document,
     analysed_stored_text,
     run_stage,
 )
+from lambdas.raw_documents import (
+    DocumentLocation,
+    RawDocumentStore,
+    locate,
+    raw_document_store,
+)
 from parsing.classification_metadata import merge_classification_metadata
 
 STAGE = "analysis"
-FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
-    "pdf": "pdf",
-    "txt": "txt",
-    "html": "html",
-    "docx": "docx",
-}
-OBJECT_KEY = re.compile(
-    rf"^raw/(?P<ticker>{'|'.join(map(re.escape, SOURCES))})/"
-    r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
-    r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
-    re.IGNORECASE,
-)
+
 
 def parse_public_discussion_message(
     record: dict,
@@ -100,9 +87,8 @@ def _artifact_filename(artifact) -> str | None:
     return None
 
 
-def parse_s3_notifications(
-    record: dict,
-) -> list[tuple[str, str, str, UUID, str, DocumentFormat]]:
+def parse_s3_notifications(record: dict) -> list[DocumentLocation]:
+    """The stored documents a native S3 ObjectCreated notification names."""
     try:
         body = json.loads(record["body"])
         notifications = body["Records"]
@@ -112,7 +98,7 @@ def parse_s3_notifications(
             code="invalid_s3_event",
         ) from exc
 
-    parsed: list[tuple[str, str, str, UUID, str, DocumentFormat]] = []
+    locations: list[DocumentLocation] = []
     for notification in notifications:
         try:
             event_name = str(notification["eventName"])
@@ -128,40 +114,18 @@ def parse_s3_notifications(
                 "S3 notification is not an ObjectCreated event",
                 code="invalid_s3_event",
             )
-        match = OBJECT_KEY.fullmatch(key)
-        if not match:
-            raise PermanentDocumentError(
-                "S3 object key does not match the immutable document layout",
-                code="invalid_object_key",
-            )
-        parsed.append(
-            (
-                bucket,
-                key,
-                match.group("ticker").upper(),
-                UUID(match.group("artifact_id")),
-                match.group("checksum").lower(),
-                FORMAT_BY_EXTENSION[match.group("extension").lower()],
-            )
-        )
-    if not parsed:
+        locations.append(locate(bucket, key))
+    if not locations:
         raise PermanentDocumentError(
             "S3 notification contains no records",
             code="empty_s3_event",
         )
-    return parsed
+    return locations
 
 
-def _artifact_state(
-    *,
-    s3,
-    artifact_id: UUID,
-    bucket: str,
-    key: str,
-    checksum: str,
-    ticker: str,
-    document_format: DocumentFormat,
-) -> dict:
+def _artifact_state(store: RawDocumentStore, location: DocumentLocation) -> dict:
+    artifact_id = location.artifact_id
+    ticker = location.ticker
     with database_session() as db:
         from app.crud.artifact import get_artifact
 
@@ -196,9 +160,9 @@ def _artifact_state(
 
     if state["download_status"] == DownloadStatus.STORED:
         if (
-            state["s3_bucket"] != bucket
-            or state["s3_key"] != key
-            or state["checksum"] != checksum
+            state["s3_bucket"] != location.bucket
+            or state["s3_key"] != location.key
+            or state["checksum"] != location.checksum
         ):
             raise PermanentDocumentError(
                 "S3 notification is stale or does not match the artifact",
@@ -209,24 +173,18 @@ def _artifact_state(
     # S3 can deliver ObjectCreated before the downloader commits its database
     # update. Reconcile from the immutable object so the event is not delayed
     # for the queue's 72-minute visibility timeout.
-    response = s3.head_object(Bucket=bucket, Key=key)
-    content_type = (
-        str(response.get("ContentType", ""))
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
-    content_length = int(response.get("ContentLength", 0))
-    metadata = {
-        str(name).lower(): str(value)
-        for name, value in (response.get("Metadata") or {}).items()
-    }
+    stored_object = store.bucket.head(location.key)
+    if stored_object is None:
+        raise RuntimeError("Stored object is not visible yet")
+    metadata = stored_object.metadata
+    content_type = stored_object.content_type
+    content_length = stored_object.size
     if (
         metadata.get("artifact-id") != str(artifact_id)
-        or metadata.get("sha256") != checksum
+        or metadata.get("sha256") != location.checksum
         or metadata.get("ticker") != ticker
-        or metadata.get("document-format") != document_format
-        or content_type != DOCUMENT_CONTENT_TYPES[document_format]
+        or metadata.get("document-format") != location.document_format
+        or content_type != location.content_type
     ):
         raise PermanentDocumentError(
             "Stored object metadata does not match the S3 event",
@@ -244,9 +202,9 @@ def _artifact_state(
         artifact = mark_artifact_stored(
             db,
             artifact_id,
-            checksum_sha256=checksum,
-            s3_bucket=bucket,
-            s3_key=key,
+            checksum_sha256=location.checksum,
+            s3_bucket=location.bucket,
+            s3_key=location.key,
             content_type=content_type,
             file_size_bytes=content_length,
         )
@@ -256,55 +214,6 @@ def _artifact_state(
                 code="artifact_not_found",
             )
     return state
-
-
-def _read_s3_document(
-    s3,
-    *,
-    bucket: str,
-    key: str,
-    checksum: str,
-    document_format: DocumentFormat,
-) -> bytes:
-    max_bytes = document_size_limit()
-    response = s3.get_object(Bucket=bucket, Key=key)
-    content_type = (
-        str(response.get("ContentType", ""))
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
-    if content_type != DOCUMENT_CONTENT_TYPES[document_format]:
-        raise PermanentDocumentError(
-            "Stored document content type does not match its immutable key",
-            code="content_type_mismatch",
-        )
-    if int(response.get("ContentLength", 0)) > max_bytes:
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-    body = response["Body"]
-    try:
-        content = body.read(max_bytes + 1)
-    finally:
-        body.close()
-    if len(content) > max_bytes:
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-    if hashlib.sha256(content).hexdigest() != checksum:
-        raise PermanentDocumentError(
-            "Stored document checksum does not match its immutable key",
-            code="checksum_mismatch",
-        )
-    validate_document_content(
-        content,
-        declared_content_type=DOCUMENT_CONTENT_TYPES[document_format],
-        expected_format=document_format,
-    )
-    return content
 
 
 def _summary_values(output: AnalysisOutput) -> dict | None:
@@ -625,26 +534,15 @@ def _analyse_public_discussion_artifact(
 
 def _analyse_object(
     *,
-    s3,
-    bucket: str,
-    key: str,
-    artifact_id: UUID,
-    checksum: str,
-    ticker: str,
-    document_format: DocumentFormat,
+    store: RawDocumentStore,
+    location: DocumentLocation,
     correlation: str,
     attempt: int,
 ) -> None:
     started_at = time.monotonic()
-    state = _artifact_state(
-        s3=s3,
-        artifact_id=artifact_id,
-        bucket=bucket,
-        key=key,
-        checksum=checksum,
-        ticker=ticker,
-        document_format=document_format,
-    )
+    artifact_id = location.artifact_id
+    document_format = location.document_format
+    state = _artifact_state(store, location)
     if state["completed"]:
         log_event(
             stage=STAGE,
@@ -662,20 +560,14 @@ def _analyse_object(
 
         mark_artifact_analysis_started(db, artifact_id)
 
-    content = _read_s3_document(
-        s3,
-        bucket=bucket,
-        key=key,
-        checksum=checksum,
-        document_format=document_format,
-    )
+    content = store.read(location)
     output = analyse_document(
         content,
         title=state["title"],
         max_pages=int(os.getenv("MAX_PDF_PAGES", "100")),
         document_format=document_format,
         max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
-        filename=state.get("filename") or key.rsplit("/", 1)[-1],
+        filename=state.get("filename") or location.key.rsplit("/", 1)[-1],
         source_type=state.get("source_type"),
         source_adapter=state.get("source_adapter"),
     )
@@ -712,7 +604,7 @@ def _analyse_object(
 
     _try_publish_notification(
         artifact_id=artifact_id,
-        ticker=ticker,
+        ticker=location.ticker,
         scrape_run_id=state["run_id"],
         sentiment=sentiment,
         correlation=correlation,
@@ -747,24 +639,18 @@ def _analyse(current: StageRecord) -> None:
             attempt=current.attempt,
         )
         return
-    notifications = parse_s3_notifications(current.record)
-    s3 = boto3.client("s3")
-    expected_bucket = os.environ["RAW_DOCUMENT_BUCKET"]
-    for bucket, key, ticker, artifact_id, checksum, document_format in notifications:
-        current.subject = analysed_document(artifact_id)
-        if bucket != expected_bucket:
+    locations = parse_s3_notifications(current.record)
+    store = raw_document_store()
+    for location in locations:
+        current.subject = analysed_document(location.artifact_id)
+        if location.bucket != store.name:
             raise PermanentDocumentError(
                 "S3 event came from an unexpected bucket",
                 code="unexpected_bucket",
             )
         _analyse_object(
-            s3=s3,
-            bucket=bucket,
-            key=key,
-            artifact_id=artifact_id,
-            checksum=checksum,
-            ticker=ticker,
-            document_format=document_format,
+            store=store,
+            location=location,
             correlation=current.correlation_id,
             attempt=current.attempt,
         )

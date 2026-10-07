@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
-from lambdas import analysis, download, source_download
+from lambdas import download, source_download
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import validated_document
 from scrapers.base import Announcement
@@ -138,37 +138,6 @@ def test_rio_adapter_accepts_its_euroland_document_cdn() -> None:
     )
 
     assert source_download._validated_url("rio", document_url) == document_url
-
-
-@pytest.mark.parametrize("ticker", SOURCES)
-def test_analysis_accepts_each_canonical_ticker_object_key(ticker: str) -> None:
-    artifact_id = uuid4()
-    checksum = "a" * 64
-    record = {
-        "body": json.dumps(
-            {
-                "Records": [
-                    {
-                        "eventName": "ObjectCreated:Put",
-                        "s3": {
-                            "bucket": {"name": "raw-documents"},
-                            "object": {
-                                "key": (
-                                    f"raw/{ticker}/{artifact_id}/{checksum}.pdf"
-                                )
-                            },
-                        },
-                    }
-                ]
-            }
-        )
-    }
-
-    parsed = analysis.parse_s3_notifications(record)
-
-    assert parsed[0][2] == ticker
-    assert parsed[0][3] == artifact_id
-
 
 def test_anz_feed_preserves_yourir_document_identity() -> None:
     announcements = ANZScraper()._parse_feed(

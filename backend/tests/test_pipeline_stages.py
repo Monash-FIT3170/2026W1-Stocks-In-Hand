@@ -21,7 +21,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -31,8 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
-from app.messages import QueueAMessage, QueueBMessage
+from app.messages import NotificationMessage, QueueAMessage, QueueBMessage
 from app.models.artifact import Artifact
+from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.scrape_run import ScrapeRun
 from app.services import scrape_runs
 from app.sources import SOURCES
@@ -47,6 +47,9 @@ from lambdas import (
 )
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
 from lambdas.download_validation import validated_document
+from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
+from parsing.analysis import AnalysisOutput, ParsedDocument
+from parsing.classification import ClassificationInput, classify_document
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
@@ -83,6 +86,15 @@ def workers_use(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Session
     return db_session
 
 
+@pytest.fixture()
+def store(monkeypatch: pytest.MonkeyPatch) -> RawDocumentStore:
+    """The raw document store both workers use, held in memory."""
+    in_memory = RawDocumentStore(InMemoryBucket("raw-documents"))
+    for worker in (download, analysis):
+        monkeypatch.setattr(worker, "raw_document_store", lambda: in_memory)
+    return in_memory
+
+
 class FakeSqs:
     def __init__(self) -> None:
         self.bodies: list[str] = []
@@ -93,23 +105,6 @@ class FakeSqs:
 
     def queue_b(self) -> list[QueueBMessage]:
         return [QueueBMessage.model_validate_json(body) for body in self.bodies]
-
-
-class FakeS3:
-    def __init__(self) -> None:
-        self.objects: dict[tuple[str, str], dict] = {}
-
-    def put_object(self, **kwargs) -> dict:
-        self.objects[(kwargs["Bucket"], kwargs["Key"])] = kwargs
-        return {}
-
-    def head_object(self, *, Bucket: str, Key: str) -> dict:
-        if (Bucket, Key) not in self.objects:
-            raise ClientError(
-                {"Error": {"Code": "404"}, "ResponseMetadata": {"HTTPStatusCode": 404}},
-                "HeadObject",
-            )
-        return {}
 
 
 def _record(body: str, attempt: int = 1) -> dict:
@@ -199,20 +194,10 @@ def _download(
     monkeypatch: pytest.MonkeyPatch,
     *,
     resolve,
-    s3: FakeS3 | None = None,
     attempt: int = 1,
-) -> FakeS3:
-    s3 = s3 or FakeS3()
-
-    def client(service):
-        assert service == "s3", "the download stage must not send to a queue"
-        return s3
-
-    monkeypatch.setattr(download.boto3, "client", client)
+) -> None:
     monkeypatch.setattr(source_download, "resolve_download", resolve)
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")
     download.handler({"Records": [_record(message.model_dump_json(), attempt)]}, None)
-    return s3
 
 
 def _pdf(content: bytes = b"%PDF-1.7\ncontent"):
@@ -465,38 +450,39 @@ def test_final_discovery_attempt_fails_the_run(
 
 def test_download_stores_the_document_and_moves_the_run_to_analysis(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
     content = b"%PDF-1.7\nhalf year results"
 
-    s3 = _download(_queue_b(artifact, run), monkeypatch, resolve=_pdf(content))
+    _download(_queue_b(artifact, run), monkeypatch, resolve=_pdf(content))
 
     workers_use.refresh(artifact)
     workers_use.refresh(run)
-    [((bucket, key), put)] = s3.objects.items()
-    assert put["Body"] == content
-    assert put["IfNoneMatch"] == "*"
+    location = locate(artifact.s3_bucket, artifact.s3_key)
+    assert location.artifact_id == artifact.id
+    assert store.read(location) == content
     assert artifact.download_status == DownloadStatus.STORED
-    assert (artifact.s3_bucket, artifact.s3_key) == (bucket, key)
     assert artifact.checksum_sha256 == hashlib.sha256(content).hexdigest()
+    assert artifact.file_size_bytes == len(content)
     assert run.status == ScrapeRunStatus.ANALYZING
     assert run.items_downloaded == 1
 
 
 def test_download_of_a_stored_document_is_skipped(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
     message = _queue_b(artifact, run)
-    s3 = _download(message, monkeypatch, resolve=_pdf())
+    _download(message, monkeypatch, resolve=_pdf())
 
     _download(
         message,
         monkeypatch,
         resolve=_failing(AssertionError("stored document was downloaded again")),
-        s3=s3,
         attempt=2,
     )
 
@@ -506,6 +492,7 @@ def test_download_of_a_stored_document_is_skipped(
 
 def test_permanent_download_error_fails_the_artifact_on_the_first_receive(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
@@ -523,6 +510,7 @@ def test_permanent_download_error_fails_the_artifact_on_the_first_receive(
 
 def test_download_for_a_mismatched_artifact_is_not_recorded_against_it(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
@@ -538,6 +526,7 @@ def test_download_for_a_mismatched_artifact_is_not_recorded_against_it(
 
 def test_retryable_download_failure_leaves_artifact_and_run_open(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
@@ -560,6 +549,7 @@ def test_retryable_download_failure_leaves_artifact_and_run_open(
 
 def test_final_download_attempt_fails_artifact_and_finishes_run(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
@@ -584,29 +574,191 @@ def test_final_download_attempt_fails_artifact_and_finishes_run(
 # Analysis
 
 
-def _s3_event(artifact, *, bucket: str = "raw-documents") -> str:
-    key = f"raw/CSL/{artifact.id}/{'a' * 64}.pdf"
+def _stored_document(db: Session, store: RawDocumentStore):
+    """A run whose one document the download stage has stored."""
+    run, artifact = _run_with_one_document(db)
+    document = validated_document(
+        b"%PDF-1.7\nhalf year results",
+        declared_content_type="application/pdf",
+        final_url=artifact.document_url,
+        max_bytes=1024,
+    )
+    stored = store.put(ticker="CSL", artifact_id=artifact.id, document=document)
+    scrape_run_crud.mark_artifact_download_started(db, artifact.id)
+    scrape_run_crud.mark_artifact_stored(db, artifact.id, **stored.artifact_fields())
+    return run, artifact, stored
+
+
+def _s3_event(location, *, bucket: str | None = None) -> str:
     return json.dumps(
         {
             "Records": [
                 {
                     "eventName": "ObjectCreated:Put",
-                    "s3": {"bucket": {"name": bucket}, "object": {"key": key}},
+                    "s3": {
+                        "bucket": {"name": bucket or location.bucket},
+                        "object": {"key": location.key},
+                    },
                 }
             ]
         }
     )
 
 
-def _analyse(body: str, attempt: int, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")
-    monkeypatch.setattr(analysis.boto3, "client", lambda _service: MagicMock())
-    monkeypatch.setattr(
-        analysis,
-        "_analyse_object",
-        MagicMock(side_effect=ConnectionError("model endpoint reset")),
+def _analysis_output() -> AnalysisOutput:
+    classification = classify_document(
+        ClassificationInput(
+            title="Half Year Results",
+            text="Half year report for the six months ended 31 December 2025.",
+            filename="report.pdf",
+            source_type="asx_announcement",
+            source_adapter="csl",
+        )
     )
+    return AnalysisOutput(
+        parsed=ParsedDocument(
+            raw_text="Revenue increased.",
+            page_count=1,
+            category="HalfYearResults",
+            category_confidence=1.0,
+            extracted_data={},
+            classification=classification,
+        ),
+        summary=None,
+        summary_model=None,
+        summary_prompt_version=None,
+        sentiment={
+            "sentiment_label": "positive",
+            "label": "positive",
+            "confidence_score": 0.9,
+            "model_used": "ProsusAI/finbert",
+        },
+    )
+
+
+def _analyse(body: str, attempt: int = 1) -> None:
     analysis.handler({"Records": [_record(body, attempt)]}, None)
+
+
+def test_analysis_records_the_result_finishes_the_run_and_notifies(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, artifact, stored = _stored_document(workers_use, store)
+    analysed: list[bytes] = []
+
+    def analyse_document(content, **_kwargs):
+        analysed.append(content)
+        return _analysis_output()
+
+    sqs = FakeSqs()
+    monkeypatch.setattr(analysis, "analyse_document", analyse_document)
+    monkeypatch.setattr(analysis.boto3, "client", lambda _service: sqs)
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+    monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
+    analysis._notification_sqs_client.cache_clear()
+    try:
+        _analyse(_s3_event(stored.location))
+    finally:
+        analysis._notification_sqs_client.cache_clear()
+
+    workers_use.refresh(artifact)
+    workers_use.refresh(run)
+    sentiment = (
+        workers_use.query(ArtifactSentiment)
+        .filter(ArtifactSentiment.artifact_id == artifact.id)
+        .one()
+    )
+    [notification] = [
+        NotificationMessage.model_validate_json(body) for body in sqs.bodies
+    ]
+    assert analysed == [b"%PDF-1.7\nhalf year results"]
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert artifact.raw_text == "Revenue increased."
+    assert (
+        artifact.artifact_metadata["classification"]["primary_category"]
+        == "half_year_results"
+    )
+    assert sentiment.sentiment_label == "positive"
+    assert run.status == ScrapeRunStatus.COMPLETED
+    assert notification.artifact_id == artifact.id
+    assert notification.scrape_run_id == run.id
+    assert notification.ticker == "CSL"
+    assert notification.sentiment_label == "positive"
+
+
+def test_analysis_of_a_completed_document_is_skipped(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run, artifact, stored = _stored_document(workers_use, store)
+    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+    _analyse(_s3_event(stored.location))
+
+    def analyse_again(*_args, **_kwargs):
+        raise AssertionError("completed document was analysed again")
+
+    monkeypatch.setattr(analysis, "analyse_document", analyse_again)
+    _analyse(_s3_event(stored.location), attempt=2)
+
+    workers_use.refresh(artifact)
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+
+
+def test_s3_event_before_the_download_commit_is_reconciled_from_the_object(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, artifact = _run_with_one_document(workers_use)
+    scrape_run_crud.mark_artifact_download_started(workers_use, artifact.id)
+    document = validated_document(
+        b"%PDF-1.7\nhalf year results",
+        declared_content_type="application/pdf",
+        final_url=artifact.document_url,
+        max_bytes=1024,
+    )
+    # The object is written, but the download stage has not recorded it yet.
+    stored = store.put(ticker="CSL", artifact_id=artifact.id, document=document)
+    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+
+    _analyse(_s3_event(stored.location))
+
+    workers_use.refresh(artifact)
+    workers_use.refresh(run)
+    assert artifact.download_status == DownloadStatus.STORED
+    assert artifact.s3_key == stored.location.key
+    assert artifact.file_size_bytes == stored.size
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert run.items_downloaded == 1
+
+
+def test_s3_event_for_an_object_that_is_not_the_artifact_is_rejected(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run, artifact = _run_with_one_document(workers_use)
+    other_run, other = _run_with_one_document(workers_use)
+    document = validated_document(
+        b"%PDF-1.7\nsomeone else's results",
+        declared_content_type="application/pdf",
+        final_url=other.document_url,
+        max_bytes=1024,
+    )
+    stored = store.put(ticker="CSL", artifact_id=other.id, document=document)
+    # An object under this artifact's key whose metadata names another one.
+    forged_key = stored.location.key.replace(str(other.id), str(artifact.id))
+    store.bucket.objects[forged_key] = store.bucket.objects[stored.location.key]
+    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+
+    _analyse(_s3_event(locate(store.name, forged_key)))
+
+    workers_use.refresh(artifact)
+    assert artifact.download_status == DownloadStatus.PENDING
+    assert artifact.analysis_status == AnalysisStatus.PENDING
 
 
 @pytest.mark.parametrize(
@@ -619,26 +771,21 @@ def _analyse(body: str, attempt: int, monkeypatch: pytest.MonkeyPatch) -> None:
 )
 def test_analysis_failure_is_terminal_only_on_the_final_attempt(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
     attempt: int,
     expected_status: str,
     expected_failed: int,
 ) -> None:
-    run, artifact = _run_with_one_document(workers_use)
-    scrape_run_crud.mark_artifact_download_started(workers_use, artifact.id)
-    scrape_run_crud.mark_artifact_stored(
-        workers_use,
-        artifact.id,
-        checksum_sha256="a" * 64,
-        s3_bucket="raw-documents",
-        s3_key=f"raw/CSL/{artifact.id}/{'a' * 64}.pdf",
-        content_type="application/pdf",
-        file_size_bytes=128,
-    )
-    scrape_run_crud.mark_artifact_analysis_started(workers_use, artifact.id)
+    run, artifact, stored = _stored_document(workers_use, store)
+
+    def model_endpoint_reset(*_args, **_kwargs):
+        raise ConnectionError("model endpoint reset")
+
+    monkeypatch.setattr(analysis, "analyse_document", model_endpoint_reset)
 
     with pytest.raises(ConnectionError):
-        _analyse(_s3_event(artifact), attempt, monkeypatch)
+        _analyse(_s3_event(stored.location), attempt)
 
     workers_use.refresh(artifact)
     workers_use.refresh(run)
@@ -650,11 +797,11 @@ def test_analysis_failure_is_terminal_only_on_the_final_attempt(
 
 def test_analysis_event_from_another_bucket_is_not_recorded_against_the_artifact(
     workers_use: Session,
-    monkeypatch: pytest.MonkeyPatch,
+    store: RawDocumentStore,
 ) -> None:
-    _run, artifact = _run_with_one_document(workers_use)
+    _run, artifact, stored = _stored_document(workers_use, store)
 
-    _analyse(_s3_event(artifact, bucket="someone-elses-bucket"), 1, monkeypatch)
+    _analyse(_s3_event(stored.location, bucket="someone-elses-bucket"))
 
     workers_use.refresh(artifact)
     assert artifact.analysis_status == AnalysisStatus.PENDING
@@ -751,6 +898,7 @@ def test_work_still_inside_the_redelivery_window_stays_open(
 
 def test_a_redriven_message_completes_abandoned_work(
     workers_use: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
