@@ -21,12 +21,11 @@ from app.api.routes import reddit
 from app.core.config import settings
 from app.database.connection import SessionLocal
 from app.services import marketaux
-from app.sources import SOURCES
 from lambdas.download_validation import document_size_limit
-from lambdas.source_download import fetch_document
 from parsing.pipeline import process_announcement
+from scrapers.adapter import DocumentRequest
 from scrapers.base import Announcement
-from scrapers.registry import get_scraper
+from scrapers.registry import adapter_for
 
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "db", "localhost", "postgres"}
@@ -72,13 +71,12 @@ def require_local_database() -> None:
 
 async def download_announcement(announcement: Announcement, directory: Path) -> Path:
     """Fetch one document the way the download worker does and save it locally."""
-    source = SOURCES[announcement.ticker]
-    downloaded = await fetch_document(
-        source_adapter=source.adapter,
-        source_url=source.source_url,
-        document_url=announcement.pdf_url,
-        title=announcement.title,
-        metadata=announcement.metadata,
+    downloaded = await adapter_for(announcement.ticker).fetch_document(
+        DocumentRequest(
+            document_url=announcement.pdf_url,
+            title=announcement.title,
+            metadata=announcement.metadata,
+        ),
         max_bytes=document_size_limit(),
     )
     clean_title = "".join(
@@ -103,9 +101,8 @@ async def collect_asx(
 ) -> dict:
     result = {"found": 0, "processed": 0, "errors": []}
     for ticker in tickers:
-        scraper = get_scraper(ticker)
         try:
-            discovered = await scraper.fetch_announcements()
+            discovered = await adapter_for(ticker).list_documents()
             selected = bounded_announcements(
                 discovered,
                 lookback_days=lookback_days,

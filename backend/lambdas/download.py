@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import ValidationError
 
 from app.messages import QueueBMessage
@@ -9,9 +11,11 @@ from lambdas.common import (
     canonicalize_url,
     database_session,
 )
-from lambdas.download_validation import DownloadedDocument, document_size_limit
+from lambdas.download_validation import document_size_limit
 from lambdas.pipeline_stage import StageRecord, downloaded_artifact, run_stage
 from lambdas.raw_documents import raw_document_store
+from scrapers.adapter import DocumentRequest
+from scrapers.registry import adapter_named
 
 STAGE = "download"
 
@@ -56,18 +60,6 @@ def _load_artifact(message: QueueBMessage):
         }
 
 
-def _resolve_download(
-    message: QueueBMessage,
-    *,
-    max_bytes: int,
-) -> DownloadedDocument:
-    # Source adapters own browser/session recreation. S3 persistence remains
-    # here so every source receives identical validation and idempotency.
-    from lambdas.source_download import resolve_download
-
-    return resolve_download(message, max_bytes=max_bytes)
-
-
 def _download(current: StageRecord) -> None:
     message = _parse_message(current.record)
     current.subject = downloaded_artifact(
@@ -88,8 +80,18 @@ def _download(current: StageRecord) -> None:
 
         mark_artifact_download_started(db, message.artifact_id)
 
-    # A DownloadedDocument has already passed size and format validation.
-    downloaded = _resolve_download(message, max_bytes=document_size_limit())
+    # The company's source adapter owns how its documents are fetched. A
+    # DownloadedDocument has already passed size and format validation.
+    downloaded = asyncio.run(
+        adapter_named(message.source_adapter).fetch_document(
+            DocumentRequest(
+                document_url=str(message.document_url),
+                title=message.title,
+                metadata=message.metadata,
+            ),
+            max_bytes=document_size_limit(),
+        )
+    )
     stored = store.put(
         ticker=message.ticker,
         artifact_id=message.artifact_id,

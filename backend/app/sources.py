@@ -12,7 +12,7 @@ tests that import it with only pytest and PyYAML installed.
 from dataclasses import dataclass
 from typing import Literal
 
-SourceAdapter = Literal[
+AdapterName = Literal[
     "anz",
     "bhp",
     "cba",
@@ -32,7 +32,7 @@ SourceAdapter = Literal[
 @dataclass(frozen=True)
 class SourceDefinition:
     ticker: str
-    adapter: SourceAdapter
+    adapter: AdapterName
     source_url: str
     company_name: str
     sector: str

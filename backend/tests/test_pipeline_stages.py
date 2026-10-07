@@ -43,13 +43,14 @@ from lambdas import (
     download,
     pipeline_stage,
     schedule,
-    source_download,
 )
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
 from lambdas.download_validation import validated_document
 from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
 from parsing.analysis import AnalysisOutput, ParsedDocument
 from parsing.classification import ClassificationInput, classify_document
+from scrapers import registry as scraper_registry
+from scrapers.adapter import SourceAdapter
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
@@ -138,20 +139,37 @@ def _announcement(ticker: str = "CSL", *, age: timedelta = timedelta(0), **field
     return Announcement(ticker=ticker, date=now - age, **{**defaults, **fields})
 
 
+class FakeAdapter(SourceAdapter):
+    """A source adapter that lists and fetches what a test gives it."""
+
+    def __init__(self, ticker: str, *, documents=(), fetch=None) -> None:
+        super().__init__(SOURCES[ticker])
+        self.documents = documents
+        self.fetch = fetch
+
+    async def list_documents(self):
+        if isinstance(self.documents, Exception):
+            raise self.documents
+        return list(self.documents)
+
+    async def fetch_document(self, request, *, max_bytes):
+        return self.fetch(request, max_bytes=max_bytes)
+
+
+def _use_adapter(monkeypatch: pytest.MonkeyPatch, adapter: FakeAdapter) -> None:
+    monkeypatch.setitem(scraper_registry.ADAPTERS, adapter.source.adapter, adapter)
+
+
 def _discover(
     queue_a: QueueAMessage,
-    announcements: list[Announcement],
+    announcements,
     monkeypatch: pytest.MonkeyPatch,
     *,
     attempt: int = 1,
 ) -> FakeSqs:
+    """Run discovery for a Queue A message; the adapter lists announcements."""
     sqs = FakeSqs()
-
-    async def discover(ticker):
-        assert ticker == queue_a.ticker
-        return announcements
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", discover)
+    _use_adapter(monkeypatch, FakeAdapter(queue_a.ticker, documents=announcements))
     monkeypatch.setattr(discovery.boto3, "client", lambda _service: sqs)
     monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
     discovery.handler({"Records": [_record(queue_a.model_dump_json(), attempt)]}, None)
@@ -196,16 +214,16 @@ def _download(
     resolve,
     attempt: int = 1,
 ) -> None:
-    monkeypatch.setattr(source_download, "resolve_download", resolve)
+    _use_adapter(monkeypatch, FakeAdapter("CSL", fetch=resolve))
     download.handler({"Records": [_record(message.model_dump_json(), attempt)]}, None)
 
 
 def _pdf(content: bytes = b"%PDF-1.7\ncontent"):
-    def resolve(message, *, max_bytes):
+    def resolve(request, *, max_bytes):
         return validated_document(
             content,
             declared_content_type="application/pdf",
-            final_url=str(message.document_url),
+            final_url=request.document_url,
             max_bytes=max_bytes,
         )
 
@@ -213,7 +231,7 @@ def _pdf(content: bytes = b"%PDF-1.7\ncontent"):
 
 
 def _failing(error: Exception):
-    def resolve(_message, *, max_bytes):
+    def resolve(_request, *, max_bytes):
         raise error
 
     return resolve
@@ -400,10 +418,10 @@ def test_rerequest_during_discovery_retry_does_not_enqueue_again(
     )
     assert enqueue.call_count == 1
 
-    async def unreachable_source(_ticker):
-        raise ConnectionError("investor site unreachable")
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", unreachable_source)
+    _use_adapter(
+        monkeypatch,
+        FakeAdapter("CSL", documents=ConnectionError("investor site unreachable")),
+    )
     queue_a = enqueue.call_args.args[0]
     with pytest.raises(ConnectionError):
         discovery.handler({"Records": [_record(queue_a.model_dump_json(), 1)]}, None)
@@ -430,10 +448,10 @@ def test_final_discovery_attempt_fails_the_run(
 ) -> None:
     run, queue_a = _requested_run(workers_use)
 
-    async def unreachable_source(_ticker):
-        raise ConnectionError("investor site unreachable")
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", unreachable_source)
+    _use_adapter(
+        monkeypatch,
+        FakeAdapter("CSL", documents=ConnectionError("investor site unreachable")),
+    )
     with pytest.raises(ConnectionError):
         discovery.handler(
             {"Records": [_record(queue_a.model_dump_json(), MAX_RECEIVE_COUNT)]},

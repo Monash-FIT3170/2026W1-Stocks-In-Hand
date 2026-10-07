@@ -35,21 +35,20 @@ def test_collect_asx_saves_each_document_before_processing_it(
     fetched: list[dict] = []
     processed: list[bytes] = []
 
-    class Scraper:
-        async def fetch_announcements(self):
+    class Adapter:
+        async def list_documents(self):
             return [announcement]
 
-    async def fetch_document(**request):
-        fetched.append(request)
-        return validated_document(
-            b"%PDF-1.7\nresults",
-            declared_content_type="application/pdf",
-            final_url=request["document_url"],
-            max_bytes=request["max_bytes"],
-        )
+        async def fetch_document(self, request, *, max_bytes):
+            fetched.append(request)
+            return validated_document(
+                b"%PDF-1.7\nresults",
+                declared_content_type="application/pdf",
+                final_url=request.document_url,
+                max_bytes=max_bytes,
+            )
 
-    monkeypatch.setattr(populate_local_content, "get_scraper", lambda _ticker: Scraper())
-    monkeypatch.setattr(populate_local_content, "fetch_document", fetch_document)
+    monkeypatch.setattr(populate_local_content, "adapter_for", lambda _ticker: Adapter())
     monkeypatch.setattr(
         populate_local_content,
         "process_announcement",
@@ -66,7 +65,6 @@ def test_collect_asx_saves_each_document_before_processing_it(
     )
 
     assert result == {"found": 1, "processed": 1, "errors": []}
-    assert fetched[0]["source_adapter"] == "csl"
-    assert fetched[0]["document_url"] == announcement.pdf_url
+    assert [request.document_url for request in fetched] == [announcement.pdf_url]
     assert processed == [b"%PDF-1.7\nresults"]
     assert announcement.local_path.parent == tmp_path / "CSL"

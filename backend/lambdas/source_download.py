@@ -17,7 +17,7 @@ from playwright.async_api import (
 )
 
 from app.messages import QueueBMessage
-from app.sources import SourceAdapter
+from app.sources import AdapterName
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
@@ -30,7 +30,7 @@ from lambdas.download_validation import (
 )
 from scrapers.browser import chromium_launch_options
 
-_ADAPTER_HOSTS: dict[SourceAdapter, frozenset[str]] = {
+_ADAPTER_HOSTS: dict[AdapterName, frozenset[str]] = {
     "anz": frozenset(
         {
             "www.anz.com",
@@ -87,7 +87,7 @@ _YOURIR_BASES = {
 }
 
 
-def _validated_url(adapter: SourceAdapter, url: str) -> str:
+def _validated_url(adapter: AdapterName, url: str) -> str:
     return validate_download_url(url, hosts=_ADAPTER_HOSTS[adapter])
 
 
@@ -98,7 +98,7 @@ def _response_content_type(headers: Mapping[str, str]) -> str:
 async def _request_document(
     context: BrowserContext,
     *,
-    adapter: SourceAdapter,
+    adapter: AdapterName,
     url: str,
     referer: str,
     max_bytes: int,
@@ -125,7 +125,7 @@ async def _request_document(
 
 def _download_yourir(
     *,
-    adapter: SourceAdapter,
+    adapter: AdapterName,
     source_url: str,
     document_url: str,
     metadata: Mapping[str, object],
@@ -275,7 +275,7 @@ async def _download_wes(
 
 
 def _request_referer(
-    adapter: SourceAdapter,
+    adapter: AdapterName,
     source_url: str,
     metadata: Mapping[str, object],
 ) -> str:
@@ -293,7 +293,7 @@ def _request_referer(
 async def _download_browser_request(
     context: BrowserContext,
     *,
-    adapter: SourceAdapter,
+    adapter: AdapterName,
     source_url: str,
     document_url: str,
     metadata: Mapping[str, object],
@@ -340,7 +340,7 @@ async def resolve_session_download(
             "Source does not use a browser download session",
             code="unsupported_source",
         )
-    adapter: SourceAdapter = source_adapter  # type: ignore[assignment]
+    adapter: AdapterName = source_adapter  # type: ignore[assignment]
     validated_source_url = _validated_url(adapter, source_url)
     validated_document_url = _validated_url(adapter, document_url)
 
