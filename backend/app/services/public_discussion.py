@@ -13,7 +13,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.public_discussion import ArtifactTickerMentionCreate
-from app.status import ANALYSIS_QUEUED_OR_DONE, AnalysisStatus
+from app.status import AnalysisStatus
 
 PUBLIC_DISCUSSION_SOURCE_TYPES = frozenset(
     {"reddit", "bluesky", "mastodon", "blog"}
@@ -220,29 +220,6 @@ def link_artifact_to_tickers(
     return matches
 
 
-def queue_artifact_analysis(
-    db: Session,
-    artifact: Artifact,
-    _matches: Sequence[TickerMentionMatch],
-) -> bool:
-    """Queue unfinished discussion text when analysis is configured.
-
-    Ticker matches still control ticker links, but a broad ASX discussion can be
-    useful in the announcements feed even when it does not name a supported ticker.
-    """
-    if (
-        artifact.analysis_status in ANALYSIS_QUEUED_OR_DONE
-        or not settings.ANALYSIS_QUEUE_URL
-    ):
-        return False
-    from app.crud import scrape_run as scrape_run_crud
-    from app.services import analysis_queue
-
-    analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
-    scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
-    return True
-
-
 def backfill_artifact_ticker_mentions(
     db: Session,
     *,
@@ -413,16 +390,14 @@ def requeue_pending_analysis(
     if not settings.ANALYSIS_QUEUE_URL:
         raise ValueError("ANALYSIS_QUEUE_URL is not configured")
 
-    from app.crud import scrape_run as scrape_run_crud
     from app.services import analysis_queue
 
     queued_ids = []
     errors = []
     for artifact in artifacts:
         try:
-            analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
-            scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
-            queued_ids.append(artifact.id)
+            if analysis_queue.queue_stored_text(db, artifact):
+                queued_ids.append(artifact.id)
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             errors.append({"artifact_id": str(artifact.id), "message": str(exc)})

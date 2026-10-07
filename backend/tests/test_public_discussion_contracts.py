@@ -188,29 +188,6 @@ def test_reddit_client_uses_configured_user_agent() -> None:
     )
 
 
-def test_public_discussion_analysis_queue_does_not_require_a_ticker_match() -> None:
-    from app.services import public_discussion
-
-    artifact = SimpleNamespace(id=uuid.uuid4(), analysis_status="pending")
-    db = MagicMock()
-    with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", ""):
-        assert (
-            public_discussion.queue_artifact_analysis(db, artifact, [MagicMock()])
-            is False
-        )
-
-    with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", "queue-url"), patch(
-        "app.services.analysis_queue.enqueue_stored_artifact_analysis",
-        return_value="message-1",
-    ) as enqueue, patch(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_queued",
-    ) as mark_queued:
-        assert public_discussion.queue_artifact_analysis(db, artifact, []) is True
-
-    enqueue.assert_called_once_with(artifact.id)
-    mark_queued.assert_called_once_with(db, artifact.id)
-
-
 def test_public_discussion_status_aggregates_analysis_states() -> None:
     from datetime import datetime, timezone
 
@@ -289,7 +266,10 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
     from app.services import public_discussion
 
     db = MagicMock()
-    artifacts = [SimpleNamespace(id=uuid.uuid4()), SimpleNamespace(id=uuid.uuid4())]
+    artifacts = [
+        SimpleNamespace(id=uuid.uuid4(), analysis_status="pending", raw_text="text", title="")
+        for _ in range(2)
+    ]
     with patch.object(public_discussion.settings, "ANALYSIS_QUEUE_URL", "queue-url"), patch.object(
         public_discussion,
         "_pending_analysis_artifacts",

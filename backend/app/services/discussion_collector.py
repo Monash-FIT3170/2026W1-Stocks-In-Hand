@@ -23,7 +23,9 @@ from app.crud import information_platform as platform_crud
 from app.crud import scrape_run as scrape_run_crud
 from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
+from app.models.ticker import Ticker
 from app.schemas.information_platform import InformationPlatformCreate
+from app.services import analysis_queue
 from app.services import public_discussion as public_discussion_service
 from app.services.discussion_sources.base import DiscussionSource, MalformedPostError
 from app.status import ScrapeRunStatus
@@ -132,6 +134,7 @@ def _store(
     saved = skipped = failed = mentions = queued = 0
     with session_scope() as db:
         platform = platform_for(db, source, target)
+        tickers = db.query(Ticker).all()
         for raw in fetched:
             try:
                 post = source.post(raw, target)
@@ -150,9 +153,13 @@ def _store(
                 saved += 1
             else:
                 skipped += 1
-            matches = public_discussion_service.link_artifact_to_tickers(db, artifact)
+            matches = public_discussion_service.link_artifact_to_tickers(
+                db, artifact, tickers=tickers
+            )
             mentions += len(matches)
-            queued += public_discussion_service.queue_artifact_analysis(db, artifact, matches)
+            # Broad ASX discussion can still be useful in the announcements
+            # feed, so it is analysed whether or not it names a ticker.
+            queued += analysis_queue.queue_stored_text(db, artifact)
     return CollectionResult(
         status=ScrapeRunStatus.PARTIAL if failed else ScrapeRunStatus.COMPLETED,
         found=len(fetched),

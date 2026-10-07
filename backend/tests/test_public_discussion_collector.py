@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
-from app.services import discussion_collector
+from app.services import analysis_queue, discussion_collector
 from app.services.discussion_sources.blog import BLOG
 from app.services.discussion_sources.bluesky import BLUESKY
 from app.services.discussion_sources.mastodon import MASTODON
@@ -414,3 +414,39 @@ def test_a_mastodon_post_without_an_id_or_time_is_a_failed_item(
     db_session.refresh(run)
     assert (result.found, result.saved, result.failed) == (3, 1, 2)
     assert run.status == "partial"
+
+
+def test_collected_text_is_queued_for_analysis_once_whether_or_not_it_names_a_ticker(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    sent: list[str] = []
+
+    class FakeSqs:
+        def send_message(self, **kwargs):
+            sent.append(kwargs["MessageBody"])
+            return {"MessageId": f"message-{len(sent)}"}
+
+    with_ticker = f"at://x/{_unique('b')}"
+    without_ticker = bluesky_post(f"at://x/{_unique('b')}")
+    without_ticker["text"] = "Markets were quiet today"
+    posts = [bluesky_post(with_ticker), without_ticker]
+
+    def collect_with_queue():
+        monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "https://sqs.example/analysis")
+        monkeypatch.setattr(analysis_queue, "_sqs_client", lambda: FakeSqs())
+        return discussion_collector.collect(
+            Recorded(BLUESKY, posts),
+            "ASX",
+            10,
+            session_scope=lambda: nullcontext(db_session),
+        )
+
+    first = collect_with_queue()
+    again = collect_with_queue()
+
+    stored = _stored(db_session, f"bluesky:{with_ticker}")
+    assert first.analysis_queued == 2
+    assert again.analysis_queued == 0
+    assert len(sent) == 2
+    assert stored.analysis_status == "queued"
