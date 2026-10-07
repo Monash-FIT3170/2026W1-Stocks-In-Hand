@@ -367,9 +367,9 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
         "spoiler_text": "",
     }]
 
-    with patch("app.api.routes.mastodon.httpx.get", return_value=mock_response):
-        from app.api.routes.mastodon import _fetch_posts
-        result = _fetch_posts(tag="ANZ", limit=1)
+    with patch("app.services.discussion_sources.mastodon.httpx.get", return_value=mock_response):
+        from app.services.discussion_sources.mastodon import MASTODON
+        result = MASTODON.fetch("ANZ", 1)
 
     assert len(result) == 1
     assert result[0]["id"] == "114123456789"

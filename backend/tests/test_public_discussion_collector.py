@@ -31,6 +31,7 @@ from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.services import discussion_collector
 from app.services.discussion_sources.bluesky import BLUESKY
+from app.services.discussion_sources.mastodon import MASTODON
 
 FEED_URL = "https://blog.example.test/feed.xml"
 
@@ -74,8 +75,8 @@ class Recorded:
         return self.raw_posts[:limit]
 
 
-SOURCES = {"bluesky": BLUESKY}
-TARGETS = {"bluesky": "ASX"}
+SOURCES = {"bluesky": BLUESKY, "mastodon": MASTODON}
+TARGETS = {"bluesky": "ASX", "mastodon": "ASX"}
 
 
 def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, run_id=None):
@@ -399,3 +400,27 @@ def test_a_source_that_cannot_be_fetched_fails_its_run(
     assert result.status == "failed"
     assert run.status == "failed"
     assert "AppView unreachable" in run.error_message
+
+
+def test_a_mastodon_post_without_an_id_or_time_is_a_failed_item(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    run = _requested_run(db_session, "mastodon", "ASX")
+    good = _unique("m")
+
+    result = _collect(
+        "mastodon",
+        [
+            mastodon_post("", url="https://aus.social/@a/none"),
+            mastodon_post(_unique("m"), url="https://aus.social/@a/late", created_at=""),
+            mastodon_post(good, url=f"https://aus.social/@a/{good}"),
+        ],
+        db_session,
+        monkeypatch,
+        run_id=run.id,
+    )
+
+    db_session.refresh(run)
+    assert (result.found, result.saved, result.failed) == (3, 1, 2)
+    assert run.status == "partial"

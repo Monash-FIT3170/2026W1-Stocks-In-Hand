@@ -163,25 +163,6 @@ def test_ticker_matcher_accepts_asx_subreddit_as_finance_context() -> None:
                 "subreddit": "ASX",
             },
         ),
-        (
-            "mastodon",
-            ("BHP", 1),
-            {
-                "id": "mastodon-1",
-                "text": "$BHP shares rise",
-                "created_at": "2026-08-29T00:00:00Z",
-                "url": "https://aus.social/@investor/one",
-                "author": "investor",
-                "display_name": "Investor",
-                "replies_count": 1,
-                "reblogs_count": 1,
-                "favourites_count": 2,
-                "language": "en",
-                "tags": ["ASX"],
-                "sensitive": False,
-                "spoiler_text": "",
-            },
-        ),
     ],
 )
 def test_social_collectors_link_each_saved_artifact(
