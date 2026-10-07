@@ -6,7 +6,7 @@
 - The main idea is to take knowledge that is copied across many files and give it one home (a "module") with a small, clear interface. Tests then check that interface instead of private functions.
 - The work is split into 18 pieces of work called candidates, grouped into phases. Phase 0 fixes live bugs and deletes dead code first, so the later work starts from a smaller and correct codebase.
 - Phase 0 is written and in review as PRs #57 to #65.
-- Phase 1 (candidates 01, 15 and 11) is done in this PR, #56. It is built on the Phase 0 branches, which are merged into it, so #56 also shows the Phase 0 changes until #57 to #65 land on `main`. Merge #57 to #65 first so each keeps its own review.
+- Phase 1 (candidates 01, 15 and 11) and Phase 2 (candidates 04, 03, 02 and 05) are done in this PR, #56. It is built on the Phase 0 branches, which are merged into it, so #56 also shows the Phase 0 changes until #57 to #65 land on `main`. Merge #57 to #65 first so each keeps its own review.
 - Some choices belong to the team, not the engineer doing the work. They are listed under [Decisions still needed](#decisions-still-needed).
 
 ## What done looks like
@@ -28,10 +28,10 @@
 | 01 | Ticker catalogue | Phase 1 | Strong | M | Phase 0 | Done in #56 |
 | 15 | Template model | Phase 1 | Strong | M | Phase 0 | Done in #56 |
 | 11 | Access policy | Phase 1 | Strong (security) | S | Phase 0 | Done in #56 |
-| 04 | Scrape run lifecycle | Phase 2 | Strong | M | 01 | Partly done in Phase 0 |
-| 03 | Raw document store | Phase 2 | Strong | M | 01 | Partly done in Phase 0 |
-| 02 | Source adapter per company | Phase 2 | Strong | L | 01 | Partly done in Phase 0 |
-| 05 | Public discussion collector | Phase 2 | Strong | M | 01 | Not started |
+| 04 | Scrape run lifecycle | Phase 2 | Strong | M | 01 | Done in #56 |
+| 03 | Raw document store | Phase 2 | Strong | M | 01 | Done in #56 |
+| 02 | Source adapter per company | Phase 2 | Strong | L | 01 | Done in #56 |
+| 05 | Public discussion collector | Phase 2 | Strong | M | 01 | Done in #56 |
 | 06 | Structured generation | Phase 3 | Strong | M | Phase 0 | Partly done in Phase 0 |
 | 07 | Artifact summary | Phase 3 | Strong | M to L | 06, citation branches merged | Partly done in Phase 0 |
 | 09 | Category taxonomy ownership | Phase 3 | Worth exploring | S to M | Phase 0 | Not started |
@@ -51,7 +51,7 @@ The alerts track and the deploy track do not depend on the ingestion or analysis
 ## Order of work
 
 1. Merge the Phase 0 PRs #57 to #65. They were trial-merged together with no conflicts, and the combined result passed 639 backend tests.
-2. Merge #56, which holds this plan and Phase 1 (candidates 01, 15 and 11). With Phase 0 merged it passes 685 backend tests.
+2. Merge #56, which holds this plan, Phase 1 (candidates 01, 15 and 11) and Phase 2 (candidates 04, 03, 02 and 05). With Phase 0 merged it passes 759 backend tests with Postgres and LocalStack running; without LocalStack, its one test skips. #56 adds two migrations (`86d9statuschecks` and `86d9engagement`), which deploy runs.
 3. Merge the two citation branches that are still open, `feature/86d2ba6e6-claim_source_traceability` and `feature/86d4a0a1d-specific_report_sources`. Both touch `backend/app/api/routes/ticker.py` and `CitationLinks.jsx`, so candidates 07 and 10 will conflict with them if they are not merged first.
 4. After that, follow the "Depends on" column. Phase 2 before Phase 3 before Phase 4, with the alerts and deploy tracks in parallel.
 
@@ -142,10 +142,10 @@ Status: written and in review. Nothing here needs to be done again. This section
 These were found or deferred during Phase 0. Each one is also noted in the candidate it belongs to.
 
 - `"tone": "green"` in the deep-dive timeline is not dead. `frontend/src/app/components/ticker/DeepDiveTimeline.jsx` uses it as the CSS class that colours the timeline dot. To remove it, hard-code `styles.green` in the component first (candidate 10).
-- `BaseScraper.download_pdf` is still used by `backend/scripts/populate_local_content.py` and still imports `lambdas.source_download` (candidate 02).
-- `crud.artifact.get_bluesky_posts_for_ticker` and `get_mastodon_posts_for_ticker` became dead in #64 but were not on the list (candidate 05).
+- `BaseScraper.download_pdf` is still used by `backend/scripts/populate_local_content.py` and still imports `lambdas.source_download` (candidate 02). Done in #56.
+- `crud.artifact.get_bluesky_posts_for_ticker` and `get_mastodon_posts_for_ticker` became dead in #64 but were not on the list (candidate 05). Done in #56.
 - `/headlines` and `/analyse` in `backend/main.py` were kept because they may still be used locally. `/analyse` now needs an admin session.
-- If a Lambda times out on its final receive, its error handler never runs, so nothing records the final failure (candidate 04).
+- If a Lambda times out on its final receive, its error handler never runs, so nothing records the final failure (candidate 04). Done in #56 with a sweep the schedule runs.
 - With 4096 output tokens, an admin summary route could come close to the 30-second API Gateway limit (candidate 06).
 - Run "Prepare staging backend rollback" once against staging to check the #59 change. It only creates a change set. The only parameter changes should be the three image URIs (candidate 16).
 - Deleting unread `Settings` fields means a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashes the API at import. The Lambdas that read them still fail on bad input (candidate 17).
@@ -173,7 +173,7 @@ Done in #56
 5. `backend/tools/sync_tickers.py` rewrites the copies that cannot import Python: `frontend/src/app/ticker/tickers.json` (read by `generateStaticParams`), the CloudFront `tickerRoute` pattern, the `ScheduledTickers` default and both scheduled-ticker defaults in `deploy-staging.yml`. `test_ticker_list_copies_match_the_catalogue` fails when a copy is stale, and the queue-wiring CI job now runs on catalogue changes. The ApiFunction's `SUPPORTED_TICKERS` variable is removed because `Settings` already defaults to the catalogue.
 6. The ticker list in `docker-compose-dev.yml` and the ticker and source-URL lines in `backend/.env.example` are removed.
 
-To add an ASX ticker now: add a catalogue entry, add its scraper to `SCRAPERS` in `backend/scrapers/registry.py` and its resolver, write a seed migration for the row, update `test_migration_seeds_the_catalogue_facts` to read it, and run `python -m tools.sync_tickers` in `backend/`.
+To add an ASX ticker now: add a catalogue entry, write its source adapter (candidate 02) and add it to `ADAPTER_TYPES` in `backend/scrapers/registry.py`, record its pages with `python -m tools.record_source_pages <TICKER>` and pin them in `test_source_adapter_fixtures.py`, write a seed migration for the row, update `test_migration_seeds_the_catalogue_facts` to read it, and run `python -m tools.sync_tickers` in `backend/`.
 
 Tests
 - `test_ticker_catalogue.py`: normalisation, and Postgres tests for `ensure_ticker` (seeded row, catalogue facts, a repeat call, unknown symbol, placeholders filled and curated values kept).
@@ -243,134 +243,146 @@ Where the code is: `backend/main.py`, `backend/app/api/deps.py` (`require_admin_
 
 ### 04 Scrape run lifecycle
 
-Strong, size M. Needs 01. Unblocks 08. Test approach: a service we own (real Postgres plus a fake queue sender).
+Strong, size M. Done in #56. Unblocks 08. Test approach: a service we own (real Postgres plus a fake queue sender).
 
-What is wrong
-- Each of the three workers repeats the same steps for every message: decode it, decide whether the error is permanent or retryable, record the outcome and log it.
-- "Request a scrape run" is copied in the API (`main.py`) and the scheduler (`schedule.py`), and the copies already disagree. Only the API honours the `{TICKER}_SOURCE_URL` override. The discovery worker ignores `source_url`, while the download worker uses it.
+What was wrong
+- Each of the three workers repeated the same steps for every message: decode it, decide whether the error is permanent or retryable, record the outcome and log it.
+- "Request a scrape run" was copied in the API (`main.py`) and the scheduler (`schedule.py`), and the copies disagreed. Only the API honoured the `{TICKER}_SOURCE_URL` override. The discovery worker ignored `source_url`, while the download worker used it.
 
-What to build
+What was built
 
-One scrape run lifecycle module that owns two things. The first is "request a run", with the queue sender passed in. The second is "record a stage outcome": a permanent failure is final, a retryable failure records the attempt only, and the final receive is final.
+Requesting a run lives in `app/services/scrape_runs.request_scrape_run`, with the queue sender passed in. Recording a stage outcome lives in `lambdas/pipeline_stage.run_stage`: a permanent failure is final, a retryable failure records the attempt only, and the final receive is final. Each worker names the run or artifact a record is about (its subject) and the error codes that must not be recorded against it.
 
 Done in Phase 0 (#61)
-- Retryable failures record the error only, through `record_run_discovery_retry`, `record_artifact_download_retry` and `record_artifact_analysis_retry`. The final receive (`MAX_RECEIVE_COUNT` in `lambdas/common.py`) or a permanent error calls the `mark_*_failed` transition.
-- `test_transient_failures.py` drives the real handlers against Postgres, covering the retry cases and the duplicate enqueue.
+- Retryable failures record the error only, and the final receive or a permanent error calls the `mark_*_failed` transition.
+- `test_transient_failures.py` drove the real handlers against Postgres. #56 renames it `test_pipeline_stages.py` and extends it.
 
-Steps still to do
-1. Pull "request a scrape run" out of `main.py` and `schedule.py` into the module, taking the source from 01. The team decides whether `source_url` is authoritative first (see decisions).
-2. Pull the shared stage skeleton out of the discovery, download and analysis workers. The `_mark_failed` and `_record_retry` pairs in each worker are the obvious duplication.
-3. Move raw status strings such as `"running"` into `ScrapeRunStatus`, and add a database CHECK constraint (`recommendations.md` §3.2).
-4. Remove the `"csl"` defaults from `QueueAMessage`, `QueueBMessage` and `get_or_create_artifact`.
+Done in #56
+1. `request_scrape_run` is the one way to request a run, for the API and the schedule. The team decided the catalogue is authoritative for the source, so the `{TICKER}_SOURCE_URL` override (`settings.SOURCE_URLS`) is gone and both record the catalogue's page and adapter.
+2. `run_stage` replaces the three workers' copies of the record skeleton, including the `_mark_failed` and `_record_retry` pairs and the analysis worker's separate stored-text failure path.
+3. "running" and the stored-text "queued" are `ScrapeRunStatus.RUNNING` and `AnalysisStatus.QUEUED`, and every status write uses the enums. Migration `86d9statuschecks` adds CHECK constraints on `scrape_runs.status`, `artifacts.download_status` and `artifacts.analysis_status` (`recommendations.md` §3.2). They are `NOT VALID`, so only new writes are checked.
+4. The `"csl"` defaults are gone from `QueueAMessage`, `QueueBMessage` and `get_or_create_artifact`. Every producer already set the field, so the wire format does not change.
+5. A Lambda that times out on its final receive never runs its error handler. `crud.scrape_run.fail_abandoned_work` fails queued, discovering and running runs, downloads and analyses that have not moved for 24 hours (`ABANDONED_AFTER`, longer than any queue's redelivery window, which a template-model test checks). The weekly schedule runs it first. A message redriven from a dead-letter queue still completes its artifact.
 
 Tests
-- Replace about 60 string-path monkeypatches in `test_document_workers.py:331-573` and about 7 MagicMock request tests with scenarios on Postgres and a fake sender.
-- Keep the real-Postgres state-machine tests in `test_database.py:966-1125`.
+- `test_scrape_run_requests.py` runs the module, the route and the schedule handler on Postgres with a fake sender. It replaces the MagicMock request tests in `test_scrape_pipeline_api.py`, `test_schedule.py` and `test_source_adapters.py`.
+- `test_pipeline_stages.py` covers discovery, download and analysis on Postgres with a fake adapter, SQS and an in-memory raw document store. It replaces the string-path monkeypatch tests in `test_document_workers.py` and `test_source_adapters.py`.
+- `test_status_constraints.py` checks each status column accepts exactly its enum.
+- The real-Postgres state-machine tests in `test_database.py` are kept.
 
-Watch out for
-- `items_failed` feeds the run status and maybe the UI, so check its readers first.
-- The notify worker uses a different pattern (batch item failures) and is out of scope.
-- If a Lambda times out on its final receive, the error handler never runs, so the run is never marked failed. Consider a small DLQ handler or a sweeper for stuck runs.
+Left over
+- The CHECK constraints are `NOT VALID`. Run `SELECT status, count(*) FROM scrape_runs GROUP BY status` (and the same for the two artifact columns) on staging; if every value is in `app/status.py`, run `ALTER TABLE ... VALIDATE CONSTRAINT` for each.
+- `items_failed` is read only by the run status and the admin `/scrape-runs` response, not by the frontend.
+- The notify worker keeps its batch-item-failure pattern, as planned.
+- The abandoned-work sweep runs only when `ScheduleEnabled` is true.
 
-Where the code is: `backend/lambdas/discovery.py:28-238`, `backend/lambdas/download.py:46-285`, `backend/lambdas/analysis.py:518-863`, `backend/lambdas/common.py:19-68`, `backend/app/crud/scrape_run.py:197-493`, `backend/main.py:199-266`, `backend/lambdas/schedule.py:102-148`, `backend/app/services/scrape_queue.py`, `backend/app/messages.py:59,95`.
+Where the code is: `backend/app/services/scrape_runs.py`, `backend/lambdas/pipeline_stage.py`, `backend/lambdas/discovery.py`, `backend/lambdas/download.py`, `backend/lambdas/analysis.py`, `backend/lambdas/schedule.py`, `backend/app/crud/scrape_run.py`, `backend/app/status.py`, `backend/alembic/versions/86d9statuschecks_check_pipeline_status_values.py`.
 
 ### 03 Raw document store and validated document
 
-Strong, size M. Needs 01. Unblocks 08. Test approach: real LocalStack, plus an in-memory store for worker tests.
+Strong, size M. Done in #56. Unblocks 08. Test approach: real LocalStack, plus an in-memory store for worker tests.
 
-What is wrong
-- The S3 key is split between two workers. The download worker writes `raw/{ticker}/{artifact_id}/{sha256}.{ext}`. The analysis worker reads it back with its own regex (#56 builds its ticker list from the catalogue).
-- Both workers mark the artifact as stored.
-- A `DownloadedDocument` does not prove it was validated, so it is validated again at four points.
-- `document_too_large` is raised in 7 places.
+What was wrong
+- The S3 key was split between two workers: the download worker wrote `raw/{ticker}/{artifact_id}/{sha256}.{ext}` and the analysis worker read it back with its own regex.
+- Both workers marked the artifact as stored, each its own way.
+- A `DownloadedDocument` did not prove it was validated, so it was validated again at four points, and `document_too_large` was raised in 7 places.
 
-What to build
+What was built
 
-Make the validation function the only way to create a `DownloadedDocument`. A raw document store module owns, for both workers, the key layout and parsing, object metadata, "put only if absent", "read and verify", and the check that "this object is the stored artifact".
+`validated_document` (in `lambdas/download_validation.py`) is the only way to build a `DownloadedDocument`; its checksum and content type are derived from the validated bytes. `lambdas/raw_documents.RawDocumentStore` owns, for both workers, the key layout and parsing (`locate`), the object metadata, "put only if absent", "is it still there", "read and verify" and "is this object the document its key names" (`verify`). It sits on an `ObjectBucket`: `S3Bucket` for AWS and LocalStack, `InMemoryBucket` for tests.
 
 Done in Phase 0
 - The size limits agree with the template and live in `lambdas/download_validation.py` (#62).
 - The `DownloadedPdf` alias, the `download_pdf` shim and the unused `final_url` parameter are gone (#63).
 
-Steps still to do
-1. Make validation the only path that builds a `DownloadedDocument`, then remove the later re-checks one at a time.
-2. Move key building and parsing, the metadata headers, "put only if absent" and "read and verify" into the store. The ticker pattern already comes from the catalogue (`OBJECT_KEY` in `lambdas/analysis.py`).
-3. Move the reconciliation for "the S3 event arrived before the database commit" (around `analysis.py:217-265`) into the store.
-4. Merge the HTTP status classification that is duplicated in `download_validation.py:293-306` and `source_download.py:98-110`.
+Done in #56
+1. Only validation builds a `DownloadedDocument`, so the download worker's re-checks of size, checksum, format and content type are gone. `ensure_within_size_limit` raises `document_too_large` for the early checks.
+2. The store owns key building and parsing, the metadata headers, put-if-absent and read-and-verify. The key layout, headers and error codes are unchanged, so the `raw/` notification filter still matches; a test ties the key prefix to the template's filter.
+3. Reconciling an S3 event that arrives before the download commit goes through `store.verify` and `DocumentLocation.is_recorded_as`, and both workers mark an artifact stored from the store's `StoredDocument`.
+4. `raise_for_document_status` is the one HTTP status rule for every download path.
 
 Tests
-- Use an in-memory store for worker tests, plus one LocalStack integration test. The LocalStack compose file already exists. moto is not installed.
-- Delete the literal key-string assertions in three test files.
-- Keep the `httpx.MockTransport` download tests.
+- `test_raw_documents.py` covers the store in memory and once against LocalStack S3 (it skips when LocalStack is not running; set `LOCALSTACK_ENDPOINT_URL` if it is not on `localhost:4566`).
+- The worker scenarios use the in-memory store; the literal key-string tests are deleted, and the `httpx.MockTransport` download tests are kept.
 
-Watch out for
-- The key format is also the S3 to SQS notification filter (the `raw/` prefix), so it must stay exactly the same.
-- Keep the existing error codes.
+Left over
+- The LocalStack test does not run in CI. Starting LocalStack in the backend CI job would run it.
 
-Where the code is: `backend/lambdas/download.py:110-244`, `backend/lambdas/analysis.py:70-160,217-318`, `backend/lambdas/download_validation.py:55-376`, `backend/lambdas/source_download.py:113-136`.
+Where the code is: `backend/lambdas/raw_documents.py`, `backend/lambdas/download_validation.py`, `backend/lambdas/download.py`, `backend/lambdas/analysis.py`, `backend/tests/test_raw_documents.py`.
 
 ### 02 Source adapter per company
 
-Strong, size L (the largest candidate). Needs 01. Test approach: a third-party service (13 real adapters plus recorded page fixtures).
+Strong, size L. Done in #56. Test approach: a third-party service (13 real adapters plus recorded pages).
 
-What is wrong
-- Each company's knowledge is split in two. The discovery scraper writes hints into an untyped `Announcement.metadata` dict, and the download resolver reads them back. Nothing ties the two sides together. The WDS bug fixed in `33e0889` lived in that gap.
-- Constants such as the TCL `APP_ID`, the WES row selector and the YourIR app IDs are copied on both sides.
-- 11 of the 13 scrapers have no offline tests.
-- A page that fails to load returns `[]`, so a broken site looks like "no new announcements" and the run finishes with 0 items.
+What was wrong
+- Each company's knowledge was split between a discovery scraper, which wrote hints into an untyped `Announcement.metadata` dict, and the download resolver in `lambdas/source_download.py`, which read them back. Constants such as the YourIR app IDs and the Wesfarmers row selector were copied on both sides.
+- 11 of the 13 scrapers had no offline tests.
+- A page that failed to load returned `[]`, so a broken site looked like "no new announcements".
 
-What to build
+What was built
 
-One source adapter per company that owns "list recent documents" and "fetch one document", plus its allowed hosts, referer rules and resolution hints. The page fetcher is passed in, so tests can replace Playwright with recorded pages. With 13 adapters the seam is real.
+`scrapers/adapter.SourceAdapter`: one adapter per company (`scrapers/companies/*.py`) owns "list recent documents", "fetch one document" and its allowed hosts. Queue B's `metadata` still carries the adapter's hints, so the message schema did not change. Each adapter has a thin fetch step, which asks a web session from `scrapers/fetching.py` for pages, and a pure parse step over the HTML (`scrapers/html.py`, a small dependency-free document model). The live session marks each element's CSS display before serialising a page, so parsing sees the same line breaks and hidden text a browser's `innerText` would. Sites share family code: `scrapers/yourir.py` (ANZ, CBA, TCL), `scrapers/article_listings.py` (Macquarie, Origin, Rio Tinto, Woodside), `scrapers/miraqle.py` (Coles, Telstra) and `scrapers/parsing.py` (dates and de-duplication). `lambdas/source_download.py` is deleted.
 
-Done in Phase 0: `_download_via_browser` is deleted from all 8 scrapers (#63).
-
-Steps still to do
-1. Move the dev loader (`backend/scripts/populate_local_content.py`) off `BaseScraper.download_pdf`, then delete that method. This also removes the `scrapers` to `lambdas` import, because `BaseScraper.download_pdf` calls `lambdas.source_download.resolve_session_download`.
-2. Wrap each existing scraper and resolver pair behind the source adapter interface, using a compatibility registry. No behaviour change.
-3. Move the YourIR family first (ANZ, CBA and TCL share feed code). Move `_ADAPTER_HOSTS`, the referer rules and the app IDs into each adapter.
-4. Split each adapter into a thin fetch step and a pure parse step. Record one live capture per site as a fixture.
-5. Raise "source unreachable" or "layout changed" errors instead of returning `[]`.
-6. Pull out shared helpers for each family of sites: listing to article to PDF (BHP, RIO, WDS, ORG, MQG), IRM iframe feeds (COH, TLS), and the dedupe and date helpers, which are currently copied 9, 5, 5 and 4 times.
+Done in #56
+1. The local loader downloads the way the worker does, and `BaseScraper.download_pdf`, `scrape` and the `scrapers` to `lambdas.source_download` import are gone.
+2. Every company sits behind `SourceAdapter`, through a compatibility registry at first (`ADAPTERS`, `adapter_for`, `adapter_named`).
+3. The YourIR family reads the JSON feed its widget reads, over plain HTTP, and downloads without a browser. Every company's hosts, referer rules and app IDs live in its adapter.
+4. Every adapter is a fetch step plus a pure parse, with pages recorded from the live sites on 2026-10-07 (`tools/record_source_pages.py`). On that day the new parsers listed the same documents as the old scrapers, item for item, for the eight sites that worked, and one live download per adapter succeeded.
+5. A site that cannot be reached raises `SourceUnreachableError` (retried) and a page with nothing the adapter can read raises `LayoutChangedError`, which discovery records as a permanent `source_layout_changed` failure.
+6. The family helpers replace the copies (9 dedupe, 5 date-pattern and 5 date-format copies), about 300 lines. Over the whole candidate, the scrapers package and `lambdas/source_download.py` went from about 3,370 lines to 2,710, while gaining the HTML model, the fetch sessions and the recording tool.
 
 Tests
-- Add fixture tests for each adapter through "list" and "fetch".
-- Delete the tests that reach into `_validated_url`, `_ADAPTER_HOSTS` and `_request_referer`.
-- Delete the AST and source-scanning convention tests.
+- `test_yourir_adapters.py` and `test_source_adapter_fixtures.py` list and fetch through each adapter from recorded pages, and pin the first document and the count, because a changed document URL or source ID would rediscover stored documents.
+- `test_source_html.py` and `test_source_parsing.py` cover the shared parsing code; `test_source_adapter_registry.py` covers the registry.
+- The tests that reached into `_validated_url`, `_ADAPTER_HOSTS` and `_request_referer`, the AST convention test and the browser source-scanning test are deleted.
 
-Watch out for: keep Queue B's `metadata` field as the carrier on the wire, so the message schema does not change.
+Behaviour changes
+- `published_at` for ANZ, CBA and TCL comes from YourIR's UTC timestamp. TCL used to read Sydney time as UTC, 11 hours out.
+- ORG's listing waited for network idle, which the site never reaches, so it always listed nothing; it now lists its releases again.
+- On 2026-10-07 BHP answered browsers on our network with an Akamai 403, and its static page has no announcement list, so BHP runs, which used to complete with 0 items, now fail with `source_layout_changed`. BHP is a scheduled ticker.
 
-Where the code is: `backend/scrapers/companies/*.py` (13 files), `backend/scrapers/base.py:7-85`, `backend/lambdas/source_download.py:32-477`, `backend/tests/test_source_adapters.py`, `backend/tests/test_scraper_browser.py`.
+Left over
+- Check BHP from staging: if AWS is not blocked, record its pages with the tool; otherwise BHP needs a new listing (its market announcements now live under `/investor-centre/`).
+- Macquarie titles include the date, "PDF" and file size, and Wesfarmers titles include the file size. These were already so and are pinned as they are.
+- The package is still called `scrapers` (the Dockerfile copies it by name). Rename it to `source_adapters` with the next scraper image change if wanted.
+- Re-record a site's pages when its layout changes and update the pinned expectations.
+
+Where the code is: `backend/scrapers/adapter.py`, `backend/scrapers/registry.py`, `backend/scrapers/fetching.py`, `backend/scrapers/html.py`, `backend/scrapers/parsing.py`, `backend/scrapers/yourir.py`, `backend/scrapers/article_listings.py`, `backend/scrapers/miraqle.py`, `backend/scrapers/companies/*.py`, `backend/tools/record_source_pages.py`, `backend/tests/fixtures/sources/`.
 
 ### 05 Public discussion collector
 
-Strong, size M. Needs 01. Test approach: a third-party service (4 real adapters plus fakes).
+Strong, size M. Done in #56. Test approach: a third-party service (4 real adapters plus recorded posts).
 
-What is wrong
-- Four route modules copy the same code: platform get-or-create, content hashing, the store loop, the run lifecycle and the enqueue step.
-- The copies have drifted. Malformed posts count as duplicates for Bluesky and Mastodon but as failures for blogs, so the `partial` run status can only happen for blogs. A Bluesky post with an empty timestamp aborts the whole batch.
-- `PublicDiscussionAdapter` has no real implementations, and the scheduler imports eight private route functions and skips target validation.
+What was wrong
+- Four route modules copied the same code: platform get-or-create, content hashing, the store loop, the run lifecycle and the enqueue step.
+- The copies had drifted. Malformed posts counted as duplicates for Bluesky and Mastodon but as failures for blogs, and a Bluesky post with an empty timestamp aborted the whole batch.
+- `PublicDiscussionAdapter` had no real implementations, and the scheduler imported eight private route functions and skipped target validation.
 
-What to build
+What was built
 
-Four thin source adapters at a real seam. Each one fetches, normalises, validates its target, works out identity and works out engagement. One collector module owns everything else: dedup, ticker linking, queueing for analysis, failure counting and the run lifecycle. The routes and the scheduler both call the same `collect`.
+Four thin discussion sources in `app/services/discussion_sources/` (Reddit, Bluesky, Mastodon, blogs) each validate their target, fetch, and turn a raw post into the artifact to store with its identity and engagement. `app/services/discussion_collector` owns everything else: de-duplication by content hash, ticker linking, queueing for analysis, failure counting and the run lifecycle. The routes and the scheduler both call `request_collection` and `collect`.
 
-Steps
-1. Write characterisation tests on Postgres that pin the content-hash formats: `reddit:{id}`, `bluesky:{uri}`, `mastodon:{url}`, `blog:{feed}:{id}`.
-2. Build the collector from the Bluesky copy, then move Mastodon, Reddit and Blog onto it, one per PR. The team settles the counting rules first (see decisions).
-3. Point the scheduler at `collect`. Delete its private-function imports and the URLs and limits it works out again for itself.
-4. Load tickers once per batch for linking (today it is once per post). Write one "queue a stored artifact for analysis" function and share it with Marketaux.
-5. Collapse the three "posts for ticker" queries into one, ranked by stored engagement. Delete `crud.artifact.get_bluesky_posts_for_ticker` and `get_mastodon_posts_for_ticker`, which lost their only caller in #64.
+Done in #56
+1. Postgres characterisation tests pin the content-hash formats `reddit:{id}`, `bluesky:{uri}`, `mastodon:{url}` (or `mastodon:{instance}:{id}`) and `blog:{feed}:{id}`, and the stored fields.
+2. The collector was built from the Bluesky copy, then Mastodon, Reddit and blogs moved onto it, one commit each. The team decided a malformed post is a failure: it counts in `items_failed` and its run ends partial. `items_found` counts every fetched post. The unused contract scaffolding (`PublicDiscussionAdapter`, `CollectionStatus` and friends) is replaced by the real `DiscussionSource` interface, and the `ExampleAdapter` test is now a contract test every real source keeps.
+3. The scheduler calls the collector, validates each target with its source, and no longer imports route functions or works out URLs and limits again.
+4. The collector loads the tickers once per collection, and `analysis_queue.queue_stored_text` is the one "queue stored text for analysis" function for public discussion, Marketaux and the pending-analysis requeue.
+5. The collector stores each post's engagement, and migration `86d9engagement` fills it in for posts stored before. `get_discussion_posts_for_ticker` replaces the three "posts for ticker" queries; the two dead ones are deleted.
 
 Tests
-- Replace the 7-patch `test_social_collectors_link_each_saved_artifact` with collector tests on Postgres using fake adapters.
-- Run the `ExampleAdapter` contract test against all four real adapters.
+- `test_public_discussion_collector.py` pins identities and covers the run counts, malformed posts, duplicates, fetch failures, queueing and ranking on Postgres, and checks each source's engagement rule against the backfill.
+- `test_public_discussion_schedule.py` runs the schedule handler on Postgres with a fake fetch.
+- The 7-patch `test_social_collectors_link_each_saved_artifact` and the MagicMock schedule tests are deleted.
 
-Watch out for
-- Changing the hash formats would insert every existing row again.
-- Several things depend on the current collectors: the scheduler Lambda, the backfill script, the analysis source set and `/reddit/ticker-sentiment`.
+Behaviour changes
+- Malformed posts are failed items, so Bluesky, Mastodon and Reddit runs can now end partial.
+- A configured schedule target its source rejects counts as a failed collector.
+- A post with no title and no text is no longer queued for analysis.
 
-Where the code is: `backend/app/api/routes/reddit.py:23-230`, `bluesky.py:26-234`, `mastodon.py:26-228`, `blog.py:29-284`, `backend/lambdas/public_discussion_schedule.py:39-150`, `backend/app/schemas/public_discussion.py:17-92`, `backend/app/services/public_discussion.py:195-242`, `backend/app/crud/artifact.py:206-364`.
+Left over
+- The routes still run collection in FastAPI background tasks inside the API Lambda, which may freeze after the response. The abandoned-work sweep (04) fails runs left running for a day.
+
+Where the code is: `backend/app/services/discussion_collector.py`, `backend/app/services/discussion_sources/`, `backend/app/services/analysis_queue.py`, `backend/app/api/routes/{reddit,bluesky,mastodon,blog}.py`, `backend/lambdas/public_discussion_schedule.py`, `backend/app/crud/artifact.py`, `backend/alembic/versions/86d9engagement_store_discussion_engagement.py`.
 
 ## Phase 3: analysis
 
@@ -486,13 +498,13 @@ Done in Phase 0: the team chose title + raw_text as the one FinBERT input. `sent
 
 Steps still to do
 1. Pull a shared "analyse text" out of the three `analyse_*` functions.
-2. Merge the Lambda's two lifecycles and its two `_mark_failed` functions (and the `_record_retry` added in #61), using the stage outcome from 04.
+2. Merge the Lambda's two lifecycles. #56 already records both through `lambdas/pipeline_stage` (04) and reads documents through the raw document store (03).
 3. Introduce the interfaces.
 4. Point the admin routes, the Marketaux inline mode and the local loader at the module, or delete them in favour of queueing.
 5. At the next change to the message contract, rename `PublicDiscussionAnalysisMessage`, because it also carries news.
 
 Tests
-- Replace the event-order monkeypatch tests in `test_document_workers.py:709-842` and `1138-1290` with behaviour tests that use fakes at the interfaces.
+- Replace the event-order monkeypatch tests in `test_document_workers.py` (the stored-text analysis tests) with behaviour tests that use fakes at the interfaces. #56 already replaced the document one with a Postgres scenario in `test_pipeline_stages.py`.
 - Fold `test_news_sentiment` and `test_news_summary` into them.
 
 Where the code is: `backend/parsing/analysis.py:356-520`, `backend/lambdas/analysis.py:518-784`, `backend/parsing/storage.py:68-316`, `backend/app/services/news_sentiment.py:28-49`, `backend/app/services/news_summary.py`, `backend/app/services/marketaux.py:31-47,275-332`, `backend/app/api/routes/gemini.py:130-231`.
@@ -640,7 +652,7 @@ Worth exploring, size M to L. Needs 15. Test approach: a service we own (SSM beh
 
 What is wrong
 - `Settings` is built when `app.core.config` is first imported, so SSM secrets must be loaded before anything imports it. Only comments state that rule, and `test_notify.py:846-856` enforces it by comparing where lines sit in the source file.
-- The Lambdas skip `Settings`, read the environment again with their own defaults, and the source-URL override applies to manual scrapes but not scheduled ones.
+- The Lambdas skip `Settings` and read the environment again with their own defaults. (The source-URL override that applied to manual scrapes but not scheduled ones is gone in #56.)
 
 What to build
 
@@ -685,8 +697,8 @@ Where the code is: `infra/github-oidc.yaml:44-656`.
 | Support neutral alerts or remove the option | 12 | Decided: support them end to end. Done in #60. |
 | How to handle one-click unsubscribe | 13 | Decided for now: stop sending the header (#62). An API-backed endpoint is optional later. |
 | Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Open. #62 only fixed the keyword matching. The UI numbers will change when this is decided. |
-| Whether `source_url` on Queue A is authoritative | 04 | Open. Discovery ignores it today and download uses it. |
-| How to count a malformed public-discussion post: failure or duplicate | 05 | Open. |
+| Whether `source_url` on Queue A is authoritative | 04 | Decided in #56: the ticker catalogue is authoritative. The `{TICKER}_SOURCE_URL` override is removed and Queue A records the catalogue's page. |
+| How to count a malformed public-discussion post: failure or duplicate | 05 | Decided in #56: a failure. It counts in `items_failed` and its run ends partial. |
 | Which meaning `SUPPORTED_TICKERS` keeps, and what the other meaning is renamed to | 01 | Decided in #56: it means "enabled for manual scraping" (the `Settings` field and env var). The analysis worker's copy is gone; it accepts catalogue tickers directly. Revisit if the team wants a different name. |
 | Whether to collapse the two summary stores after the views land | 07 | Open. |
 | Whether the deployment-test stack is still needed | 18 | Open. |
