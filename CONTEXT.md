@@ -70,6 +70,10 @@ _Avoid_: tag, match (for the stored link)
 The kind of company announcement an artifact is, such as a dividend announcement or half-year results, decided by fixed rules over its title, filename and text. An announcement the rules cannot place with confidence has no category.
 _Avoid_: artifact type (the stored field), report type, classification (for the category itself)
 
+**Prompt version**:
+The version of the instructions an LLM summary was written from, recorded with each summary so summaries from older instructions can be found and regenerated.
+_Avoid_: model version, template
+
 **Sentiment bucket**:
 One of the five themes a ticker's sentiment is broken down by: revenue, strategy, risk, dividend and organisational.
 _Avoid_: category (for a bucket), theme

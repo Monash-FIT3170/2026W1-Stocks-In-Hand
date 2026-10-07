@@ -6,7 +6,7 @@
 - The main idea is to take knowledge that is copied across many files and give it one home (a "module") with a small, clear interface. Tests then check that interface instead of private functions.
 - The work is split into 18 pieces of work called candidates, grouped into phases. Phase 0 fixes live bugs and deletes dead code first, so the later work starts from a smaller and correct codebase.
 - Phase 0 is written and in review as PRs #57 to #65.
-- Phase 1 (candidates 01, 15 and 11) and Phase 2 (candidates 04, 03, 02 and 05) are done in this PR, #56. It is built on the Phase 0 branches, which are merged into it, so #56 also shows the Phase 0 changes until #57 to #65 land on `main`. Merge #57 to #65 first so each keeps its own review.
+- Phase 1 (candidates 01, 15 and 11), Phase 2 (candidates 04, 03, 02 and 05) and the first part of Phase 3 (candidates 06 and 09) are done in this PR, #56. It is built on the Phase 0 branches, which are merged into it, so #56 also shows the Phase 0 changes until #57 to #65 land on `main`. Merge #57 to #65 first so each keeps its own review.
 - Some choices belong to the team, not the engineer doing the work. They are listed under [Decisions still needed](#decisions-still-needed).
 
 ## What done looks like
@@ -32,9 +32,9 @@
 | 03 | Raw document store | Phase 2 | Strong | M | 01 | Done in #56 |
 | 02 | Source adapter per company | Phase 2 | Strong | L | 01 | Done in #56 |
 | 05 | Public discussion collector | Phase 2 | Strong | M | 01 | Done in #56 |
-| 06 | Structured generation | Phase 3 | Strong | M | Phase 0 | Partly done in Phase 0 |
+| 06 | Structured generation | Phase 3 | Strong | M | Phase 0 | Done in #56 |
 | 07 | Artifact summary | Phase 3 | Strong | M to L | 06, citation branches merged | Partly done in Phase 0 |
-| 09 | Category taxonomy ownership | Phase 3 | Worth exploring | S to M | Phase 0 | Not started |
+| 09 | Category taxonomy ownership | Phase 3 | Worth exploring | S to M | Phase 0 | Done in #56 (the bucket switch is 10 step 3) |
 | 08 | Artifact analysis | Phase 3 | Strong | L | 03, 04, 06, 07 | Partly done in Phase 0 |
 | 10 | Ticker read-models | Phase 4 | Strong (bucket remap: worth exploring) | M | 01, 07, 09, citation branches merged | Partly done in Phase 0 |
 | 13 | Email sender port | Alerts track | Strong | S to M | Phase 0 | Partly done in Phase 0 |
@@ -51,7 +51,7 @@ The alerts track and the deploy track do not depend on the ingestion or analysis
 ## Order of work
 
 1. Merge the Phase 0 PRs #57 to #65. They were trial-merged together with no conflicts, and the combined result passed 639 backend tests.
-2. Merge #56, which holds this plan, Phase 1 (candidates 01, 15 and 11) and Phase 2 (candidates 04, 03, 02 and 05). With Phase 0 merged it passes 759 backend tests with Postgres and LocalStack running; without LocalStack, its one test skips. #56 adds two migrations (`86d9statuschecks` and `86d9engagement`), which deploy runs.
+2. Merge #56, which holds this plan, Phase 1 (candidates 01, 15 and 11), Phase 2 (candidates 04, 03, 02 and 05) and Phase 3 part one (candidates 06 and 09). With Phase 0 merged it passes 800 backend tests with Postgres and LocalStack running; without LocalStack, its one test skips. #56 adds two migrations (`86d9statuschecks` and `86d9engagement`), which deploy runs. It also fixes the analysis image, which could not import its handler (see 09), so check the analysis Lambda after the next deploy.
 3. Merge the two citation branches that are still open, `feature/86d2ba6e6-claim_source_traceability` and `feature/86d4a0a1d-specific_report_sources`. Both touch `backend/app/api/routes/ticker.py` and `CitationLinks.jsx`, so candidates 07 and 10 will conflict with them if they are not merged first.
 4. After that, follow the "Depends on" column. Phase 2 before Phase 3 before Phase 4, with the alerts and deploy tracks in parallel.
 
@@ -120,6 +120,7 @@ Status: written and in review. Nothing here needs to be done again. This section
 | Appendix 3G/3H notices counted as "risk", because "securitynotification" contains "security". | #62 | Keywords match whole words only. Whether one artifact can count in several buckets is still open (see decisions). |
 | The document size limit was 10 MiB in code and 25 MiB in the template. The DOCX limit was 50 MiB in code and 20 MiB in the template. | #62 | Both defaults live in `lambdas/download_validation.py` (`document_size_limit()`, `docx_uncompressed_limit()`) and match the template. |
 | The unsubscribe header invited a one-click POST, but CloudFront only allows GET on that page. | #62 | The `List-Unsubscribe-Post` header and the `ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED` flag are removed. The flag was off everywhere, so no sent email had the header. |
+| The analysis image could not import its handler: `Dockerfile.analysis` did not copy `parsing/classification/`, `parsing/extractors.py` or `parsing/classification_metadata.py` (since `9816ef6`). Found in #56 while doing 09. | #56 | The image copies them. `test_lambda_images.py` checks every image ships the backend modules its handler imports. |
 | The news summary route inserted a new summary row, which hit the unique constraint when a summary already existed. The local loader did the same. | #62 | Both use `upsert_artifact_summary`. |
 | FinBERT scored three different texts depending on the path. The local loader scored the LLM summary. | #62 | `sentiment.sentiment_input(title, raw_text)` is the one input, capped at `MAX_ANALYSIS_CHARS`. This matches what the production worker already did. |
 | `/news-feed`, `/sentiment/{t}` and the public-discussion status route returned 404 on a fresh database until another route had created the ticker rows. | #62 | Migration `86d9seedtickers` seeds the 13 tickers. It keeps curated values and is safe to run twice. |
@@ -146,7 +147,7 @@ These were found or deferred during Phase 0. Each one is also noted in the candi
 - `crud.artifact.get_bluesky_posts_for_ticker` and `get_mastodon_posts_for_ticker` became dead in #64 but were not on the list (candidate 05). Done in #56.
 - `/headlines` and `/analyse` in `backend/main.py` were kept because they may still be used locally. `/analyse` now needs an admin session.
 - If a Lambda times out on its final receive, its error handler never runs, so nothing records the final failure (candidate 04). Done in #56 with a sweep the schedule runs.
-- With 4096 output tokens, an admin summary route could come close to the 30-second API Gateway limit (candidate 06).
+- With 4096 output tokens, an admin summary route could come close to the 30-second API Gateway limit (candidate 06). Still open after 06 in #56; 08 step 4 removes it.
 - Run "Prepare staging backend rollback" once against staging to check the #59 change. It only creates a change set. The only parameter changes should be the three image URIs (candidate 16).
 - Deleting unread `Settings` fields means a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashes the API at import. The Lambdas that read them still fail on bad input (candidate 17).
 
@@ -388,35 +389,47 @@ Where the code is: `backend/app/services/discussion_collector.py`, `backend/app/
 
 ### 06 Structured generation
 
-Strong, size M. Needs Phase 0. Unblocks 07. Test approach: a third-party service (Bedrock, Groq and a scripted fake).
+Strong, size M. Done in #56. Unblocks 07. Test approach: a third-party service (Bedrock and Groq adapters, plus a scripted provider).
 
-What is wrong
-- `llm.py` mixes five prompt builders, parse and repair logic, an inline Groq adapter and a private if/elif provider switch.
-- Callers pick the prompt version themselves, token budgets are set per Lambda instead of per summary kind, and callers match on error message text.
-- The providers behave differently. Bedrock raises on an oversize prompt, while Groq silently cuts it short. The category prompt has no input cap at all. Five repair fixes landed on one day (2026-08-31).
+What was wrong
+- `llm.py` mixed five prompt builders, parse and repair logic, an inline Groq adapter and a private if/elif provider switch.
+- Callers picked the prompt version themselves and asked `active_model_name()` for the model. Token budgets were set per Lambda instead of per summary kind. The admin routes turned any `RuntimeError` into a 500.
+- The providers behaved differently. Bedrock raised on an oversize prompt, while Groq cut the end off the whole prompt, which for a Reddit digest removed the answer format. The category prompt had no input cap. Five repair fixes landed on one day (2026-08-31).
 
-What to build
+What was built
 
-One structured generation module with one entry point: "generate a validated X". It returns either a typed result that records the model and prompt version, or an explicit "unavailable" result. A small provider interface sits behind it, with three adapters: Bedrock, Groq and a scripted test adapter.
+`app/services/generation` has one entry point, `generate(kind)`. Each kind (`AnnouncementSummary`, `NewsSummary`, `DiscussionSummary`, `RedditDigest`, `CategorySplit`, in `kinds.py`) owns its prompt, its prompt version, its answer parser, any repair, and its budget: how much source text it reads and how many tokens it may write. `generate` returns `Generated` (the value, the model and the prompt version), or `Unavailable` when no provider is switched on. A malformed answer raises `ValueError` after the kind's repairs, and a failure worth retrying raises `RuntimeError`. Behind it, the `TextProvider` interface has three adapters: Bedrock, Groq, and `ScriptedProvider` for tests. `configured_provider()` picks one from `LLM_PROVIDER`. The module cuts each kind's source text to its budget. When a provider refuses a prompt as too long (`PromptTooLargeError`), it shortens the source text, keeps the instructions, and asks once more. `classify_document` is untouched and still has no provider ports.
 
 Done in Phase 0
 - `LLMUnavailableError` (`app/services/llm_errors.py`) is raised by both providers and caught in `parsing/analysis.py`. ApiFunction's output budget is 4096 (#58).
 - `test_llm_unavailable.py` covers "unavailable means sentiment is stored with no summary" for both providers (#58).
 - The `gemini.py` and `groq.py` shims are deleted (#64).
 
-Steps still to do
-1. Pull the provider interface out of `_call_llm`. Move the inline Groq code into its own adapter next to `bedrock.py`, and add the scripted adapter.
-2. Put each summary kind behind the module with its own input and output budget. The kinds are announcement, news, discussion, Reddit digest and category split.
-3. Return the model and prompt version in the result, and remove the `active_model_name()` calls from the 8 callers.
-4. Rename the `/gemini` routes the next time the frontend changes.
+Done in #56
+1. The `TextProvider` interface and its Bedrock, Groq and scripted adapters. The Bedrock adapter takes its runtime client and the Groq adapter its transport, so their tests no longer patch module internals.
+2. Each summary kind sits behind `generate` with its own budget. Every kind asks for 4,096 output tokens, the value both Lambdas already used, and `BEDROCK_MAX_OUTPUT_TOKENS` is removed from the template, `Settings` and the examples. The category split reads at most 24,000 characters per call. Bedrock and Groq both raise `PromptTooLargeError`, and the module refits the prompt.
+3. Callers read the model and prompt version from the result: the three analysis paths, the worker's summary repair, the local loader, the news summary service, the admin routes and the Reddit digest. `llm.py` and `active_model_name()` are deleted. The five sentiment bucket names move to `app/sentiment_buckets.py`.
+4. The team decided to rename the `/gemini` routes now, with no alias. They are `/llm/categorise/recent`, `/llm/summarise/ticker/{symbol}` and `/llm/summarise/artifact/{artifact_id}` (`app/api/routes/llm.py`). The frontend never called them.
 
-Tests: move `test_bedrock.py:154-292`, which patches the private `_call_llm`, onto the scripted adapter through the public interface.
+Tests
+- `test_generation.py` runs `generate` with the scripted provider. It covers provenance, unavailability, repairs, the known GPT-OSS defects, each kind's input budget, the default Bedrock limit, refitting a refused prompt, and Groq's 413 keeping a digest's instructions. It replaces the `_call_llm` tests in `test_bedrock.py` and the parser tests in `test_apis.py`.
+- `test_generation_providers.py` tests each adapter at its own boundary: a fake Bedrock client, and an httpx mock transport for Groq. It replaces `test_bedrock.py` and `test_groq.py`.
+- `test_llm_routes.py` runs the admin routes and the Reddit digest on Postgres with a scripted provider, replacing the MagicMock route tests in `test_apis.py`. The worker, news summary and sentiment input tests script the provider instead of patching `llm` functions. The Reddit digest's login check moves into the access policy sweep.
 
-Watch out for
-- The admin routes still catch any `RuntimeError` and return 500 (gemini) or 503 (reddit). When they move behind the module, return 503 for "unavailable".
-- The API Lambda and API Gateway both stop at 30 seconds. With 4096 output tokens, an admin summary could get close to that.
+Behaviour changes
+- The admin summary and category routes answer 503 when no LLM is switched on, where they answered 500. The ticker-wide summary route stops with 503 instead of listing the same error against every artifact.
+- The category split no longer fails on a chunk over Bedrock's 30,000-character limit. It reads the first 24,000 characters of each batch, newest artifacts first.
+- On a Groq 413, the module shortens the source text and keeps the instructions, where Groq used to cut the end of the whole prompt. Groq is now sent each kind's output budget.
+- Local runs that left `BEDROCK_MAX_OUTPUT_TOKENS` unset used 1,024 output tokens. Every kind now asks for 4,096.
+- `/gemini/...` paths answer 404.
 
-Where the code is: `backend/app/services/llm.py:21-535`, `backend/app/services/bedrock.py:68-108`, `backend/parsing/analysis.py:390-506`, `backend/app/api/routes/gemini.py`, `backend/app/services/news_summary.py`, `infra/template.yaml:451,652`.
+Left over
+- With 4,096 output tokens and up to two repair calls, an admin summary route can still run past the 30-second API Gateway limit. 08 step 4 (queue the admin routes instead of generating inline) removes the risk. Tuning each kind's output budget from the Bedrock token logs would reduce it.
+- `news_summary.summarise_news_artifact` turns `Unavailable` back into `LLMUnavailableError`, because its callers count it as a per-artifact error. 08 reshapes that path.
+- The local loader (`parsing/storage.py`) still drops the prompt version and the clarity lists when it stores a summary (07 step 1).
+- No prompt text changed, so no prompt version changed.
+
+Where the code is: `backend/app/services/generation/` (`__init__.py`, `kinds.py`, `providers.py`, `bedrock.py`, `groq.py`), `backend/app/services/llm_errors.py`, `backend/app/sentiment_buckets.py`, `backend/app/api/routes/llm.py`, `backend/app/api/routes/reddit.py`, `backend/parsing/analysis.py`, `backend/tests/test_generation.py`, `backend/tests/test_llm_routes.py`.
 
 ### 07 Artifact summary
 
@@ -452,34 +465,52 @@ Watch out for
 - Some readers need the six keys at the top level of `artifact_metadata`: the category-sentiment keyword search and the frontend watchlist. Keep writing those keys until step 4 lands.
 - Merge the two citation branches first.
 
-Where the code is: `backend/lambdas/analysis.py:322-442`, `backend/app/crud/artifact.py:38-110`, `backend/app/api/routes/gemini.py:18-82`, `backend/app/services/news_summary.py:15-64`, `backend/parsing/storage.py:48-163`, `backend/app/services/summary_metadata.py`, `backend/app/crud/announcement.py:88-157`, `backend/app/api/routes/ticker.py:235-588`, `backend/lambdas/notify.py:175`, and in the frontend `AnnouncementCard.jsx`, `ClarityLayer.jsx` and `watchlist/page.jsx:79`.
+Where the code is: `backend/lambdas/analysis.py:322-442`, `backend/app/crud/artifact.py:38-110`, `backend/app/api/routes/llm.py` (`_summary_text`, `_summary_metadata`, `_has_current_summary`), `backend/app/services/news_summary.py:15-64`, `backend/parsing/storage.py:48-163`, `backend/app/services/summary_metadata.py`, `backend/app/crud/announcement.py:88-157`, `backend/app/api/routes/ticker.py:235-588`, `backend/lambdas/notify.py:175`, and in the frontend `AnnouncementCard.jsx`, `ClarityLayer.jsx` and `watchlist/page.jsx:79`.
 
 ### 09 Category taxonomy ownership
 
-Worth exploring, size S to M. Needs Phase 0. Unblocks 10. Test approach: pure code.
+Worth exploring, size S to M. Done in #56, except switching the category sentiment view to the proposed buckets, which is 10 step 3. Test approach: pure code.
 
-What is wrong
-- The classification engine itself is good, but adding a category still means editing 7 places: the taxonomy, `EXTRACTORS`, `CATEGORIES`, the storage `artifact_type` map, `_LEGACY_TO_STABLE`, the `ArtifactType` enum and the sentiment keywords.
-- 4 of the 7 extractor classes return `{}`.
-- The documented legacy baseline now silently runs rules-v2, so the recorded Macro F1 of 0.4765 can no longer be reproduced.
+What was wrong
+- The classification engine itself is good, but adding a category meant editing 7 places: the taxonomy, `EXTRACTORS`, `CATEGORIES`, the storage `artifact_type` map, `_LEGACY_TO_STABLE`, the `ArtifactType` enum and the sentiment keywords.
+- 4 of the 7 extractor classes returned `{}`.
+- The documented legacy baseline silently ran rules-v2, so the recorded Macro F1 of 0.4765 could not be reproduced.
 
-What to build
+What was built
 
-Each category definition owns its own facts: its rules, an optional extractor, a display label, the stored `artifact_type` and its sentiment bucket. `classify_document` does not change, so this stays in line with the classification implementation plan.
+Each `CategoryDefinition` in `parsing/classification/taxonomy.py` owns its facts: its rules, the names it is stored under (`compatibility_category` and `artifact_type`), its display label, its metric extractor if it has one, and a proposed sentiment bucket. `category_definition()` and `artifact_type_for()` read them. `classify_document` did not change, so this stays in line with the classification implementation plan.
 
-Steps
-1. Freeze the recorded legacy baseline as a fixture. Delete `parsing/classifier.py` and `--classifier legacy`.
-2. Delete the empty extractor classes and the `CATEGORIES` list.
-3. Add a label, an `artifact_type` and a sentiment bucket to each definition, and generate the other maps from them.
-4. Hand the bucket mapping to 10.
+Done in #56
+1. The real legacy keyword classifier, run from `dabaaf0` (the commit the baseline report names) over the 85 fixtures, reproduces the recorded baseline exactly. Its predictions are frozen in `tests/fixtures/classification/legacy_baseline.json`, and `evaluate_classification --classifier legacy-baseline` replays them. `current` is now the default. `parsing/classifier.py` and `--classifier legacy` are deleted.
+2. The four extractor classes that returned `{}` and the `CATEGORIES` list are deleted.
+3. Each definition has a label, an `artifact_type` and a proposed sentiment bucket. `parsing/extractors.py` and the local loader's `_CATEGORY_TO_ARTIFACT_TYPE` give way to the definitions. Adding a category now means one definition, plus an `ArtifactType` member if it needs its own stored type. The team decided the buckets are a proposal only, so the category sentiment view still buckets by keyword and no UI numbers change.
+4. The proposed mapping below is handed to 10.
 
-Tests: keep `test_classification.py` as it is. Add one test that every definition is complete.
+| Category | Proposed bucket |
+|---|---|
+| `quarterly_trading_update`, `guidance_update`, `half_year_results`, `full_year_results`, `annual_report` | revenue |
+| `dividend_announcement`, `capital_management` | dividend |
+| `corporate_action` | strategy |
+| `leadership_change`, `governance_meeting` | organisational |
+| `regulatory_legal` | risk |
+| `security_notification`, `executive_transcript` | none proposed |
 
-Watch out for
-- The stored `category` and `artifact_type` values must not change.
-- #62 changed how `category_sentiment.py` matches keywords: whole words only, and stored names such as `security_notification` count as one word. Take this into account when the bucket mapping moves here.
+Bug found on the way: `Dockerfile.analysis` did not copy `parsing/classification/`, `parsing/extractors.py` or `parsing/classification_metadata.py`, so the analysis handler could not be imported in the deployed image. It had been so on `main` since the rules engine landed (`9816ef6`). Step 1 deletes a file that Dockerfile copied, which is how it came up. The image now copies them, and `test_lambda_images.py` checks that every image ships the backend modules its handler imports and copies no missing path.
 
-Where the code is: `backend/parsing/classification/taxonomy.py:29-309`, `backend/parsing/extractors.py:17-25`, `backend/parsing/categories/`, `backend/parsing/classifier.py:196-210`, `backend/parsing/storage.py:41-45`, `backend/tools/evaluate_classification.py:19-38`, `backend/app/schemas/artifact.py:19-29`, `backend/app/api/routes/category_sentiment.py:28-67`.
+Tests
+- `test_classification.py` is unchanged, except that its one test of the deleted wrapper is removed.
+- `test_category_taxonomy.py` checks every definition is complete, and pins every stored category name and artifact type.
+- `test_classification_evaluator.py` checks the frozen baseline still gives the recorded Macro F1, unknown false-positive rate and per-category F1.
+
+Behaviour changes: none from the taxonomy. Stored categories, artifact types and extracted data are unchanged, and the category sentiment view still buckets by keyword. The analysis image fix is a deploy change (see Left over).
+
+Left over
+- Deploy and check that the analysis Lambda starts. On the current staging stack, search the analysis function's CloudWatch logs for `No module named 'parsing.classification'` to see whether analysis has been failing since `9816ef6`.
+- The API image ships only `app/`, so the category sentiment route cannot import the taxonomy. 10 step 3 needs one of two things: the analysis worker stores each artifact's bucket, or `Dockerfile.api` copies `parsing/classification` and `parsing/categories` (both pure Python).
+- Today an artifact with no keyword match falls into "strategy". The proposal leaves security notifications and executive transcripts without a bucket, so the team decides where they go.
+- Only the local loader stores a category's own `artifact_type`. The pipeline stores `asx_announcement_other` for every announcement (08).
+
+Where the code is: `backend/parsing/classification/taxonomy.py`, `backend/parsing/categories/`, `backend/parsing/analysis.py` (`apply_rules`), `backend/parsing/storage.py`, `backend/tools/evaluate_classification.py`, `backend/tests/fixtures/classification/legacy_baseline.json`, `backend/tests/test_category_taxonomy.py`, `backend/tests/test_lambda_images.py`, `backend/Dockerfile.analysis`.
 
 ### 08 Artifact analysis
 
@@ -497,17 +528,17 @@ One artifact analysis module with interfaces for the document store (03), the se
 Done in Phase 0: the team chose title + raw_text as the one FinBERT input. `sentiment.sentiment_input(title, raw_text)` is used by the worker, the news route and the local loader, and the tests that disagreed were fixed (#62).
 
 Steps still to do
-1. Pull a shared "analyse text" out of the three `analyse_*` functions.
+1. Pull a shared "analyse text" out of the three `analyse_*` functions. #56 already gives them one summary step (`_analysis_output` over `generation.generate`).
 2. Merge the Lambda's two lifecycles. #56 already records both through `lambdas/pipeline_stage` (04) and reads documents through the raw document store (03).
 3. Introduce the interfaces.
-4. Point the admin routes, the Marketaux inline mode and the local loader at the module, or delete them in favour of queueing.
+4. Point the admin routes (`/llm/...`), the Marketaux inline mode and the local loader at the module, or delete them in favour of queueing. Queueing the admin routes also removes the 30-second risk noted in 06.
 5. At the next change to the message contract, rename `PublicDiscussionAnalysisMessage`, because it also carries news.
 
 Tests
 - Replace the event-order monkeypatch tests in `test_document_workers.py` (the stored-text analysis tests) with behaviour tests that use fakes at the interfaces. #56 already replaced the document one with a Postgres scenario in `test_pipeline_stages.py`.
 - Fold `test_news_sentiment` and `test_news_summary` into them.
 
-Where the code is: `backend/parsing/analysis.py:356-520`, `backend/lambdas/analysis.py:518-784`, `backend/parsing/storage.py:68-316`, `backend/app/services/news_sentiment.py:28-49`, `backend/app/services/news_summary.py`, `backend/app/services/marketaux.py:31-47,275-332`, `backend/app/api/routes/gemini.py:130-231`.
+Where the code is: `backend/parsing/analysis.py:356-520`, `backend/lambdas/analysis.py:518-784`, `backend/parsing/storage.py:68-316`, `backend/app/services/news_sentiment.py:28-49`, `backend/app/services/news_summary.py`, `backend/app/services/marketaux.py:31-47,275-332`, `backend/app/api/routes/llm.py`.
 
 ## Phase 4: read side
 
@@ -531,7 +562,7 @@ Done in Phase 0
 Steps still to do
 1. Move brief building and the Yahoo client out of `ticker.py` into a ticker brief read-model behind a quote interface.
 2. Move `read_ticker_category_sentiment` into its own module. Fold in the headline "latest signal" (`ticker.py:330-338`), so ticker sentiment has one definition.
-3. The team agrees the mapping from taxonomy `primary_category` to bucket, because the numbers in the UI will change (see decisions). Then replace the keyword matching.
+3. The team agrees the mapping from taxonomy `primary_category` to bucket, because the numbers in the UI will change (see decisions). #56 records a proposed bucket on each category definition (see 09). Then replace the keyword matching. The API image cannot import the taxonomy today, so either store each artifact's bucket at analysis time or copy `parsing/classification` and `parsing/categories` into `Dockerfile.api`.
 4. Add a watchlist summary endpoint. Delete the page's private `fetchJson` and the dead `{tickers: [...]}` branch in search.
 5. Batch the deep-dive timeline's per-artifact summary query.
 6. Optional: drop `"tone": "green"` from the deep-dive payload after `DeepDiveTimeline.jsx` hard-codes `styles.green`.
@@ -661,6 +692,7 @@ One configuration module that is built the first time it is used. It declares ev
 Done in Phase 0
 - The 15 unread `Settings` fields and the stale `GROQ_API_KEY_PARAMETER` in `.env.example` are deleted (#65, #62). So is `ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED` (#62).
 - The document size limits now come from `lambdas/download_validation.py`, and `MAX_ANALYSIS_CHARS` from `sentiment.sentiment_input` (#62).
+- `BEDROCK_MAX_OUTPUT_TOKENS` is gone. Each summary kind sets its own output budget (06, #56).
 - Side effect: a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashes the API at import. The Lambdas that read them still fail on bad input.
 
 Steps still to do
@@ -696,9 +728,10 @@ Where the code is: `infra/github-oidc.yaml:44-656`.
 | Which text FinBERT scores | 08 | Decided: title + raw_text, capped at `MAX_ANALYSIS_CHARS`. Done in #62. |
 | Support neutral alerts or remove the option | 12 | Decided: support them end to end. Done in #60. |
 | How to handle one-click unsubscribe | 13 | Decided for now: stop sending the header (#62). An API-backed endpoint is optional later. |
-| Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Open. #62 only fixed the keyword matching. The UI numbers will change when this is decided. |
+| Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Open. #62 only fixed the keyword matching. Decided in #56: 09 records a proposed bucket on each category definition and leaves the keyword matching, so no UI numbers change yet. The team still agrees the mapping, where security notifications and executive transcripts go, and the multi-bucket question before 10 step 3. |
 | Whether `source_url` on Queue A is authoritative | 04 | Decided in #56: the ticker catalogue is authoritative. The `{TICKER}_SOURCE_URL` override is removed and Queue A records the catalogue's page. |
 | How to count a malformed public-discussion post: failure or duplicate | 05 | Decided in #56: a failure. It counts in `items_failed` and its run ends partial. |
 | Which meaning `SUPPORTED_TICKERS` keeps, and what the other meaning is renamed to | 01 | Decided in #56: it means "enabled for manual scraping" (the `Settings` field and env var). The analysis worker's copy is gone; it accepts catalogue tickers directly. Revisit if the team wants a different name. |
+| When to rename the `/gemini` routes | 06 | Decided in #56: now, to `/llm/...`, with no alias. The frontend never called them. |
 | Whether to collapse the two summary stores after the views land | 07 | Open. |
 | Whether the deployment-test stack is still needed | 18 | Open. |
