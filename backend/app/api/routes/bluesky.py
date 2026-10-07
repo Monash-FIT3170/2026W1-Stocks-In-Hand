@@ -1,4 +1,4 @@
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -6,23 +6,9 @@ from sqlalchemy.orm import Session
 from app.database.connection import SessionLocal, get_db
 from app.services import discussion_collector
 from app.services.discussion_sources.base import InvalidTargetError
-from app.services.discussion_sources.bluesky import BLUESKY, SEARCH_PATH
+from app.services.discussion_sources.bluesky import BLUESKY
 
 router = APIRouter(prefix="/bluesky", tags=["bluesky"])
-
-BLUESKY_SEARCH_PATH = SEARCH_PATH
-
-
-def _get_or_create_bluesky_platform(db: Session):
-    """For the scheduled collector until it calls the collector directly."""
-    return discussion_collector.platform_for(db, BLUESKY, "")
-
-
-def _run_bluesky_scrape(query: str, limit: int, scrape_run_id: UUID | None = None) -> None:
-    """For the scheduled collector until it calls the collector directly."""
-    discussion_collector.collect(
-        BLUESKY, query, limit, session_scope=SessionLocal, run_id=scrape_run_id
-    )
 
 
 @router.post("/scrape")

@@ -1,4 +1,4 @@
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -27,18 +27,6 @@ def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict], source_name: 
         source_name=source_name,
     )
     return {**result, "post_count": len(posts)}
-
-
-def _get_or_create_reddit_platform(db: Session):
-    """For the scheduled collector until it calls the collector directly."""
-    return discussion_collector.platform_for(db, REDDIT, "")
-
-
-def _run_reddit_scrape(subreddit: str, limit: int, scrape_run_id: UUID | None = None) -> None:
-    """For the scheduled collector until it calls the collector directly."""
-    discussion_collector.collect(
-        REDDIT, subreddit, limit, session_scope=SessionLocal, run_id=scrape_run_id
-    )
 
 
 @router.post("/scrape")
