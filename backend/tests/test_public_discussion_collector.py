@@ -15,7 +15,6 @@ import uuid
 from collections.abc import Iterator
 from contextlib import nullcontext
 from datetime import datetime, timezone
-from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -30,6 +29,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.services import discussion_collector
+from app.services.discussion_sources.blog import BLOG
 from app.services.discussion_sources.bluesky import BLUESKY
 from app.services.discussion_sources.mastodon import MASTODON
 from app.services.discussion_sources.reddit import REDDIT
@@ -76,25 +76,20 @@ class Recorded:
         return self.raw_posts[:limit]
 
 
-SOURCES = {"bluesky": BLUESKY, "mastodon": MASTODON, "reddit": REDDIT}
-TARGETS = {"bluesky": "ASX", "mastodon": "ASX", "reddit": "ASX"}
+SOURCES = {"bluesky": BLUESKY, "mastodon": MASTODON, "reddit": REDDIT, "blog": BLOG}
+TARGETS = {"bluesky": "ASX", "mastodon": "ASX", "reddit": "ASX", "blog": FEED_URL}
 
 
 def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, run_id=None):
     """Collect recorded posts from one source into the test database."""
     monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
-    if source in SOURCES:
-        return discussion_collector.collect(
-            Recorded(SOURCES[source], raw_posts),
-            TARGETS[source],
-            10,
-            session_scope=lambda: nullcontext(db),
-            run_id=run_id,
-        )
-    route = import_module(f"app.api.routes.{source}")
-    monkeypatch.setattr(route, "_fetch_posts", lambda *_args, **_kwargs: raw_posts)
-    monkeypatch.setattr(route, "SessionLocal", lambda: nullcontext(db))
-    return route._scrape_and_store_posts(FEED_URL, 10)
+    return discussion_collector.collect(
+        Recorded(SOURCES[source], raw_posts),
+        TARGETS[source],
+        10,
+        session_scope=lambda: nullcontext(db),
+        run_id=run_id,
+    )
 
 
 def _stored(db: Session, identity: str) -> Artifact:

@@ -7,61 +7,87 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from app.core.config import settings
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.schemas.public_discussion import (
-    ArtifactTickerMentionCreate,
-    CollectionStatus,
-    PublicDiscussionAdapter,
-    PublicDiscussionCollectionResult,
-    PublicDiscussionPost,
+from app.schemas.public_discussion import ArtifactTickerMentionCreate
+from app.services.discussion_sources.base import (
+    CollectedPost,
+    DiscussionSource,
+    InvalidTargetError,
+    MalformedPostError,
 )
+from app.services.discussion_sources.blog import BLOG
+from app.services.discussion_sources.bluesky import BLUESKY
+from app.services.discussion_sources.mastodon import MASTODON
+from app.services.discussion_sources.reddit import REDDIT
 from app.services.public_discussion import find_ticker_mentions
 
+FEED = "https://blog.example.test/feed.xml"
+RAW_POSTS = {
+    "reddit": {
+        "id": "abc123",
+        "title": "$BHP shares rise",
+        "body": "Investors discuss earnings.",
+        "score": 12,
+        "url": "https://reddit.com/r/ASX/comments/abc123/bhp/",
+        "author": "investor",
+        "created_utc": 1787961600.0,
+        "subreddit": "ASX",
+    },
+    "bluesky": {
+        "uri": "at://did:plc:test/app.bsky.feed.post/one",
+        "text": "$BHP shares rise",
+        "created_at": "2026-08-29T00:00:00Z",
+        "author": "investor.test",
+        "like_count": 5,
+    },
+    "mastodon": {
+        "id": "114123456789",
+        "text": "$BHP shares rise",
+        "created_at": "2026-08-29T00:00:00Z",
+        "url": "https://aus.social/@investor/114123456789",
+        "author": "investor",
+        "favourites_count": 2,
+        "reblogs_count": 1,
+        "replies_count": 1,
+    },
+    "blog": {
+        "id": "entry-1",
+        "title": "ASX:BHP profit rose",
+        "url": "https://blog.example.test/entry-1",
+        "author": None,
+        "raw_text": "BHP Group Limited reported higher profit.",
+        "published_at": None,
+    },
+}
+SOURCES = {"reddit": REDDIT, "bluesky": BLUESKY, "mastodon": MASTODON, "blog": BLOG}
+TARGETS = {"reddit": "ASX", "bluesky": "ASX", "mastodon": "ASX", "blog": FEED}
+INVALID_TARGETS = {"reddit": "AS X", "bluesky": "  ", "mastodon": "#", "blog": "https://unlisted.test/feed"}
 
-class ExampleAdapter:
-    source_type = "example_blog"
 
-    def collect(
-        self,
-        query: str,
-        *,
-        limit: int,
-        cursor: str | None = None,
-    ) -> PublicDiscussionCollectionResult:
-        return PublicDiscussionCollectionResult(
-            status=CollectionStatus.COMPLETED,
-            posts=[
-                PublicDiscussionPost(
-                    source_type=self.source_type,
-                    source_id="post-1",
-                    title=f"Discussion about {query}",
-                    url="https://example.test/post-1",
-                )
-            ][:limit],
-            next_cursor=cursor,
-        )
+@pytest.mark.parametrize("name", sorted(SOURCES))
+def test_every_source_keeps_the_discussion_source_contract(name: str) -> None:
+    source = SOURCES[name]
+    with patch.object(settings, "PUBLIC_DISCUSSION_FEED_URLS", [FEED]):
+        target = source.target(TARGETS[name], 10)
 
+        post = source.post(RAW_POSTS[name], target)
 
-def test_source_adapter_contract_normalises_collection_results() -> None:
-    adapter = ExampleAdapter()
-
-    result = adapter.collect("BHP", limit=10)
-
-    assert isinstance(adapter, PublicDiscussionAdapter)
-    assert result.status == CollectionStatus.COMPLETED
-    assert result.posts[0].source_type == "example_blog"
-    assert result.posts[0].source_id == "post-1"
-
-
-def test_collection_status_contract_covers_each_pipeline_state() -> None:
-    assert {status.value for status in CollectionStatus} == {
-        "queued",
-        "running",
-        "completed",
-        "partial",
-        "failed",
-    }
+        with pytest.raises(InvalidTargetError):
+            source.target(INVALID_TARGETS[name], 10)
+        with pytest.raises(InvalidTargetError):
+            source.target(TARGETS[name], 0)
+    assert isinstance(source, DiscussionSource)
+    assert isinstance(post, CollectedPost)
+    assert post.artifact.source_type == source.source_type
+    assert len(post.content_hash) == 64
+    assert post.engagement >= 0
+    assert source.platform(target).name
+    assert source.source_url(target).startswith("https://")
+    with pytest.raises(MalformedPostError):
+        source.post({}, target)
 
 
 def test_ticker_mention_contract_rejects_invalid_confidence() -> None:
@@ -288,7 +314,7 @@ def test_pending_analysis_requeue_sends_and_marks_a_bounded_batch() -> None:
 
 
 def test_blog_adapter_parses_rss_and_atom_entries() -> None:
-    from app.api.routes import blog
+    from app.services.discussion_sources import blog
 
     rss = b"""<?xml version="1.0"?>
     <rss version="2.0"><channel><item>
@@ -306,8 +332,8 @@ def test_blog_adapter_parses_rss_and_atom_entries() -> None:
       <author><name>Reporter</name></author>
     </entry></feed>"""
 
-    rss_posts = blog._parse_feed(rss, limit=10)
-    atom_posts = blog._parse_feed(atom, limit=10)
+    rss_posts = blog.parse_feed(rss, limit=10)
+    atom_posts = blog.parse_feed(atom, limit=10)
 
     assert rss_posts[0]["id"] == "rss-1"
     assert rss_posts[0]["raw_text"] == "$BHP profit rose."
@@ -317,19 +343,19 @@ def test_blog_adapter_parses_rss_and_atom_entries() -> None:
 
 
 def test_blog_adapter_rejects_xml_entity_declarations() -> None:
-    from app.api.routes import blog
+    from app.services.discussion_sources import blog
 
     unsafe_feed = b"""<!DOCTYPE rss [<!ENTITY x "unsafe">]>
     <rss version="2.0"><channel><item><title>&x;</title></item></channel></rss>"""
 
     with pytest.raises(ValueError, match="declarations are not allowed"):
-        blog._parse_feed(unsafe_feed, limit=10)
+        blog.parse_feed(unsafe_feed, limit=10)
 
 
 def test_blog_scrape_endpoint_rejects_unconfigured_feed() -> None:
     from app.api.routes import blog
 
-    with patch.object(blog.settings, "PUBLIC_DISCUSSION_FEED_URLS", []):
+    with patch.object(settings, "PUBLIC_DISCUSSION_FEED_URLS", []):
         with pytest.raises(Exception) as exc_info:
             blog.scrape_and_store(
                 background_tasks=MagicMock(),
