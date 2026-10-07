@@ -118,7 +118,10 @@ def _stored_sentiment_rows(
     )
 
 
-# Keywords match whole words, with plural and simple verb endings. Stored
+# Each taxonomy category proposes a sentiment bucket
+# (parsing/classification/taxonomy.py). Until the team agrees that mapping,
+# artifacts are still bucketed by these keywords, so the numbers shown do not
+# change. Keywords match whole words, with plural and simple verb endings. Stored
 # identifiers such as "SecurityNotification" or "security_notification" are
 # single words, so "security" no longer files Appendix 3G/3H share notices
 # under risk.

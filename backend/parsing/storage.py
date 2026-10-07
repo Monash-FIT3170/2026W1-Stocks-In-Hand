@@ -25,6 +25,7 @@ from app.crud.artifact_summary import upsert_artifact_summary
 from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
 from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
+from parsing.classification.taxonomy import artifact_type_for
 
 try:
     from .classification_metadata import merge_classification_metadata
@@ -34,14 +35,6 @@ except ImportError:  # Support direct CLI execution.
 if TYPE_CHECKING:
     from scrapers.base import Announcement
     from parsing.classification import ClassificationResult
-
-# Maps parsing category class names to typed ArtifactType enum values.
-# Categories not listed here are stored as ASX_ANNOUNCEMENT_OTHER.
-_CATEGORY_TO_ARTIFACT_TYPE: dict[str, ArtifactType] = {
-    "DividendAnnouncement": ArtifactType.DIVIDEND_ANNOUNCEMENT,
-    "SecurityNotification": ArtifactType.SECURITY_NOTIFICATION,
-    "LeadershipChange":     ArtifactType.LEADERSHIP_CHANGE,
-}
 
 
 def _fallback_summary_text(title: str, summary: dict[str, str]) -> str:
@@ -266,9 +259,7 @@ def store(
             return
 
         category_name = classification.compatibility_category
-        artifact_type = _CATEGORY_TO_ARTIFACT_TYPE.get(
-            category_name, ArtifactType.ASX_ANNOUNCEMENT_OTHER
-        )
+        artifact_type = ArtifactType(artifact_type_for(category_name))
 
         metadata = merge_classification_metadata({
             "pdf_url": announcement.pdf_url,

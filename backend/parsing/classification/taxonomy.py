@@ -1,8 +1,22 @@
-"""Declarative category taxonomy for company and ASX documents."""
+"""Declarative category taxonomy for company and ASX documents.
+
+Each definition owns every fact about its category: the rules that find it,
+the names it is stored under, its display label, its metric extractor if it
+has one, and the sentiment bucket proposed for it.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from parsing.categories import (
+    DividendAnnouncement,
+    LeadershipChange,
+    ReportCategory,
+    SecurityNotification,
+)
+
+OTHER_ARTIFACT_TYPE = "asx_announcement_other"
 
 
 @dataclass(frozen=True)
@@ -14,11 +28,22 @@ class PatternRule:
     regex: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CategoryDefinition:
-    """All declarative classification evidence for one stable category."""
+    """One stable category: its classification evidence and what is stored for it.
+
+    ``compatibility_category`` is stored as the artifact's metadata category
+    and ``artifact_type`` as its artifact type, so neither may change.
+    ``sentiment_bucket`` is the bucket proposed for the category sentiment
+    view, which still buckets by keyword until the team agrees the mapping.
+    ``None`` means no bucket is proposed.
+    """
     identifier: str
     compatibility_category: str
+    label: str
+    artifact_type: str = OTHER_ARTIFACT_TYPE
+    sentiment_bucket: str | None
+    extractor: type[ReportCategory] | None = None
     title_phrases: tuple[PatternRule, ...] = ()
     title_tokens: tuple[PatternRule, ...] = ()
     form_identifiers: tuple[PatternRule, ...] = ()
@@ -30,6 +55,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="quarterly_trading_update",
         compatibility_category="QuarterlyTradingUpdate",
+        label="Quarterly trading update",
+        sentiment_bucket="revenue",
         title_phrases=(
             PatternRule("quarterly_update", "quarterly update"),
             PatternRule("quarterly_activities_report", "quarterly activities report"),
@@ -51,6 +78,10 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="dividend_announcement",
         compatibility_category="DividendAnnouncement",
+        label="Dividend announcement",
+        artifact_type="dividend_announcement",
+        sentiment_bucket="dividend",
+        extractor=DividendAnnouncement,
         title_phrases=(
             PatternRule("dividend_announcement", "dividend announcement"),
             PatternRule("dividend_distribution", "dividend distribution"),
@@ -73,6 +104,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="guidance_update",
         compatibility_category="GuidanceUpdate",
+        label="Guidance update",
+        sentiment_bucket="revenue",
         title_phrases=(
             PatternRule("guidance_update", "guidance update"),
             PatternRule("earnings_guidance", "earnings guidance"),
@@ -94,6 +127,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="half_year_results",
         compatibility_category="HalfYearResults",
+        label="Half-year results",
+        sentiment_bucket="revenue",
         title_phrases=(
             PatternRule("half_year_results", "half year"),
             PatternRule("interim_results", "interim results"),
@@ -114,6 +149,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="full_year_results",
         compatibility_category="FullYearResults",
+        label="Full-year results",
+        sentiment_bucket="revenue",
         title_phrases=(
             PatternRule("full_year_results", "full year results"),
             PatternRule("preliminary_final_report", "preliminary final report"),
@@ -139,6 +176,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="annual_report",
         compatibility_category="AnnualReport",
+        label="Annual report",
+        sentiment_bucket="revenue",
         title_phrases=(
             PatternRule("annual_report", "annual report"),
             PatternRule("concise_annual_report", "concise annual report"),
@@ -162,6 +201,10 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="security_notification",
         compatibility_category="SecurityNotification",
+        label="Security notification",
+        artifact_type="security_notification",
+        sentiment_bucket=None,
+        extractor=SecurityNotification,
         title_phrases=(
             PatternRule("issue_securities", "notification of issue of securities"),
             PatternRule("cessation_securities", "notification of cessation of securities"),
@@ -186,6 +229,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="capital_management",
         compatibility_category="CapitalManagement",
+        label="Capital management",
+        sentiment_bucket="dividend",
         title_phrases=(
             PatternRule("equity_raising", "equity raising"),
             PatternRule("capital_raising", "capital raising"),
@@ -209,6 +254,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="corporate_action",
         compatibility_category="CorporateAction",
+        label="Corporate action",
+        sentiment_bucket="strategy",
         title_phrases=(
             PatternRule("acquisition", "acquisition"),
             PatternRule("acquire", "acquire"),
@@ -229,6 +276,10 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="leadership_change",
         compatibility_category="LeadershipChange",
+        label="Leadership change",
+        artifact_type="leadership_change",
+        sentiment_bucket="organisational",
+        extractor=LeadershipChange,
         title_phrases=(
             PatternRule("chief_executive_appointment", "appointment of chief executive officer"),
             PatternRule("director_resignation", "director resignation"),
@@ -249,6 +300,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="governance_meeting",
         compatibility_category="GovernanceMeeting",
+        label="Governance meeting",
+        sentiment_bucket="organisational",
         title_phrases=(
             PatternRule("notice_agm", "notice of annual general meeting"),
             PatternRule("results_agm", "results of annual general meeting"),
@@ -270,6 +323,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="regulatory_legal",
         compatibility_category="RegulatoryLegal",
+        label="Regulatory or legal matter",
+        sentiment_bucket="risk",
         title_phrases=(
             PatternRule("accc_determination", "ACCC determination"),
             PatternRule("litigation_update", "litigation update"),
@@ -289,6 +344,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
     CategoryDefinition(
         identifier="executive_transcript",
         compatibility_category="ExecutiveTranscript",
+        label="Executive transcript",
+        sentiment_bucket=None,
         title_phrases=(
             PatternRule("chief_executive_interview", "CEO interview"),
             PatternRule("briefing_transcript", "briefing transcript"),
@@ -307,3 +364,18 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
         ),
     ),
 )
+
+_DEFINITIONS = {definition.identifier: definition for definition in TAXONOMY}
+_ARTIFACT_TYPES = {
+    definition.compatibility_category: definition.artifact_type for definition in TAXONOMY
+}
+
+
+def category_definition(identifier: str | None) -> CategoryDefinition | None:
+    """The definition for a stable category identifier, if there is one."""
+    return _DEFINITIONS.get(identifier) if identifier else None
+
+
+def artifact_type_for(compatibility_category: str) -> str:
+    """The artifact type stored for a classification's compatibility category."""
+    return _ARTIFACT_TYPES.get(compatibility_category, OTHER_ARTIFACT_TYPE)

@@ -64,6 +64,16 @@ _Avoid_: popularity, score (for all sources)
 A link between a public discussion post and a ticker it names, recording how the name was recognised.
 _Avoid_: tag, match (for the stored link)
 
+### Analysis
+
+**Category**:
+The kind of company announcement an artifact is, such as a dividend announcement or half-year results, decided by fixed rules over its title, filename and text. An announcement the rules cannot place with confidence has no category.
+_Avoid_: artifact type (the stored field), report type, classification (for the category itself)
+
+**Sentiment bucket**:
+One of the five themes a ticker's sentiment is broken down by: revenue, strategy, risk, dividend and organisational.
+_Avoid_: category (for a bucket), theme
+
 ### People and access
 
 **Investor**:

@@ -30,7 +30,7 @@ COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
 # parsing/print_artifacts.py are local CLI-only tools and are deliberately not
 # shipped into the Lambda image.
 COPY parsing/__init__.py parsing/analysis.py parsing/classification_metadata.py \
-    parsing/extractors.py ${LAMBDA_TASK_ROOT}/parsing/
+    ${LAMBDA_TASK_ROOT}/parsing/
 COPY parsing/categories ${LAMBDA_TASK_ROOT}/parsing/categories
 COPY parsing/classification ${LAMBDA_TASK_ROOT}/parsing/classification
 

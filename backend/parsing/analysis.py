@@ -21,7 +21,7 @@ from parsing.classification import (
     ClassificationResult,
     classify_document,
 )
-from parsing.extractors import extractor_for
+from parsing.classification.taxonomy import category_definition
 
 if TYPE_CHECKING:
     from app.services.generation import Generated, Unavailable
@@ -365,11 +365,12 @@ def apply_rules(
             source_adapter=source_adapter,
         )
     )
-    extractor = (
-        extractor_for(classification.primary_category)
+    definition = (
+        category_definition(classification.primary_category)
         if classification.status == "classified"
         else None
     )
+    extractor = definition.extractor if definition else None
     extracted_data = extractor.extract(title, parsed.raw_text) if extractor else {}
     return ParsedDocument(
         raw_text=parsed.raw_text,
