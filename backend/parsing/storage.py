@@ -17,7 +17,7 @@ from app.database.connection import SessionLocal
 from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
-from app.services import llm as llm_service
+from app.services import generation
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
@@ -123,11 +123,13 @@ def _summarise_and_store_artifact(
         return
 
     try:
-        summary = llm_service.summarise_announcement(
-            title=artifact.title or "Untitled ASX announcement",
-            category=category_name,
-            extracted_data=extracted_data,
-            raw_text=raw_text,
+        generated = generation.generate(
+            generation.AnnouncementSummary(
+                title=artifact.title or "Untitled ASX announcement",
+                category=category_name,
+                extracted_data=extracted_data,
+                raw_text=raw_text,
+            )
         )
     except RuntimeError as exc:
         print(f"[SUMMARY] Skipped for artifact {artifact.id}: {exc}")
@@ -137,6 +139,11 @@ def _summarise_and_store_artifact(
         print(f"[SUMMARY] Failed for artifact {artifact.id}: {exc}")
         _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
         return
+    if isinstance(generated, generation.Unavailable):
+        print(f"[SUMMARY] Skipped for artifact {artifact.id}: {generated.reason}")
+        _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
+        return
+    summary = generated.value
 
     metadata = dict(artifact.artifact_metadata or {})
     for key in ("summary", "about", "changed", "matters"):
@@ -152,7 +159,7 @@ def _summarise_and_store_artifact(
             artifact.title or "Untitled ASX announcement",
             summary,
         ),
-        model_used=llm_service.active_model_name(),
+        model_used=generated.model,
     )
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
     _analyse_and_store_artifact_sentiment(db, artifact, raw_text)

@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services import news_sentiment
 from app.services import sentiment as sentiment_service
+from app.services.generation import providers
+from app.services.generation.providers import ScriptedProvider
 from parsing import storage
 from parsing.analysis import analyse_news_text
 
@@ -53,10 +55,8 @@ def test_worker_admin_route_and_local_loader_score_the_same_text(
     finbert: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "app.services.llm.summarise_news_article",
-        MagicMock(side_effect=RuntimeError("summary not needed")),
-    )
+    failing_llm = ScriptedProvider([RuntimeError("summary not needed")])
+    monkeypatch.setattr(providers, "configured_provider", lambda: failing_llm)
     with pytest.raises(RuntimeError, match="summary not needed"):
         analyse_news_text(title=TITLE, raw_text=RAW_TEXT)
     news_sentiment.analyse_news_artifact_sentiment(MagicMock(), _stored_artifact())

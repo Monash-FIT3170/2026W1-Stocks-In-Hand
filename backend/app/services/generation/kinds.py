@@ -13,9 +13,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, Generic, TypeVar
 
+from app.sentiment_buckets import SENTIMENT_BUCKETS
+
 T = TypeVar("T")
 
-CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
+CATEGORY_KEYS = SENTIMENT_BUCKETS
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
 SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)

@@ -1,16 +1,19 @@
+from typing import TypeVar
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from uuid import UUID
 
 from app.crud import artifact as artifact_crud
 from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.services import llm as llm_service
+from app.services import generation
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
+T = TypeVar("T")
 
 
 def _summary_text(title: str, summary: dict[str, object]) -> str:
@@ -27,44 +30,47 @@ def _summary_text(title: str, summary: dict[str, object]) -> str:
 def _generate_artifact_summary(
     artifact: Artifact,
     metadata: dict,
-) -> tuple[dict[str, object], str]:
+) -> generation.Generated[dict[str, object]] | generation.Unavailable:
+    """Summarise a news story or an announcement with its own prompt."""
     if artifact.source_type == "news" or artifact.artifact_type == "news_article":
-        return (
-            llm_service.summarise_news_article(
-                title=artifact.title or "Untitled news story",
-                source_name=metadata.get("source_name"),
-                raw_text=artifact.raw_text,
-            ),
-            llm_service.NEWS_SUMMARY_PROMPT_VERSION,
-        )
-
-    category = str(metadata.get("category") or artifact.artifact_type or "UNKNOWN")
-    extracted_data = (
-        metadata.get("extracted_data")
-        if isinstance(metadata.get("extracted_data"), dict)
-        else {}
-    )
-    return (
-        llm_service.summarise_announcement(
-            title=artifact.title or "Untitled ASX announcement",
-            category=category,
-            extracted_data=extracted_data,
+        kind = generation.NewsSummary(
+            title=artifact.title or "Untitled news story",
+            source_name=metadata.get("source_name"),
             raw_text=artifact.raw_text,
-        ),
-        llm_service.SUMMARY_PROMPT_VERSION,
-    )
+        )
+    else:
+        kind = generation.AnnouncementSummary(
+            title=artifact.title or "Untitled ASX announcement",
+            category=str(metadata.get("category") or artifact.artifact_type or "UNKNOWN"),
+            extracted_data=(
+                metadata.get("extracted_data")
+                if isinstance(metadata.get("extracted_data"), dict)
+                else {}
+            ),
+            raw_text=artifact.raw_text,
+        )
+    return generation.generate(kind)
+
+
+def _available(
+    result: generation.Generated[T] | generation.Unavailable,
+) -> generation.Generated[T]:
+    """The generated result, or 503 when no LLM is switched on."""
+    if isinstance(result, generation.Unavailable):
+        raise HTTPException(status_code=503, detail=result.reason)
+    return result
 
 
 def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
     """Merge generated summary fields into JSON metadata without mutating input."""
     next_metadata = dict(metadata)
 
-    for key in llm_service.SUMMARY_TEXT_KEYS:
+    for key in generation.SUMMARY_TEXT_KEYS:
         value = summary.get(key)
         if isinstance(value, str) and value.strip():
             next_metadata[key] = value.strip()
 
-    for key in llm_service.SUMMARY_LIST_KEYS:
+    for key in generation.SUMMARY_LIST_KEYS:
         if key in summary:
             value = summary.get(key)
             next_metadata[key] = list(value) if isinstance(value, list) else []
@@ -76,7 +82,7 @@ def _has_current_summary(metadata: dict) -> bool:
     """Return whether metadata includes both summary copy and clarity lists."""
     return bool(metadata.get("about")) and all(
         isinstance(metadata.get(key), list)
-        for key in llm_service.SUMMARY_LIST_KEYS
+        for key in generation.SUMMARY_LIST_KEYS
     )
 
 
@@ -104,23 +110,21 @@ def categorise_recent_artifacts(
         )
 
     try:
-        if batch_size > 0:
-            categories = llm_service.categorise_chunk_in_batches(chunk, batch_size)
-        else:
-            categories = llm_service.categorise_chunk(chunk)
+        result = generation.generate(generation.CategorySplit(chunk, batch_size=batch_size))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="LLM categorisation request failed") from exc
+    result = _available(result)
 
     return {
         "ticker": ticker.upper(),
         "days": days,
-        "model_used": llm_service.active_model_name(),
+        "model_used": result.model,
         "batch_size": batch_size,
-        "categories": categories,
+        "categories": result.value,
     }
 
 
@@ -159,19 +163,20 @@ def summarise_ticker_artifacts(
             continue
 
         try:
-            summary, prompt_version = _generate_artifact_summary(artifact, metadata)
+            generated = _generate_artifact_summary(artifact, metadata)
         except Exception as exc:
             errors.append({"artifact_id": str(artifact.id), "error": str(exc)})
             continue
+        generated = _available(generated)
 
-        artifact.artifact_metadata = _summary_metadata(metadata, summary)
+        artifact.artifact_metadata = _summary_metadata(metadata, generated.value)
 
         artifact_summary_crud.upsert_artifact_summary(
             db,
             artifact_id=artifact.id,
-            summary_text=_summary_text(artifact.title or "Untitled artifact", summary),
-            model_used=llm_service.active_model_name(),
-            prompt_version=prompt_version,
+            summary_text=_summary_text(artifact.title or "Untitled artifact", generated.value),
+            model_used=generated.model,
+            prompt_version=generated.prompt_version,
         )
         processed += 1
 
@@ -196,25 +201,26 @@ def summarise_artifact(
 
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     try:
-        summary, prompt_version = _generate_artifact_summary(artifact, metadata)
+        generated = _generate_artifact_summary(artifact, metadata)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="LLM summary request failed") from exc
+    generated = _available(generated)
 
-    artifact.artifact_metadata = _summary_metadata(metadata, summary)
+    artifact.artifact_metadata = _summary_metadata(metadata, generated.value)
 
     db_summary = artifact_summary_crud.upsert_artifact_summary(
         db,
         artifact_id=artifact.id,
         summary_text=_summary_text(
             artifact.title or "Untitled artifact",
-            summary,
+            generated.value,
         ),
-        model_used=llm_service.active_model_name(),
-        prompt_version=prompt_version,
+        model_used=generated.model,
+        prompt_version=generated.prompt_version,
     )
 
     return {
@@ -222,5 +228,5 @@ def summarise_artifact(
         "summary_id": db_summary.id,
         "model_used": db_summary.model_used,
         "prompt_version": db_summary.prompt_version,
-        **summary,
+        **generated.value,
     }

@@ -13,7 +13,6 @@ from typing import Generic, TypeVar
 
 from app.services.generation import providers
 from app.services.generation.kinds import (
-    CATEGORY_KEYS,
     SUMMARY_LIST_KEYS,
     SUMMARY_TEXT_KEYS,
     AnnouncementSummary,
@@ -28,7 +27,6 @@ from app.services.generation.providers import TextProvider
 from app.services.llm_errors import LLMUnavailableError, PromptTooLargeError
 
 __all__ = (
-    "CATEGORY_KEYS",
     "SUMMARY_LIST_KEYS",
     "SUMMARY_TEXT_KEYS",
     "AnnouncementSummary",

@@ -15,6 +15,8 @@ import pytest
 from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
+from app.services.generation import providers
+from app.services.generation.providers import ScriptedProvider
 from app.messages import (
     NotificationMessage,
     PublicDiscussionAnalysisMessage,
@@ -622,20 +624,20 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
             "model_used": "test-finbert",
         }
     )
-    summarise = MagicMock(
-        return_value={
-            "summary": "The author expects BHP earnings to rise.",
-            "about": "The post discusses BHP earnings.",
-            "changed": "The author claims the outlook improved.",
-            "matters": "The claim may affect investor expectations.",
-        }
+    llm = ScriptedProvider(
+        [
+            json.dumps(
+                {
+                    "summary": "The author expects BHP earnings to rise.",
+                    "about": "The post discusses BHP earnings.",
+                    "changed": "The author claims the outlook improved.",
+                    "matters": "The claim may affect investor expectations.",
+                }
+            )
+        ]
     )
     monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.llm.summarise_public_discussion", summarise)
-    monkeypatch.setattr(
-        "app.services.llm.active_model_name",
-        lambda: "bedrock:test-model",
-    )
+    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
 
     output = analyse_public_discussion_text(
         title="$BHP earnings outlook",
@@ -645,15 +647,16 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
 
     assert output.parsed.category == "USER_DISCUSSION"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "bedrock:test-model"
+    assert output.summary["about"] == "The post discusses BHP earnings."
+    assert output.summary_model == "scripted:test-model"
+    assert output.summary_prompt_version == "llm-public-discussion-summary-v2"
     analyse_sentiment.assert_called_once_with(
         "$BHP earnings outlook\n\nI think profit will rise next year."
     )
-    summarise.assert_called_once_with(
-        title="$BHP earnings outlook",
-        raw_text="I think profit will rise next year.",
-        source_type="reddit",
-    )
+    [call] = llm.calls
+    assert call.prompt.startswith("You are summarising one public discussion post")
+    assert "Source type:\nreddit" in call.prompt
+    assert call.prompt.endswith("I think profit will rise next year.")
 
 
 def test_news_analysis_uses_source_text_and_news_prompt(
@@ -667,20 +670,20 @@ def test_news_analysis_uses_source_text_and_news_prompt(
             "model_used": "test-finbert",
         }
     )
-    summarise = MagicMock(
-        return_value={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The article covers BHP production.",
-            "changed": "Reported copper production increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        }
+    llm = ScriptedProvider(
+        [
+            json.dumps(
+                {
+                    "summary": "BHP reported stronger copper production.",
+                    "about": "The article covers BHP production.",
+                    "changed": "Reported copper production increased.",
+                    "matters": "Higher output may affect revenue expectations.",
+                }
+            )
+        ]
     )
     monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.llm.summarise_news_article", summarise)
-    monkeypatch.setattr(
-        "app.services.llm.active_model_name",
-        lambda: "bedrock:test-model",
-    )
+    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
 
     output = analyse_news_text(
         title="BHP production update",
@@ -690,15 +693,16 @@ def test_news_analysis_uses_source_text_and_news_prompt(
 
     assert output.parsed.category == "NEWS_ARTICLE"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "bedrock:test-model"
+    assert output.summary["changed"] == "Reported copper production increased."
+    assert output.summary_model == "scripted:test-model"
+    assert output.summary_prompt_version == "llm-news-summary-v2"
     analyse_sentiment.assert_called_once_with(
         "BHP production update\n\nBHP reported stronger copper production."
     )
-    summarise.assert_called_once_with(
-        title="BHP production update",
-        source_name="Publisher",
-        raw_text="BHP reported stronger copper production.",
-    )
+    [call] = llm.calls
+    assert call.prompt.startswith("You are summarising a financial news story")
+    assert "Source:\nPublisher" in call.prompt
+    assert call.prompt.endswith("BHP reported stronger copper production.")
 
 
 def test_analysis_worker_persists_public_discussion_results(

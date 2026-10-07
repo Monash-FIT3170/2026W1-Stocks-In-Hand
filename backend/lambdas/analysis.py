@@ -264,24 +264,29 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
         result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
         return result
 
-    from app.services import llm as llm_service
+    from app.services import generation
     from app.crud.artifact import store_artifact_analysis
 
-    model_used = llm_service.active_model_name()
-    if not model_used.startswith("bedrock:"):
+    provider = generation.providers.configured_provider()
+    if not provider.name.startswith("bedrock:"):
         raise RuntimeError("Structured summary repair requires Amazon Bedrock")
 
     for artifact_id in artifact_ids:
         try:
             summary_input = _summary_input(artifact_id)
-            summary = llm_service.summarise_announcement(**summary_input)
-            fields = normalise_summary_metadata(summary)
+            generated = generation.generate(
+                generation.AnnouncementSummary(**summary_input),
+                provider=provider,
+            )
+            if isinstance(generated, generation.Unavailable):
+                raise RuntimeError(generated.reason)
+            fields = normalise_summary_metadata(generated.value)
             if not has_complete_summary_metadata(fields):
                 raise RuntimeError("Bedrock response omitted structured summary fields")
             summary_values = {
                 "summary_text": combine_summary_text(fields),
-                "model_used": model_used,
-                "prompt_version": llm_service.SUMMARY_PROMPT_VERSION,
+                "model_used": generated.model,
+                "prompt_version": generated.prompt_version,
                 **fields,
             }
             with database_session() as db:

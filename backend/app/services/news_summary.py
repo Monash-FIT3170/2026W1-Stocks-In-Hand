@@ -11,7 +11,8 @@ from app.crud.artifact_summary import upsert_artifact_summary
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import llm as summary_service
+from app.services import generation
+from app.services.llm_errors import LLMUnavailableError
 
 SUMMARY_METADATA_KEYS = ("summary", "about", "changed", "matters")
 NEWS_SOURCE_TYPE = "news"
@@ -40,11 +41,12 @@ def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
     source_name = source_name if isinstance(source_name, str) else None
     title = artifact.title or "Untitled news story"
 
-    summary = summary_service.summarise_news_article(
-        title=title,
-        source_name=source_name,
-        raw_text=raw_text,
+    generated = generation.generate(
+        generation.NewsSummary(title=title, source_name=source_name, raw_text=raw_text)
     )
+    if isinstance(generated, generation.Unavailable):
+        raise LLMUnavailableError(generated.reason)
+    summary = generated.value
 
     next_metadata = dict(metadata)
     for key in SUMMARY_METADATA_KEYS:
@@ -59,8 +61,8 @@ def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
         db,
         artifact_id=artifact.id,
         summary_text=summary_text(title, summary),
-        model_used=summary_service.active_model_name(),
-        prompt_version=summary_service.NEWS_SUMMARY_PROMPT_VERSION,
+        model_used=generated.model,
+        prompt_version=generated.prompt_version,
     )
 
 

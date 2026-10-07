@@ -14,8 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
-from app.services import llm
-from app.services.generation import providers
+from app.services.generation import NewsSummary, Unavailable, generate, providers
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
 from parsing.analysis import analyse_news_text, analyse_public_discussion_text
@@ -72,13 +71,16 @@ def test_unavailable_provider_stores_sentiment_without_summary(
     assert output.summary_prompt_version is None
 
 
-def test_both_providers_raise_the_typed_error(unavailable_provider: str) -> None:
-    with pytest.raises(LLMUnavailableError):
-        llm.summarise_news_article(
+def test_both_providers_report_unavailable(unavailable_provider: str) -> None:
+    result = generate(
+        NewsSummary(
             title="BHP cuts guidance",
             source_name=None,
             raw_text="BHP lowered its copper guidance.",
         )
+    )
+
+    assert isinstance(result, Unavailable)
 
 
 def test_typed_error_stays_a_runtime_error_for_existing_route_handlers() -> None:

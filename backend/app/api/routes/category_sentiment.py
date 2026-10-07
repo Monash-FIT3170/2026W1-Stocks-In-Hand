@@ -15,10 +15,10 @@ from app.schemas.category_sentiment import (
     CategorySentimentRequest,
     CategorySentimentResponse,
 )
-from app.services import llm as llm_service
+from app.sentiment_buckets import SENTIMENT_BUCKETS
 
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
-CATEGORY_SENTIMENT_KEYS = (*llm_service.CATEGORY_KEYS, "user_discussion")
+CATEGORY_SENTIMENT_KEYS = (*SENTIMENT_BUCKETS, "user_discussion")
 DEFAULT_SENTIMENT_DAYS = 365
 FALLBACK_CATEGORY_KEYWORDS = {
     "revenue": (

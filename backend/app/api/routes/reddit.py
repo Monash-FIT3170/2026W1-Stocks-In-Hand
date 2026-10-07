@@ -9,25 +9,11 @@ from app.database.connection import SessionLocal, get_db
 from app.models.investor import Investor
 from app.schemas.artifact import SourceType
 from app.services import discussion_collector
-from app.services import llm as llm_service
+from app.services import generation
 from app.services.discussion_sources.base import InvalidTargetError
 from app.services.discussion_sources.reddit import REDDIT
 
 router = APIRouter(prefix="/reddit", tags=["reddit"])
-
-def _summarise_reddit_posts(ticker_symbol: str, posts: list[dict], source_name: str = "Reddit") -> dict:
-    if not posts:
-        return {
-            "summary": f"No relevant {source_name} posts found.",
-            "post_count": 0,
-        }
-
-    result = llm_service.summarise_reddit_digest(
-        ticker_symbol=ticker_symbol,
-        posts=posts,
-        source_name=source_name,
-    )
-    return {**result, "post_count": len(posts)}
 
 
 @router.post("/scrape")
@@ -104,18 +90,20 @@ def reddit_ticker_sentiment(
     ]
 
     try:
-        result = _summarise_reddit_posts(
-            ticker_symbol=ticker_symbol.upper(),
-            posts=post_dicts,
+        digest = generation.generate(
+            generation.RedditDigest(ticker_symbol=ticker_symbol.upper(), posts=post_dicts)
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if isinstance(digest, generation.Unavailable):
+        raise HTTPException(status_code=503, detail=digest.reason)
     return {
         "ticker":        ticker_symbol.upper(),
         "days_searched": days,
-        **result,
+        **digest.value,
+        "post_count":    len(post_dicts),
         "posts_used": [
             {
                 "title": a.title,

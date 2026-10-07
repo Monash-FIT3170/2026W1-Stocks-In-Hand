@@ -7,9 +7,8 @@ import zipfile
 from dataclasses import dataclass
 from functools import lru_cache
 from html.parser import HTMLParser
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from app.services.llm_errors import LLMUnavailableError
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 from lambdas.common import PermanentDocumentError
@@ -23,6 +22,9 @@ from parsing.classification import (
     classify_document,
 )
 from parsing.extractors import extractor_for
+
+if TYPE_CHECKING:
+    from app.services.generation import Generated, Unavailable
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,31 @@ class AnalysisOutput:
     summary_model: str | None
     summary_prompt_version: str | None
     sentiment: dict[str, Any]
+
+
+def _analysis_output(
+    parsed: ParsedDocument,
+    summary: Generated[dict[str, Any]] | Unavailable,
+    sentiment: dict[str, Any],
+) -> AnalysisOutput:
+    """Sentiment always; the summary only when an LLM was available."""
+    from app.services import generation
+
+    if isinstance(summary, generation.Unavailable):
+        return AnalysisOutput(
+            parsed=parsed,
+            summary=None,
+            summary_model=None,
+            summary_prompt_version=None,
+            sentiment=sentiment,
+        )
+    return AnalysisOutput(
+        parsed=parsed,
+        summary=summary.value,
+        summary_model=summary.model,
+        summary_prompt_version=summary.prompt_version,
+        sentiment=sentiment,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -388,29 +415,19 @@ def analyse_document(
         sentiment_service.sentiment_input(title, parsed.raw_text)
     )
 
-    from app.services import llm as llm_service
+    from app.services import generation
 
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        summary = llm_service.summarise_announcement(
-            title=title,
-            category=parsed.category,
-            extracted_data=parsed.extracted_data,
-            raw_text=parsed.raw_text,
-        )
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = llm_service.SUMMARY_PROMPT_VERSION
-    except LLMUnavailableError:
-        pass
-
-    return AnalysisOutput(
-        parsed=parsed,
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
+    return _analysis_output(
+        parsed,
+        generation.generate(
+            generation.AnnouncementSummary(
+                title=title,
+                category=parsed.category,
+                extracted_data=parsed.extracted_data,
+                raw_text=parsed.raw_text,
+            )
+        ),
+        sentiment,
     )
 
 
@@ -428,41 +445,24 @@ def analyse_public_discussion_text(
         sentiment_service.sentiment_input(title, parsed.raw_text)
     )
 
-    from app.services import llm as llm_service
+    from app.services import generation
 
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        response = llm_service.summarise_public_discussion(
-            title=title,
-            source_type=source_type,
-            raw_text=parsed.raw_text,
-        )
-        summary = {
-            key: value
-            for key in ("summary", "about", "changed", "matters")
-            if isinstance((value := response.get(key)), str)
-        }
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = (
-            llm_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
-        )
-    except LLMUnavailableError:
-        pass
-
-    return AnalysisOutput(
-        parsed=ParsedDocument(
+    return _analysis_output(
+        ParsedDocument(
             raw_text=parsed.raw_text,
             page_count=1,
             category="USER_DISCUSSION",
             category_confidence=1.0,
             extracted_data={},
         ),
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
+        generation.generate(
+            generation.DiscussionSummary(
+                title=title,
+                source_type=source_type,
+                raw_text=parsed.raw_text,
+            )
+        ),
+        sentiment,
     )
 
 
@@ -480,37 +480,22 @@ def analyse_news_text(
         sentiment_service.sentiment_input(title, parsed.raw_text)
     )
 
-    from app.services import llm as llm_service
+    from app.services import generation
 
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        response = llm_service.summarise_news_article(
-            title=title,
-            source_name=source_name,
-            raw_text=parsed.raw_text,
-        )
-        summary = {
-            key: value
-            for key in ("summary", "about", "changed", "matters")
-            if isinstance((value := response.get(key)), str)
-        }
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = llm_service.NEWS_SUMMARY_PROMPT_VERSION
-    except LLMUnavailableError:
-        pass
-
-    return AnalysisOutput(
-        parsed=ParsedDocument(
+    return _analysis_output(
+        ParsedDocument(
             raw_text=parsed.raw_text,
             page_count=1,
             category="NEWS_ARTICLE",
             category_confidence=1.0,
             extracted_data={},
         ),
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
+        generation.generate(
+            generation.NewsSummary(
+                title=title,
+                source_name=source_name,
+                raw_text=parsed.raw_text,
+            )
+        ),
+        sentiment,
     )

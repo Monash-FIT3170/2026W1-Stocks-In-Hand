@@ -5,11 +5,11 @@ INSERT, so summarising a story the analysis worker had already summarised hit
 the unique constraint.
 """
 
+import json
 import sys
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -23,6 +23,8 @@ from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.services import news_summary
+from app.services.generation import providers
+from app.services.generation.providers import ScriptedProvider
 
 
 @pytest.fixture()
@@ -48,6 +50,7 @@ def db_session() -> Iterator[Session]:
 
 def test_summarising_an_already_summarised_story_updates_its_row(
     db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = Artifact(
         source_type="news",
@@ -68,21 +71,26 @@ def test_summarising_an_already_summarised_story_updates_its_row(
     )
     db_session.commit()
 
-    with patch.object(
-        news_summary.summary_service,
-        "summarise_news_article",
-        return_value={
-            "summary": "BHP lifted copper output.",
-            "about": "The story covers BHP production.",
-            "changed": "Copper output rose.",
-            "matters": "Output supports revenue.",
-        },
-    ):
-        news_summary.summarise_news_artifact(db_session, artifact)
+    llm = ScriptedProvider(
+        [
+            json.dumps(
+                {
+                    "summary": "BHP lifted copper output.",
+                    "about": "The story covers BHP production.",
+                    "changed": "Copper output rose.",
+                    "matters": "Output supports revenue.",
+                }
+            )
+        ]
+    )
+    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
+
+    news_summary.summarise_news_artifact(db_session, artifact)
 
     rows = db_session.scalars(
         select(ArtifactSummary).where(ArtifactSummary.artifact_id == artifact.id)
     ).all()
     assert len(rows) == 1
     assert rows[0].summary_text.startswith("BHP lifted copper output.")
-    assert rows[0].prompt_version == news_summary.summary_service.NEWS_SUMMARY_PROMPT_VERSION
+    assert rows[0].prompt_version == "llm-news-summary-v2"
+    assert rows[0].model_used == "scripted:test-model"
