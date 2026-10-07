@@ -1,10 +1,11 @@
 """Database state transitions shared by the scrape API and workers."""
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -671,3 +672,69 @@ def mark_inline_artifact_analysis_failed(
     artifact.analysis_status = AnalysisStatus.FAILED
     artifact.last_error = error[:8000]
     return _commit(db, artifact)
+
+
+ABANDONED_ERROR = "abandoned: no outcome was recorded before SQS gave up"
+
+
+def fail_abandoned_work(
+    db: Session,
+    *,
+    older_than: timedelta,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Fail runs and artifacts whose final receive ended without an outcome.
+
+    A Lambda that times out never runs its error handler, so a timeout on a
+    message's final receive leaves its run or artifact open after SQS has
+    moved the message to its dead-letter queue. Anything left open for
+    longer than ``older_than`` (longer than any queue's redelivery window)
+    is closed here as failed. A message redriven from the dead-letter queue
+    later still reopens and completes its artifact.
+    """
+    cutoff = (now or _utcnow()) - older_than
+    artifact_last_touched = func.coalesce(Artifact.updated_at, Artifact.created_at)
+    closed = {"runs": 0, "downloads": 0, "analyses": 0}
+
+    stalled_runs = db.query(ScrapeRun.id, ScrapeRun.status).filter(
+        or_(
+            and_(
+                ScrapeRun.status == ScrapeRunStatus.QUEUED,
+                ScrapeRun.queued_at < cutoff,
+            ),
+            and_(
+                ScrapeRun.status.in_(
+                    (ScrapeRunStatus.DISCOVERING, ScrapeRunStatus.RUNNING)
+                ),
+                ScrapeRun.started_at < cutoff,
+            ),
+        )
+    ).all()
+    for run_id, status in stalled_runs:
+        if status == ScrapeRunStatus.RUNNING:
+            mark_public_discussion_run_failed(db, run_id, error=ABANDONED_ERROR)
+        else:
+            mark_run_discovery_failed(db, run_id, error=ABANDONED_ERROR)
+        closed["runs"] += 1
+
+    stalled_downloads = db.query(Artifact.id).filter(
+        Artifact.download_status == DownloadStatus.DOWNLOADING,
+        artifact_last_touched < cutoff,
+    ).all()
+    for (artifact_id,) in stalled_downloads:
+        mark_artifact_download_failed(db, artifact_id, error=ABANDONED_ERROR)
+        closed["downloads"] += 1
+
+    stalled_analyses = db.query(Artifact.id, Artifact.download_status).filter(
+        Artifact.analysis_status == AnalysisStatus.ANALYZING,
+        artifact_last_touched < cutoff,
+    ).all()
+    for artifact_id, download_status in stalled_analyses:
+        # Only a stored document goes through document analysis; news and
+        # public discussion are analysed from their stored text.
+        if download_status == DownloadStatus.STORED:
+            mark_artifact_analysis_failed(db, artifact_id, error=ABANDONED_ERROR)
+        else:
+            mark_inline_artifact_analysis_failed(db, artifact_id, error=ABANDONED_ERROR)
+        closed["analyses"] += 1
+    return closed

@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import boto3
 
@@ -17,6 +17,10 @@ from lambdas.common import database_session, load_runtime_configuration, log_eve
 STAGE = "schedule"
 MAX_MARKETAUX_TICKERS_PER_RUN = 5
 MAX_MARKETAUX_ITEMS_PER_TICKER = 25
+# Longer than any pipeline queue's redelivery window (visibility timeout
+# times maxReceiveCount, 6 hours for analysis). test_pipeline_stages checks
+# it against the template.
+ABANDONED_AFTER = timedelta(hours=24)
 
 
 def _event_key(event: dict) -> str:
@@ -120,6 +124,25 @@ def _request_run(
     return requested.enqueued
 
 
+def _fail_abandoned_work() -> None:
+    """Close work a timed-out final receive left open, without blocking scrapes."""
+    try:
+        with database_session() as db:
+            from app.crud.scrape_run import fail_abandoned_work
+
+            closed = fail_abandoned_work(db, older_than=ABANDONED_AFTER)
+    except Exception as exc:  # noqa: BLE001
+        log_event(
+            stage=STAGE,
+            event="abandoned_work_check_failed",
+            level=logging.ERROR,
+            error_code=type(exc).__name__,
+        )
+        return
+    if any(closed.values()):
+        log_event(stage=STAGE, event="abandoned_work_failed", **closed)
+
+
 def handler(event: dict, _context) -> dict:
     """Create one durable run per ticker for a single EventBridge event."""
     started_at = time.monotonic()
@@ -139,6 +162,7 @@ def handler(event: dict, _context) -> dict:
         "marketaux_errors": 0,
     }
 
+    _fail_abandoned_work()
     try:
         tickers = _enabled_tickers()
         for ticker in tickers:

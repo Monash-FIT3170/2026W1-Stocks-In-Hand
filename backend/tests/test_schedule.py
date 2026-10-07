@@ -68,12 +68,20 @@ def test_marketaux_schedule_skips_collection_when_disabled(monkeypatch) -> None:
     collect.assert_not_called()
 
 
+@contextmanager
+def _unavailable_database():
+    raise ConnectionError("database unavailable")
+    yield  # pragma: no cover
+
+
 def test_schedule_raises_when_marketaux_collection_fails(monkeypatch) -> None:
     monkeypatch.setenv("SCHEDULED_TICKERS", "")
     monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
 
     with (
         patch.object(schedule, "load_runtime_configuration"),
+        # The abandoned-work check fails quietly and scheduling carries on.
+        patch.object(schedule, "database_session", _unavailable_database),
         patch.object(schedule.boto3, "client", return_value=MagicMock()),
         patch.object(
             schedule,

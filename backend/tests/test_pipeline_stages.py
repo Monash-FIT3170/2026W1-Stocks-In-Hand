@@ -33,10 +33,18 @@ from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
 from app.messages import QueueAMessage, QueueBMessage
 from app.models.artifact import Artifact
+from app.models.scrape_run import ScrapeRun
 from app.services import scrape_runs
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
-from lambdas import analysis, discovery, download, pipeline_stage, source_download
+from lambdas import (
+    analysis,
+    discovery,
+    download,
+    pipeline_stage,
+    schedule,
+    source_download,
+)
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument
 from scrapers.base import Announcement
@@ -675,3 +683,130 @@ def test_stored_text_without_text_fails_its_analysis_at_once(
     workers_use.refresh(artifact)
     assert artifact.analysis_status == AnalysisStatus.FAILED
     assert artifact.last_error.startswith("no_extractable_text:")
+
+
+# Abandoned work: a Lambda that times out on the final receive records nothing.
+
+
+def _age(db: Session, model, row_id, **columns) -> None:
+    db.query(model).filter(model.id == row_id).update(columns)
+    db.commit()
+
+
+def test_work_left_open_past_the_redelivery_window_is_failed(
+    workers_use: Session,
+) -> None:
+    long_ago = datetime.now(timezone.utc) - timedelta(days=2)
+    downloading_run, downloading = _run_with_one_document(workers_use)
+    scrape_run_crud.mark_artifact_download_started(workers_use, downloading.id)
+    _age(workers_use, Artifact, downloading.id, updated_at=long_ago)
+    discovering_run, _queue_a = _requested_run(workers_use)
+    scrape_run_crud.mark_run_discovery_started(workers_use, discovering_run.id)
+    _age(workers_use, ScrapeRun, discovering_run.id, started_at=long_ago)
+    stored_text = Artifact(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="ASX chatter",
+        raw_text="CSL looks strong",
+        content_hash=f"reddit:{uuid.uuid4()}",
+        analysis_status=AnalysisStatus.ANALYZING,
+    )
+    workers_use.add(stored_text)
+    workers_use.commit()
+    _age(workers_use, Artifact, stored_text.id, updated_at=long_ago)
+
+    closed = scrape_run_crud.fail_abandoned_work(
+        workers_use, older_than=schedule.ABANDONED_AFTER
+    )
+
+    for row in (downloading_run, downloading, discovering_run, stored_text):
+        workers_use.refresh(row)
+    assert closed == {"runs": 1, "downloads": 1, "analyses": 1}
+    assert downloading.download_status == DownloadStatus.FAILED
+    assert downloading.last_error == scrape_run_crud.ABANDONED_ERROR
+    assert downloading_run.status == ScrapeRunStatus.FAILED
+    assert discovering_run.status == ScrapeRunStatus.FAILED
+    assert stored_text.analysis_status == AnalysisStatus.FAILED
+
+
+def test_work_still_inside_the_redelivery_window_stays_open(
+    workers_use: Session,
+) -> None:
+    run, artifact = _run_with_one_document(workers_use)
+    scrape_run_crud.mark_artifact_download_started(workers_use, artifact.id)
+    scrape_run_crud.record_artifact_download_retry(
+        workers_use, artifact.id, error="TimeoutError: source timed out"
+    )
+
+    closed = scrape_run_crud.fail_abandoned_work(
+        workers_use, older_than=schedule.ABANDONED_AFTER
+    )
+
+    workers_use.refresh(artifact)
+    workers_use.refresh(run)
+    assert closed == {"runs": 0, "downloads": 0, "analyses": 0}
+    assert artifact.download_status == DownloadStatus.DOWNLOADING
+    assert run.status == ScrapeRunStatus.DOWNLOADING
+
+
+def test_a_redriven_message_completes_abandoned_work(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, artifact = _run_with_one_document(workers_use)
+    scrape_run_crud.mark_artifact_download_started(workers_use, artifact.id)
+    scrape_run_crud.fail_abandoned_work(workers_use, older_than=timedelta(0))
+
+    _download(_queue_b(artifact, run), monkeypatch, resolve=_pdf())
+
+    workers_use.refresh(artifact)
+    workers_use.refresh(run)
+    assert artifact.download_status == DownloadStatus.STORED
+    assert run.items_failed == 0
+    assert run.status == ScrapeRunStatus.ANALYZING
+
+
+def test_schedule_fails_abandoned_work_before_requesting_runs(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run, _queue_a = _requested_run(workers_use)
+    scrape_run_crud.mark_run_discovery_started(workers_use, run.id)
+    _age(
+        workers_use,
+        ScrapeRun,
+        run.id,
+        started_at=datetime.now(timezone.utc) - timedelta(days=2),
+    )
+
+    @contextmanager
+    def test_session():
+        yield workers_use
+
+    monkeypatch.setenv("SCHEDULED_TICKERS", "")
+    monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
+    monkeypatch.setenv("MARKETAUX_ENABLED", "false")
+    monkeypatch.setattr(schedule, "load_runtime_configuration", lambda: None)
+    monkeypatch.setattr(schedule, "database_session", test_session)
+    monkeypatch.setattr(schedule.boto3, "client", lambda _service: FakeSqs())
+
+    schedule.handler({"id": f"scheduled-{uuid.uuid4()}"}, None)
+
+    workers_use.refresh(run)
+    assert run.status == ScrapeRunStatus.FAILED
+    assert run.error_message == scrape_run_crud.ABANDONED_ERROR
+
+
+def test_abandoned_work_waits_out_every_queue_redelivery_window() -> None:
+    model = template_model()
+    windows = {
+        queue_id: timedelta(
+            seconds=model.queue(queue_id).visibility_timeout
+            * model.queue(queue_id).max_receive_count
+        )
+        for queue_id in model.consumers()
+    }
+
+    assert windows and all(
+        window < schedule.ABANDONED_AFTER for window in windows.values()
+    ), windows

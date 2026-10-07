@@ -12,6 +12,10 @@ against the scrape run or artifact the record is about (its subject):
 A final failure must be durable before the message is acknowledged, so a
 database error while recording one is raised. Recording a retry is best
 effort, because the message is retried either way.
+
+A Lambda that times out never reaches this code, so a timeout on the final
+receive leaves its subject open. The schedule closes such work through
+``crud.scrape_run.fail_abandoned_work``.
 """
 
 from __future__ import annotations
