@@ -195,7 +195,7 @@ def test_public_read_policy_holds_other_methods_to_an_admin() -> None:
         ("POST", "/scrape-runs/"),
         ("POST", "/public-discussion/analysis/requeue"),
         ("POST", "/reddit/scrape"),
-        ("POST", "/gemini/categorise/recent"),
+        ("POST", "/llm/categorise/recent"),
         ("POST", "/sentiment/BHP"),
         ("GET", "/investors/"),
         ("GET", "/reddit/ticker-sentiment/BHP"),

@@ -103,7 +103,7 @@ def store_artifact_analysis(
     transaction, which serializes concurrent `store_artifact_analysis` calls
     for the same artifact. That lock does not cover the admin API's
     unlocked `upsert_artifact_summary`/`upsert_artifact_sentiment` routes
-    (`app/api/routes/gemini.py`), so a summary/sentiment insert can still
+    (`app/api/routes/llm.py`), so a summary/sentiment insert can still
     race a concurrent writer between our lookup and commit — retried once
     below, the same way the standalone upsert functions retry.
     """

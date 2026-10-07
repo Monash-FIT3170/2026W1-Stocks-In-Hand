@@ -12,7 +12,7 @@ from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.services import generation
 
-router = APIRouter(prefix="/gemini", tags=["gemini"])
+router = APIRouter(prefix="/llm", tags=["llm"])
 T = TypeVar("T")
 
 

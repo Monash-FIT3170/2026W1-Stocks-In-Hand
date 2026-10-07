@@ -25,9 +25,9 @@ from app.api.routes import (
     blog,
     bluesky,
     category_sentiment,
-    gemini,
     information_platform,
     investor,
+    llm,
     mastodon,
     news,
     notification_preferences,
@@ -79,7 +79,7 @@ PUBLIC_READ_ROUTERS = (
     announcement,
 )
 INVESTOR_ROUTERS = (watchlist, watchlist_ticker)
-ADMIN_ROUTERS = (investor, news, blog, bluesky, mastodon, gemini)
+ADMIN_ROUTERS = (investor, news, blog, bluesky, mastodon, llm)
 SELF_MANAGED_ROUTERS = (auth, notification_preferences)
 
 for route_module in PUBLIC_READ_ROUTERS:

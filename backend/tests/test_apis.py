@@ -480,7 +480,7 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
 
 def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
     """A later summary can replace old clarity classifications with empty lists."""
-    from app.api.routes.gemini import _summary_metadata
+    from app.api.routes.llm import _summary_metadata
 
     metadata = {
         "category": "DividendAnnouncement",
@@ -505,7 +505,7 @@ def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> N
 
 def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
     """Ticker-wide backfills should revisit summaries created before clarity v2."""
-    from app.api.routes.gemini import _has_current_summary
+    from app.api.routes.llm import _has_current_summary
 
     assert not _has_current_summary({"about": "An existing legacy summary."})
     assert _has_current_summary(

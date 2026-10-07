@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.models  # noqa: F401
-from app.api.routes import gemini, reddit
+from app.api.routes import llm, reddit
 from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
@@ -132,7 +132,7 @@ def test_artifact_summary_records_the_model_and_prompt_version(
     artifact = _announcement(db_session)
     provider = scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
 
-    result = gemini.summarise_artifact(artifact_id=artifact.id, db=db_session)
+    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
 
     row = _summary_row(db_session, artifact)
     assert (row.model_used, row.prompt_version) == (
@@ -159,7 +159,7 @@ def test_a_news_artifact_is_summarised_with_the_news_prompt(
     )
     provider = scripted(json.dumps(NEWS_SUMMARY))
 
-    result = gemini.summarise_artifact(artifact_id=artifact.id, db=db_session)
+    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
 
     assert result["about"] == NEWS_SUMMARY["about"]
     assert _summary_row(db_session, artifact).prompt_version == "llm-news-summary-v2"
@@ -184,7 +184,7 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
     )
     scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
 
-    result = gemini.summarise_ticker_artifacts("BHP", db=db_session)
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
 
     assert (result["processed"], result["skipped"], result["errors"]) == (1, 1, [])
     assert _summary_row(db_session, pending).model_used == "scripted:test-model"
@@ -204,7 +204,7 @@ def test_category_split_reports_the_model(db_session: Session, scripted) -> None
         )
     )
 
-    result = gemini.categorise_recent_artifacts("BHP", db=db_session)
+    result = llm.categorise_recent_artifacts("BHP", db=db_session)
 
     assert result["model_used"] == "scripted:test-model"
     assert result["categories"]["dividend"] == "A dividend date was confirmed."
@@ -251,9 +251,9 @@ def test_routes_answer_503_when_no_llm_is_on(
     _reddit_post(db_session, "BHP iron ore outlook", engagement=40)
     scripted(LLMUnavailableError("Amazon Bedrock is disabled"))
     call = {
-        "summarise_artifact": lambda: gemini.summarise_artifact(artifact.id, db=db_session),
-        "summarise_ticker": lambda: gemini.summarise_ticker_artifacts("BHP", db=db_session),
-        "categorise": lambda: gemini.categorise_recent_artifacts("BHP", db=db_session),
+        "summarise_artifact": lambda: llm.summarise_artifact(artifact.id, db=db_session),
+        "summarise_ticker": lambda: llm.summarise_ticker_artifacts("BHP", db=db_session),
+        "categorise": lambda: llm.categorise_recent_artifacts("BHP", db=db_session),
         "reddit_digest": lambda: reddit.reddit_ticker_sentiment(
             "BHP",
             db=db_session,

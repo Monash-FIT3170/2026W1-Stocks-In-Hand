@@ -195,10 +195,14 @@ signed email link, so they do not need to be added to Brevo first. See the
 | GET | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker |
 | POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
-### Bedrock analysis routes
+### LLM routes
+Admin only. Each answers 503 when no LLM provider is switched on.
+
 | Method | Path | Description |
 |---|---|---|
-| POST | `/gemini/categorise/recent` | Admin-only legacy route name. Uses Bedrock on recent ASX artifacts and classifies them into financial categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
+| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no current summary. Params: `limit` |
+| POST | `/llm/summarise/artifact/{artifact_id}` | Summarises one artifact, replacing its summary |
 
 ### Scraping
 | Method | Path | Description |

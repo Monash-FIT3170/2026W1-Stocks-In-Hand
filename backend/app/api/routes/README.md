@@ -111,7 +111,7 @@ Analysis routes:
 
 - `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
-- `gemini.py`: Legacy route name for provider-routed summarisation and categorisation.
+- `llm.py`: admin summaries and category splits generated on request.
 
 Operational routes:
 
