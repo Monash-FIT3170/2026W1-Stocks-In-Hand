@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 
 import boto3
@@ -14,12 +13,7 @@ from lambdas.common import (
     canonicalize_url,
     database_session,
 )
-from lambdas.download_validation import (
-    DOCUMENT_CONTENT_TYPES,
-    DownloadedDocument,
-    document_size_limit,
-    validate_document_content,
-)
+from lambdas.download_validation import DownloadedDocument, document_size_limit
 from lambdas.pipeline_stage import StageRecord, downloaded_artifact, run_stage
 
 STAGE = "download"
@@ -143,28 +137,8 @@ def _download(current: StageRecord) -> None:
 
         mark_artifact_download_started(db, message.artifact_id)
 
-    max_bytes = document_size_limit()
-    downloaded = _resolve_download(message, max_bytes=max_bytes)
-    if len(downloaded.content) > max_bytes:
-        raise PermanentDocumentError(
-            "Document is larger than the configured limit",
-            code="document_too_large",
-        )
-    if hashlib.sha256(downloaded.content).hexdigest() != downloaded.checksum:
-        raise PermanentDocumentError(
-            "Source resolver returned an invalid checksum",
-            code="checksum_mismatch",
-        )
-    validate_document_content(
-        downloaded.content,
-        declared_content_type=downloaded.content_type,
-        expected_format=downloaded.document_format,
-    )
-    if downloaded.content_type != DOCUMENT_CONTENT_TYPES[downloaded.document_format]:
-        raise PermanentDocumentError(
-            "Source resolver returned a non-canonical content type",
-            code="content_type_mismatch",
-        )
+    # A DownloadedDocument has already passed size and format validation.
+    downloaded = _resolve_download(message, max_bytes=document_size_limit())
     bucket = os.environ["RAW_DOCUMENT_BUCKET"]
     key = (
         f"raw/{message.ticker}/{message.artifact_id}/"

@@ -23,9 +23,11 @@ from app.sources import SOURCES
 from lambdas import analysis, common
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
+    DownloadedDocument,
     download_document,
     validate_document_content,
     validate_download_url,
+    validated_document,
 )
 from parsing import analysis as parsing_analysis
 from parsing.analysis import (
@@ -298,6 +300,35 @@ def test_download_document_detects_supported_format(
     assert downloaded.document_format == expected_format
     assert downloaded.extension == expected_format
     assert downloaded.checksum == hashlib.sha256(content).hexdigest()
+
+
+def test_only_validation_builds_a_downloaded_document():
+    content = b"%PDF-1.7\ncontent"
+
+    document = validated_document(
+        content,
+        declared_content_type="application/octet-stream",
+        final_url="https://investors.csl.com/report.pdf",
+        max_bytes=1024,
+    )
+
+    assert document.document_format == "pdf"
+    assert document.content_type == "application/pdf"
+    assert document.checksum == hashlib.sha256(content).hexdigest()
+    with pytest.raises(TypeError, match="validated_document"):
+        DownloadedDocument(
+            content=content,
+            final_url="https://investors.csl.com/report.pdf",
+            document_format="pdf",
+        )
+    with pytest.raises(PermanentDocumentError) as too_large:
+        validated_document(
+            content,
+            declared_content_type="application/pdf",
+            final_url="https://investors.csl.com/report.pdf",
+            max_bytes=8,
+        )
+    assert too_large.value.code == "document_too_large"
 
 
 def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():

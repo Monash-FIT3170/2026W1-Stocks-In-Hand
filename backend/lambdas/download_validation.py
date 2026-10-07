@@ -6,7 +6,8 @@ import ipaddress
 import os
 import socket
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Literal
 from urllib.parse import urljoin, urlsplit
 
@@ -69,17 +70,52 @@ def docx_uncompressed_limit() -> int:
     )
 
 
+_VALIDATED = object()
+
+
 @dataclass(frozen=True)
 class DownloadedDocument:
+    """Downloaded bytes that passed validation.
+
+    ``validated_document`` is the only way to build one, so holding a
+    DownloadedDocument proves the bytes are within the size limit and are the
+    supported format they claim to be. The checksum and canonical content
+    type follow from the bytes, so nothing downstream checks them again.
+    """
+
     content: bytes
-    checksum: str
     final_url: str
-    content_type: str
-    document_format: DocumentFormat = "pdf"
+    document_format: DocumentFormat
+    _proof: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._proof is not _VALIDATED:
+            raise TypeError("Build a DownloadedDocument with validated_document()")
+
+    @cached_property
+    def checksum(self) -> str:
+        return hashlib.sha256(self.content).hexdigest()
+
+    @property
+    def content_type(self) -> str:
+        return DOCUMENT_CONTENT_TYPES[self.document_format]
 
     @property
     def extension(self) -> str:
         return DOCUMENT_EXTENSIONS[self.document_format]
+
+
+def ensure_within_size_limit(
+    size: int,
+    max_bytes: int,
+    *,
+    subject: str = "Document",
+) -> None:
+    if size > max_bytes:
+        raise PermanentDocumentError(
+            f"{subject} is larger than the configured limit",
+            code="document_too_large",
+        )
 
 
 def allowed_hosts() -> frozenset[str]:
@@ -129,6 +165,14 @@ def _reject_private_resolution(url: str) -> None:
                 "Document host resolved to a non-public address",
                 code="unsafe_document_host",
             )
+
+
+def declared_length(headers) -> int:
+    """The Content-Length a response declares, or 0 when it has none."""
+    try:
+        return int(headers.get("content-length") or 0)
+    except ValueError:
+        return 0
 
 
 def _content_type(response: httpx.Response) -> str:
@@ -259,6 +303,27 @@ def validate_document_content(
     return detected
 
 
+def validated_document(
+    content: bytes,
+    *,
+    declared_content_type: str,
+    final_url: str,
+    max_bytes: int,
+) -> DownloadedDocument:
+    """Check the size and real format of downloaded bytes, the one way in."""
+    ensure_within_size_limit(len(content), max_bytes)
+    document_format = validate_document_content(
+        content,
+        declared_content_type=declared_content_type,
+    )
+    return DownloadedDocument(
+        content=content,
+        final_url=final_url,
+        document_format=document_format,
+        _proof=_VALIDATED,
+    )
+
+
 def download_document(
     url: str,
     *,
@@ -324,40 +389,23 @@ def download_document(
                         code="invalid_content_type",
                     )
 
-                length = response.headers.get("content-length")
-                if length:
-                    try:
-                        declared_length = int(length)
-                    except ValueError:
-                        declared_length = 0
-                    if declared_length > max_bytes:
-                        raise PermanentDocumentError(
-                            "Document is larger than the configured limit",
-                            code="document_too_large",
-                        )
-
+                ensure_within_size_limit(
+                    declared_length(response.headers),
+                    max_bytes,
+                )
                 chunks: list[bytes] = []
                 size = 0
                 for chunk in response.iter_bytes():
                     size += len(chunk)
-                    if size > max_bytes:
-                        raise PermanentDocumentError(
-                            "Document is larger than the configured limit",
-                            code="document_too_large",
-                        )
+                    # Stop reading as soon as the limit is passed.
+                    ensure_within_size_limit(size, max_bytes)
                     chunks.append(chunk)
 
-                content = b"".join(chunks)
-                document_format = validate_document_content(
-                    content,
+                return validated_document(
+                    b"".join(chunks),
                     declared_content_type=content_type,
-                )
-                return DownloadedDocument(
-                    content=content,
-                    checksum=hashlib.sha256(content).hexdigest(),
                     final_url=current_url,
-                    content_type=DOCUMENT_CONTENT_TYPES[document_format],
-                    document_format=document_format,
+                    max_bytes=max_bytes,
                 )
         raise PermanentDocumentError("Too many redirects", code="too_many_redirects")
     finally:

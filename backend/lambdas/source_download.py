@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -21,11 +20,12 @@ from app.messages import QueueBMessage
 from app.sources import SourceAdapter
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
-    DOCUMENT_CONTENT_TYPES,
     DownloadedDocument,
+    declared_length,
     download_document,
-    validate_document_content,
+    ensure_within_size_limit,
     validate_download_url,
+    validated_document,
 )
 from scrapers.browser import chromium_launch_options
 
@@ -110,31 +110,6 @@ def _raise_for_status(status: int, url: str) -> None:
         raise RuntimeError(f"Document request failed with HTTP {status}: {url}")
 
 
-def _build_downloaded_document(
-    content: bytes,
-    *,
-    declared_content_type: str,
-    final_url: str,
-    max_bytes: int,
-) -> DownloadedDocument:
-    if len(content) > max_bytes:
-        raise PermanentDocumentError(
-            "Document is larger than the configured limit",
-            code="document_too_large",
-        )
-    document_format = validate_document_content(
-        content,
-        declared_content_type=declared_content_type,
-    )
-    return DownloadedDocument(
-        content=content,
-        checksum=hashlib.sha256(content).hexdigest(),
-        final_url=final_url,
-        content_type=DOCUMENT_CONTENT_TYPES[document_format],
-        document_format=document_format,
-    )
-
-
 async def _request_document(
     context: BrowserContext,
     *,
@@ -154,18 +129,8 @@ async def _request_document(
     final_url = _validated_url(adapter, response.url)
     _raise_for_status(response.status, final_url)
 
-    declared_length = response.headers.get("content-length")
-    if declared_length:
-        try:
-            if int(declared_length) > max_bytes:
-                raise PermanentDocumentError(
-                    "Document is larger than the configured limit",
-                    code="document_too_large",
-                )
-        except ValueError:
-            pass
-
-    return _build_downloaded_document(
+    ensure_within_size_limit(declared_length(response.headers), max_bytes)
+    return validated_document(
         await response.body(),
         declared_content_type=_response_content_type(response.headers),
         final_url=final_url,
@@ -309,14 +274,9 @@ async def _download_wes(
         if raw_temporary_path is None:
             raise RuntimeError("Browser did not provide a downloaded file path")
         temporary_path = Path(raw_temporary_path)
-        size = temporary_path.stat().st_size
-        if size > max_bytes:
-            raise PermanentDocumentError(
-                "Document is larger than the configured limit",
-                code="document_too_large",
-            )
+        ensure_within_size_limit(temporary_path.stat().st_size, max_bytes)
         content = temporary_path.read_bytes()
-        return _build_downloaded_document(
+        return validated_document(
             content,
             declared_content_type=_content_type_for_download(
                 browser_download,

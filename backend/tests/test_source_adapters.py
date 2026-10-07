@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import hashlib
 import inspect
 import json
 import textwrap
@@ -19,7 +18,7 @@ from app.messages import QueueAMessage, QueueBMessage
 from app.sources import SOURCES
 from lambdas import analysis, download, source_download
 from lambdas.common import PermanentDocumentError
-from lambdas.download_validation import DownloadedDocument
+from lambdas.download_validation import validated_document
 from scrapers.base import Announcement
 from scrapers.companies.anz import ANZScraper
 from scrapers.companies.bhp import BHPScraper
@@ -253,13 +252,11 @@ def test_registry_discover_does_not_call_download(
 def test_csl_resolver_uses_generic_downloader(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    content = b"%PDF-1.7\ncontent"
-    expected = DownloadedDocument(
-        content=content,
-        checksum=hashlib.sha256(content).hexdigest(),
+    expected = validated_document(
+        b"%PDF-1.7\ncontent",
+        declared_content_type="application/pdf",
         final_url="https://investors.csl.com/report.pdf",
-        content_type="application/pdf",
-        document_format="pdf",
+        max_bytes=1024,
     )
     generic = MagicMock(return_value=expected)
     monkeypatch.setattr(source_download, "download_document", generic)
@@ -318,12 +315,11 @@ def test_anz_resolver_downloads_directly_without_browser(
         "https://yourir.info/resources/4d216b570d08af30/announcements/"
         "anz.asx/3A698699/ANZ_2026_Third_Quarter_Trading_Update.pdf"
     )
-    expected = DownloadedDocument(
-        content=b"%PDF-1.7\ncontent",
-        checksum="checksum",
+    expected = validated_document(
+        b"%PDF-1.7\ncontent",
+        declared_content_type="application/pdf",
         final_url=document_url,
-        content_type="application/pdf",
-        document_format="pdf",
+        max_bytes=1024,
     )
     direct_download = MagicMock(return_value=expected)
     monkeypatch.setattr(source_download, "download_document", direct_download)

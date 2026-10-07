@@ -46,7 +46,7 @@ from lambdas import (
     source_download,
 )
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
-from lambdas.download_validation import DownloadedDocument
+from lambdas.download_validation import validated_document
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
@@ -217,11 +217,11 @@ def _download(
 
 def _pdf(content: bytes = b"%PDF-1.7\ncontent"):
     def resolve(message, *, max_bytes):
-        return DownloadedDocument(
-            content=content,
-            checksum=hashlib.sha256(content).hexdigest(),
+        return validated_document(
+            content,
+            declared_content_type="application/pdf",
             final_url=str(message.document_url),
-            content_type="application/pdf",
+            max_bytes=max_bytes,
         )
 
     return resolve
