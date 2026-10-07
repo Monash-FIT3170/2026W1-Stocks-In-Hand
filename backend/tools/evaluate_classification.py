@@ -1,4 +1,4 @@
-"""CLI evaluator for the legacy and current deterministic classifiers."""
+"""CLI evaluator for the deterministic classifier and the frozen legacy baseline."""
 
 from __future__ import annotations
 
@@ -15,30 +15,27 @@ from tools.classification_evaluator import (
     load_manifest,
 )
 
-
-_LEGACY_TO_STABLE = {
-    "QuarterlyTradingUpdate": "quarterly_trading_update",
-    "HalfYearResults": "half_year_results",
-    "DividendAnnouncement": "dividend_announcement",
-    "SecurityNotification": "security_notification",
-    "CorporateAction": "corporate_action",
-    "LeadershipChange": "leadership_change",
-    "ExecutiveTranscript": "executive_transcript",
-}
+LEGACY_BASELINE = "legacy_baseline.json"
 
 
-def _legacy_predictor(
-    fixture: Mapping[str, Any], text: str
-) -> EvaluationPrediction:
-    from parsing.classifier import classify  # pylint: disable=import-outside-toplevel
-
-    category, _score, _method = classify(str(fixture.get("title") or ""), text)
-    stable_category = _LEGACY_TO_STABLE.get(category.__name__) if category else None
-    return EvaluationPrediction(
-        fixture_id=str(fixture["id"]),
-        status="classified" if stable_category else "unknown",
-        primary_category=stable_category,
+def _legacy_baseline_predictor(
+    manifest_path: Path,
+) -> Callable[[Mapping[str, Any], str], EvaluationPrediction]:
+    """Replay the deleted keyword classifier's recorded predictions."""
+    baseline = json.loads(
+        (manifest_path.parent / LEGACY_BASELINE).read_text(encoding="utf-8")
     )
+    recorded = {prediction["id"]: prediction for prediction in baseline["predictions"]}
+
+    def predict(fixture: Mapping[str, Any], _text: str) -> EvaluationPrediction:
+        prediction = recorded[str(fixture["id"])]
+        return EvaluationPrediction(
+            fixture_id=prediction["id"],
+            status=prediction["status"],
+            primary_category=prediction["primary_category"],
+        )
+
+    return predict
 
 
 def _current_predictor(
@@ -66,18 +63,18 @@ def _current_predictor(
 
 
 def evaluate_manifest(manifest_path: Path, *, classifier: str) -> dict[str, Any]:
-    """Evaluate every manifest entry with the selected classifier."""
+    """Evaluate every manifest entry with the current classifier or the legacy baseline.
+
+    The legacy keyword classifier is deleted. ``legacy-baseline`` replays the
+    predictions it made for these fixtures, recorded in ``legacy_baseline.json``.
+    """
     fixtures = load_manifest(manifest_path)
-    predictors: dict[
-        str, Callable[[Mapping[str, Any], str], EvaluationPrediction]
-    ] = {
-        "legacy": _legacy_predictor,
-        "current": _current_predictor,
-    }
-    try:
-        predictor = predictors[classifier]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported classifier: {classifier}") from exc
+    if classifier == "current":
+        predictor = _current_predictor
+    elif classifier == "legacy-baseline":
+        predictor = _legacy_baseline_predictor(manifest_path)
+    else:
+        raise ValueError(f"Unsupported classifier: {classifier}")
 
     predictions: list[EvaluationPrediction] = []
     durations_ms: list[float] = []
@@ -110,7 +107,11 @@ def evaluate_manifest(manifest_path: Path, *, classifier: str) -> dict[str, Any]
 def _parser() -> argparse.ArgumentParser:
     backend_dir = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description="Evaluate document classification")
-    parser.add_argument("--classifier", choices=("legacy", "current"), required=True)
+    parser.add_argument(
+        "--classifier",
+        choices=("current", "legacy-baseline"),
+        default="current",
+    )
     parser.add_argument(
         "--manifest",
         type=Path,

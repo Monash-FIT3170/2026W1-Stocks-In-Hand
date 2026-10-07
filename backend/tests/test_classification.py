@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from parsing.classification import ClassificationInput, classify_document
-from parsing.classifier import classify
 from parsing.analysis import ParsedDocument, apply_rules
 from parsing.classification_metadata import merge_classification_metadata
 from tools.evaluate_classification import evaluate_manifest
@@ -185,24 +184,6 @@ def test_labelled_fixture_quality_gates_pass() -> None:
         if metrics["fixture_count"] >= 5:
             assert metrics["precision"] >= 0.75
             assert metrics["recall"] >= 0.75
-
-
-def test_legacy_wrapper_delegates_and_fails_closed_for_review() -> None:
-    category, score, method = classify(
-        "Appendix 4D and Interim Financial Report",
-        "Half-year report for the six months ended 31 December 2025.",
-    )
-    ambiguous_category, ambiguous_score, ambiguous_method = classify(
-        "Q2 Trading and Guidance Update",
-        "Quarterly sales for the quarter and revised earnings guidance.",
-    )
-
-    assert category is not None and category.__name__ == "HalfYearResults"
-    assert score >= 0.65
-    assert method == "rules-v2"
-    assert ambiguous_category is None
-    assert ambiguous_score >= 0.65
-    assert ambiguous_method == "rules-v2"
 
 
 def test_apply_rules_extracts_only_for_classified_documents() -> None:
