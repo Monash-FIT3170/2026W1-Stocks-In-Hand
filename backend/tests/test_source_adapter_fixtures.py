@@ -439,8 +439,8 @@ def test_later_listing_pages_may_fail_without_losing_the_first() -> None:
     listed = asyncio.run(adapter.list_documents())
 
     first_page_articles = {
-        item["article_url"]
-        for item in org.release_links(
+        link.article_url
+        for link in org.release_links(
             page_one, page_url=source.source_url, listing_url=source.source_url
         )
     }

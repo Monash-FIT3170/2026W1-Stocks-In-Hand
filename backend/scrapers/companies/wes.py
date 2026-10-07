@@ -6,7 +6,6 @@ listing page, so download reopens the listing and clicks the same link.
 
 from __future__ import annotations
 
-from datetime import datetime
 from urllib.parse import urljoin
 
 from lambdas.common import PermanentDocumentError
@@ -15,6 +14,7 @@ from ..adapter import DocumentRequest, SourceAdapter
 from ..base import Announcement
 from ..fetching import Page, Render
 from ..html import Element, parse_html
+from ..parsing import parse_date
 
 ROWS = "article.asx-announce div.asx-results li"
 LISTING = Render(wait_for=ROWS, wait_for_timeout_ms=15_000, required=True)
@@ -67,9 +67,8 @@ def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcem
         href = link.get("href")
         if not date_text or not title or not href:
             continue
-        try:
-            date = datetime.strptime(date_text, "%d.%m.%y")
-        except ValueError:
+        date = parse_date(date_text, ("%d.%m.%y",))
+        if date is None:
             continue
         announcements.append(
             Announcement(

@@ -9,17 +9,20 @@ PDF on Euroland's CDN.
 
 from __future__ import annotations
 
-import logging
-import re
-from datetime import datetime
 from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
+from ..article_listings import (
+    DAY_FIRST_DATES,
+    ArticleLink,
+    article_pdf_url,
+    dated_links,
+    resolved_announcements,
+)
 from ..base import Announcement
 from ..fetching import Page, Render, SourceUnreachableError
-from ..html import Element, nearby_text_levels, parse_html
+from ..html import parse_html
 
-LOGGER = logging.getLogger(__name__)
 # The ASX tab's widget, used when the wrapper page cannot be read (for
 # example after Rio rotates the v= revision).
 FALLBACK_ASX_FEED_URL = (
@@ -53,41 +56,24 @@ class RIOAdapter(SeededBrowserDownload, SourceAdapter):
     )
 
     async def _list_documents(self) -> list[Announcement]:
-        announcements: list[Announcement] = []
-        failures: list[SourceUnreachableError] = []
         async with self.fetcher.session(ignore_https_errors=True) as web:
             try:
-                feed_url = asx_feed_url(await web.render(self.source_url, WRAPPER), self.source_url)
+                wrapper = await web.render(self.source_url, WRAPPER)
+                feed_url = asx_feed_url(wrapper, self.source_url)
             except SourceUnreachableError:
                 feed_url = FALLBACK_ASX_FEED_URL
             feed = await web.render(feed_url, feed_render(self.clock().year))
-            for item in release_links(feed, feed_url=feed_url):
-                try:
-                    article = await web.render(item["article_url"], ARTICLE)
-                except SourceUnreachableError as exc:
-                    LOGGER.warning("RIO release %s failed: %s", item["article_url"], exc)
-                    failures.append(exc)
-                    continue
-                pdf_url = article_pdf_url(article, item["article_url"])
-                if not pdf_url:
-                    continue
-                announcements.append(
-                    Announcement(
-                        ticker=self.ticker,
-                        title=item["title"],
-                        date=item["date"],
-                        pdf_url=pdf_url,
-                        source_url=item["article_url"],
-                        metadata={
-                            "listing_url": feed_url,
-                            "article_url": item["article_url"],
-                            "raw_date": item["raw_date"],
-                        },
-                    )
-                )
-        if failures and not announcements:
-            raise failures[0]
-        return _dedupe(announcements)
+
+            async def pdf_url_for(link: ArticleLink) -> str | None:
+                article = await web.render(link.article_url, ARTICLE)
+                return article_pdf_url(article, link.article_url)
+
+            return await resolved_announcements(
+                release_links(feed, feed_url=feed_url),
+                pdf_url_for,
+                ticker=self.ticker,
+                listing_url=feed_url,
+            )
 
 
 def asx_feed_url(wrapper: Page, wrapper_url: str) -> str:
@@ -104,103 +90,11 @@ def asx_feed_url(wrapper: Page, wrapper_url: str) -> str:
     return FALLBACK_ASX_FEED_URL
 
 
-def release_links(feed: Page, *, feed_url: str) -> list[dict]:
-    items: list[dict] = []
-    seen: set[str] = set()
-    for link in parse_html(feed.html).select(RELEASE_LINK):
-        href = link.get("href")
-        text = link.text.strip()
-        if not href or not text:
-            continue
-        article_url = urljoin(feed_url, href)
-        date = _nearby_date(link)
-        if date is None or article_url in seen:
-            continue
-        seen.add(article_url)
-        items.append(
-            {
-                "title": text,
-                "date": date,
-                "raw_date": date.isoformat(),
-                "article_url": article_url,
-            }
-        )
-    return items
-
-
-def article_pdf_url(article: Page, article_url: str) -> str | None:
-    for link in parse_html(article.html).select("a[href*='.pdf']"):
-        href = link.get("href")
-        if not href:
-            continue
-        full_url = urljoin(article_url, href)
-        if ".pdf" in full_url.lower():
-            return full_url
-    match = re.search(r'https?://[^"\']+\.pdf(?:\?[^"\']*)?', article.html)
-    if match:
-        return match.group(0)
-    relative = re.search(r'["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']', article.html)
-    if relative:
-        return urljoin(article_url, relative.group(1))
-    return None
-
-
-def _dedupe(announcements: list[Announcement]) -> list[Announcement]:
-    seen: set[str] = set()
-    result = []
-    for announcement in announcements:
-        key = announcement.pdf_url or announcement.source_url or announcement.title
-        if key not in seen:
-            seen.add(key)
-            result.append(announcement)
-    return result
-
-
-def _nearby_date(link: Element) -> datetime | None:
-    time_value, levels = nearby_text_levels(link)
-    if time_value:
-        parsed = _parse_date(time_value.strip()[:19].replace("T", " "))
-        if parsed:
-            return parsed
-    for text in levels:
-        if len(text) > 2000:
-            break
-        parsed = _first_date_in_text(text)
-        if parsed:
-            return parsed
-    return None
-
-
-def _first_date_in_text(text: str) -> datetime | None:
-    for pattern in (
-        r"\d{1,2}\s+[A-Za-z]+\s+\d{4}",  # 29 July 2026
-        r"\d{1,2}/\d{1,2}/\d{4}",  # 29/07/2026
-        r"\d{1,2}\.\d{1,2}\.\d{2}\b",  # 29.07.26
-        r"\d{4}-\d{2}-\d{2}",  # 2026-07-29
-    ):
-        match = re.search(pattern, text)
-        if match:
-            parsed = _parse_date(match.group(0))
-            if parsed:
-                return parsed
-    return None
-
-
-def _parse_date(value: str) -> datetime | None:
-    value = value.strip()
-    for fmt in (
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
-        "%d %B %Y",
-        "%d %b %Y",
-        "%d/%m/%Y",
-        "%d.%m.%y",
-    ):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+def release_links(feed: Page, *, feed_url: str) -> list[ArticleLink]:
+    return dated_links(
+        feed,
+        base_url=feed_url,
+        rules=DAY_FIRST_DATES,
+        title_for=lambda _url, text: text or None,
+        selector=RELEASE_LINK,
+    )

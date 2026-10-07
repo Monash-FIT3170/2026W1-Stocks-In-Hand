@@ -18,6 +18,7 @@ from ..adapter import DocumentRequest, SourceAdapter
 from ..base import Announcement
 from ..fetching import Page, Render, SourceUnreachableError
 from ..html import Element, parse_html
+from ..parsing import DAY_MONTH_YEAR, ISO, SLASHED, first_date, unique
 
 # BHP keeps some page resources open indefinitely; the committed HTML is
 # enough for the links.
@@ -77,7 +78,6 @@ def _without_scripts(html: str) -> str:
 
 def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcement]:
     announcements: list[Announcement] = []
-    seen: set[str] = set()
     for link in parse_html(page.html).select("a[href]"):
         href = link.get("href")
         text = link.text.strip()
@@ -88,9 +88,8 @@ def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcem
         if not _looks_like_article(article_url, title):
             continue
         date = _nearby_date(link)
-        if date is None or article_url in seen:
+        if date is None:
             continue
-        seen.add(article_url)
         announcements.append(
             Announcement(
                 ticker=ticker,
@@ -101,7 +100,7 @@ def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcem
                 metadata={"article_url": article_url, "source_id": article_url},
             )
         )
-    return announcements
+    return unique(announcements, key=lambda item: item.pdf_url)
 
 
 def article_pdf_url(article: Page) -> str:
@@ -130,18 +129,8 @@ def _nearby_date(link: Element) -> datetime | None:
     container = link.closest("article, li, .card, .search-result, .result, div")
     if container is None:
         return None
-    text = container.text
-    for pattern in (
-        r"\b\d{1,2}\s+[A-Za-z]+\s+\d{4}\b",  # 7 May 2026
-        r"\b\d{1,2}/\d{1,2}/\d{4}\b",  # 07/05/2026
-        r"\b\d{4}-\d{2}-\d{2}\b",  # 2026-05-07
-    ):
-        match = re.search(pattern, text)
-        if not match:
-            continue
-        for fmt in ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(match.group(0), fmt)
-            except ValueError:
-                continue
-    return None
+    return first_date(
+        container.text,
+        (rf"\b{DAY_MONTH_YEAR}\b", rf"\b{SLASHED}\b", rf"\b{ISO}\b"),
+        ("%d %B %Y", "%d %b %Y", "%d/%m/%Y", "%Y-%m-%d"),
+    )

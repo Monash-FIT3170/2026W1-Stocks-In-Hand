@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from urllib.parse import urljoin, urlsplit
 
 from ..adapter import DocumentRequest, SourceAdapter
 from ..base import Announcement
 from ..fetching import Page, Render
 from ..html import parse_html
+from ..parsing import parse_date
 
 LISTING = Render(wait_for="div.list-item", wait_for_timeout_ms=30_000, required=True)
 
@@ -45,7 +45,7 @@ def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcem
         href = link.get("href")
         if not title or not href:
             continue
-        date = _parse_date(date_element.text.strip())
+        date = parse_date(date_element.text, ("%d-%b-%Y", "%d-%B-%Y"))
         if date is None:
             continue
         document_url = urljoin(source_url, href)
@@ -62,11 +62,3 @@ def parse_listing(page: Page, *, ticker: str, source_url: str) -> list[Announcem
         )
     return announcements
 
-
-def _parse_date(value: str) -> datetime | None:
-    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None

@@ -8,13 +8,13 @@ two newest years.
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from urllib.parse import urljoin
 
 from ..adapter import SeededBrowserDownload, SourceAdapter
 from ..base import Announcement
 from ..fetching import Page, Render
 from ..html import Element, parse_html
+from ..parsing import date_text, parse_date, unique
 
 IRM_BASE = "https://coh.live.irmau.com/irm/ShowCategory.aspx"
 YEAR_PAGE = Render(wait_until="networkidle", timeout_ms=120_000, settle_ms=1_500)
@@ -68,12 +68,8 @@ def parse_year_pages(
                 rows.append(row)
 
     announcements: list[Announcement] = []
-    seen: set[str] = set()
-    for row in rows:
-        if row["pdf_url"] in seen:
-            continue
-        seen.add(row["pdf_url"])
-        date = _parse_date(row["date_str"])
+    for row in unique(rows, key=lambda row: row["pdf_url"]):
+        date = parse_date(row["date_str"], ("%d-%b-%Y", "%d-%B-%Y", "%d %b %Y", "%d %B %Y"))
         if date is None:
             continue
         announcements.append(
@@ -104,29 +100,20 @@ def _row(link: Element, feed: str) -> dict[str, str | None] | None:
     if "/irm/pdf/" not in lowered or not lowered.endswith(".pdf"):
         return None
     row_text = (link.closest("tr, li, article, section, div") or link).text
-    match = re.search(r"\b\d{1,2}-[A-Za-z]{3}-\d{4}\b", re.sub(r"\s+", " ", row_text))
-    if not match:
+    raw_date = date_text(row_text, (r"\d{1,2}-[A-Za-z]{3}-\d{4}",))
+    if not raw_date:
         return None
-    date_text = match.group(0)
     title = re.sub(r"\s+", " ", title_text).strip()
     title = re.sub(r"\bopens? in (a )?new window\b", "", title, flags=re.IGNORECASE)
     title = title.strip(" -:\t")
     if not title:
         return None
-    year = re.search(r"(\d{4})$", date_text)
+    year = re.search(r"(\d{4})$", raw_date)
     return {
         "title": title,
-        "date_str": date_text,
+        "date_str": raw_date,
         "pdf_url": pdf_url,
         "feed_url": feed,
         "year": year.group(1) if year else None,
     }
 
-
-def _parse_date(value: str) -> datetime | None:
-    for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%d %b %Y", "%d %B %Y"):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
