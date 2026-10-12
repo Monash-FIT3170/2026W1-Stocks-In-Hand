@@ -13,6 +13,7 @@ from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse
+from app.services.traceability import trace_claims
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -410,6 +411,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
         # named latest-signal field above.
         "public_sentiment_pct": confidence_pct,
         "clarity": _clarity_for_artifact(latest_artifact),
+        "claims": trace_claims(latest_artifact),
         "sources": sources,
     }
     aside = {
@@ -543,6 +545,7 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
             "source_name": _metadata_source_name(artifact),
             "source_label": _source_action_label(artifact),
             "sources": _sources_for_artifact(artifact),
+            "claims": trace_claims(artifact),
         }
         for artifact in artifacts
     ]
@@ -591,6 +594,7 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
                 "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
                 "tone": "green",
                 "sources": _sources_for_artifact(artifact),
+                "claims": trace_claims(artifact),
             }
         )
 

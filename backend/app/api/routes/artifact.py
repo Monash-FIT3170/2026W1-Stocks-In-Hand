@@ -4,6 +4,8 @@ from uuid import UUID
 from app.database.connection import get_db
 from app.schemas.artifact import ArtifactCreate, ArtifactResponse
 from app.crud import artifact as crud
+from app.schemas.traceability import TracedClaim
+from app.services.traceability import trace_claims
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -76,3 +78,12 @@ def get_artifact(artifact_id: UUID, db: Session = Depends(get_db)):
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
+
+
+@router.get("/{artifact_id}/claims", response_model=list[TracedClaim])
+def get_artifact_claims(artifact_id: UUID, db: Session = Depends(get_db)):
+    """Return per-claim quotations, revalidated against the stored source text."""
+    artifact = crud.get_artifact(db, artifact_id=artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return trace_claims(artifact)

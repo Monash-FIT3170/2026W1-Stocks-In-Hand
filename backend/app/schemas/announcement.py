@@ -2,7 +2,9 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from app.schemas.traceability import TracedClaim
 
 
 class AnnouncementResponse(BaseModel):
@@ -18,6 +20,7 @@ class AnnouncementResponse(BaseModel):
     changed: str
     matters: str
     url: Optional[str]
+    claims: list[TracedClaim] = Field(default_factory=list)
 
 
 class TrendingAnnouncementResponse(BaseModel):

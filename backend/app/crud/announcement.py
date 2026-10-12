@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.traceability import trace_claims
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
@@ -125,6 +126,7 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
 
     return AnnouncementResponse(
         id=artifact.id,
+        claims=trace_claims(artifact),
         ticker=_ticker_symbol(artifact),
         tag=_format_label(metadata.get("category"), artifact.artifact_type),
         source_type=source_type,
