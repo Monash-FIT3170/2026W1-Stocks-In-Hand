@@ -1,0 +1,92 @@
+{
+  "nodes": [
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Open navigation",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 42
+    },
+    {
+      "height": 680,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "88px 20px 104px",
+      "size": "16px",
+      "tag": "SECTION",
+      "text": "EMAIL ALERTS\n\nThis link is incomplete\n\nOpen the full unsubscribe link from your email, or ",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 375
+    },
+    {
+      "height": 15,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "11px",
+      "tag": "P",
+      "text": "EMAIL ALERTS",
+      "tracking": "0.88px",
+      "weight": "650",
+      "width": 86
+    },
+    {
+      "height": 72,
+      "lineHeight": "36px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "36px",
+      "tag": "H1",
+      "text": "This link is incomplete",
+      "tracking": "-1.8px",
+      "weight": "550",
+      "width": 241
+    },
+    {
+      "height": 77,
+      "lineHeight": "25.6px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "Open the full unsubscribe link from your email, or manage alerts after signing in.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 241
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "ASX company research with the source material kept close.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 57,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "24px 0px 0px",
+      "size": "12px",
+      "tag": "P",
+      "text": "© 2026 StonksInHand. AI-assisted briefs are informational and should be checked against or",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

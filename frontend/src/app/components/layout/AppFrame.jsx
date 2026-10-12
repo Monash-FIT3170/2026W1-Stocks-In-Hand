@@ -62,7 +62,10 @@ export function AppFrame({ children }) {
   const [isCompact, setIsCompact] = useState(false)
   const menuButtonRefs = useRef({})
   const headerRef = useRef(null)
+  const mobileButtonRef = useRef(null)
   const routeTitle = titleForPath(pathname)
+  const normalizedPath = pathname.replace(/\/$/, "") || "/"
+  const publicPage = ["/", "/about", "/data-sources", "/terms"].includes(normalizedPath)
   const active = pathname.startsWith("/announcements")
     ? "announcements"
     : pathname.startsWith("/search")
@@ -142,6 +145,7 @@ export function AppFrame({ children }) {
         menuButtonRefs.current[openMenu]?.focus()
       }
       setMobileOpen(false)
+      if (mobileOpen) mobileButtonRef.current?.focus()
     }
 
     document.addEventListener("pointerdown", handlePointerDown)
@@ -150,7 +154,7 @@ export function AppFrame({ children }) {
       document.removeEventListener("pointerdown", handlePointerDown)
       document.removeEventListener("keydown", handleKeyDown)
     }
-  }, [openMenu])
+  }, [openMenu, mobileOpen])
 
   useEffect(() => {
     let frame = 0
@@ -174,51 +178,21 @@ export function AppFrame({ children }) {
     if (!mobileOpen) return undefined
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = "hidden"
-    return () => { document.body.style.overflow = previousOverflow }
-  }, [mobileOpen])
-
-  useEffect(() => {
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    const selector = "main article, main [class*='featureCard'], main [class*='resultCard'], main [class*='sideCard'], main [class*='storyCard'], main [class*='timelineCard']"
-    const tracked = new Set()
-    const observer = reduceMotion ? null : new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return
-        entry.target.dataset.revealed = "true"
-        observer.unobserve(entry.target)
-      })
-    }, { rootMargin: "0px 0px -8%", threshold: 0.08 })
-
-    function register(root = document) {
-      root.querySelectorAll?.(selector).forEach((element, index) => {
-        if (tracked.has(element)) return
-        tracked.add(element)
-        element.dataset.reveal = "true"
-        element.style.setProperty("--reveal-delay", `${Math.min(index % 5, 4) * 45}ms`)
-        if (reduceMotion) element.dataset.revealed = "true"
-        else observer.observe(element)
-      })
+    const desktop = window.matchMedia("(min-width: 768px)")
+    function closeOnDesktop() {
+      if (!desktop.matches) return
+      if (document.activeElement?.closest("#mobile-navigation") || document.activeElement === mobileButtonRef.current) {
+        headerRef.current?.querySelector("a")?.focus()
+      }
+      setMobileOpen(false)
     }
-
-    const frame = window.requestAnimationFrame(() => register())
-    const mutationObserver = new MutationObserver((records) => {
-      records.forEach((record) => record.addedNodes.forEach((node) => {
-        if (node.nodeType === Node.ELEMENT_NODE) register(node)
-      }))
-    })
-    mutationObserver.observe(document.getElementById("main-content"), { childList: true, subtree: true })
-
+    desktop.addEventListener("change", closeOnDesktop)
+    closeOnDesktop()
     return () => {
-      window.cancelAnimationFrame(frame)
-      mutationObserver.disconnect()
-      observer?.disconnect()
-      tracked.forEach((element) => {
-        delete element.dataset.reveal
-        delete element.dataset.revealed
-        element.style.removeProperty("--reveal-delay")
-      })
+      document.body.style.overflow = previousOverflow
+      desktop.removeEventListener("change", closeOnDesktop)
     }
-  }, [pathname])
+  }, [mobileOpen])
 
   const researchLinks = [
     { href: "/search", title: "Search" },
@@ -239,8 +213,8 @@ export function AppFrame({ children }) {
 
   return (
     <div className={styles.appShell}>
-      <a className={styles.skipLink} href="#main-content">Skip to main content</a>
-      <header className={`${styles.topNav} ${isCompact ? styles.topNavCompact : ""}`} ref={headerRef}>
+      <a className={styles.skipLink} href="#main-content" inert={mobileOpen || undefined}>Skip to main content</a>
+      <header className={`${styles.topNav} ${isCompact && publicPage ? styles.topNavCompact : ""}`} ref={headerRef}>
         <div className={styles.navInner}>
           <Link aria-label="StonksInHand home" className={styles.brandButton} href="/">
             <span className={styles.brandMark} aria-hidden="true"><i /><i /><i /></span>
@@ -258,12 +232,12 @@ export function AppFrame({ children }) {
             {hasSession && isCognitoAuthEnabled() ? <Link className={styles.settingsLink} href="/mfa-setup">Security</Link> : null}
             <Link className={styles.signInButton} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Sign out" : "Sign in"}</Link>
           </div>
-          <button aria-controls="mobile-navigation" aria-expanded={mobileOpen} aria-label={mobileOpen ? "Close navigation" : "Open navigation"} className={styles.mobileMenuButton} onClick={() => setMobileOpen((value) => !value)} type="button"><span /><span /></button>
+          <button ref={mobileButtonRef} aria-controls="mobile-navigation" aria-expanded={mobileOpen} aria-label={mobileOpen ? "Close navigation" : "Open navigation"} className={styles.mobileMenuButton} onClick={() => setMobileOpen((value) => !value)} type="button"><span /><span /></button>
         </div>
-        <div className={`${styles.megaMenuWrap} ${styles.megaMenuWrapCompact} ${currentMenu ? styles.megaMenuWrapOpen : ""}`} id="desktop-mega-menu">
-          <div className={`${styles.megaMenu} ${styles.megaMenuCompact}`}>
+        <div className={`${styles.megaMenuWrap} ${currentMenu ? styles.megaMenuWrapOpen : ""}`} id="desktop-mega-menu">
+          <div className={`${styles.megaMenu}`}>
             <div className={styles.megaMenuIntro}><span>{currentMenu?.heading}</span><p>{currentMenu?.description}</p></div>
-            <div className={`${styles.megaMenuGrid} ${styles.megaMenuGridSingle}`}>
+            <div className={`${styles.megaMenuGrid}`}>
               {currentMenu?.links.map((item) => <Link href={item.href} key={item.href}><strong>{item.title}</strong><span>{item.description}</span></Link>)}
             </div>
           </div>
@@ -283,10 +257,10 @@ export function AppFrame({ children }) {
         </div>
       </header>
       <p className={styles.routeAnnouncer} aria-live="polite" aria-atomic="true">{routeTitle}</p>
-      <main className={styles.mainContent} id="main-content" tabIndex="-1">
+      <main className={styles.mainContent} id="main-content" tabIndex="-1" inert={mobileOpen || undefined}>
         {children}
       </main>
-      <footer className={styles.footer}>
+      <footer className={`${styles.footer} ${publicPage ? "" : styles.footerCompact}`} inert={mobileOpen || undefined}>
         <div className={styles.footerBrand}>
           <strong>StonksInHand</strong>
           <p>ASX company research with the source material kept close.</p>

@@ -103,6 +103,7 @@ function SearchContent() {
     [tickers, query]
   )
   const isPreview = tickers.some((ticker) => ticker.is_preview)
+  const hasMarketCap = tickers.some((ticker) => Number.isFinite(Number(ticker.market_cap)) && Number(ticker.market_cap) > 0)
 
   function handleSearch(event) {
     event.preventDefault()
@@ -113,19 +114,15 @@ function SearchContent() {
 
   return (
     <section className={styles.contentPage}>
+        <header className={styles.searchHeader}>
+          <h1>{query ? <>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></> : "Browse ASX companies"}</h1>
+          <p>{isLoading ? "Loading companies from the database." : error ? "Company results could not be retrieved." : `${results.length} ${results.length === 1 ? "company" : "companies"} ${query ? "matched your search" : "available"}.`}</p>
         <form className={styles.pageSearchBar} onSubmit={handleSearch}>
           <SearchIcon />
-          <input aria-label="Search company or ticker" value={value} onChange={(event) => setValue(event.target.value)} />
+          <input aria-label="Search company or ticker" placeholder="Company name or ticker" value={value} onChange={(event) => setValue(event.target.value)} />
           <button className={styles.searchSubmit} type="submit">Search</button>
         </form>
-        <div className={styles.searchHeader}>
-          <h1>{query ? <>Search results for <span>&quot;{query.toUpperCase()}&quot;</span></> : "Browse ASX companies"}</h1>
-          <p>{isLoading
-            ? "Loading companies from the database."
-            : error
-              ? "Company results could not be retrieved."
-              : `${results.length} ${results.length === 1 ? "company" : "companies"} ${query ? "matched your search" : "available"}.`}</p>
-        </div>
+        </header>
         {isPreview ? <div className={styles.previewNotice}><strong>Local preview data</strong><span>Illustrative companies are shown because the local API is not connected.</span></div> : null}
         {error ? (
           <div className={styles.emptyCard} role="alert">
@@ -134,17 +131,17 @@ function SearchContent() {
             <button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button>
           </div>
         ) : null}
-        <div className={styles.resultsStack}>
+        {!isLoading && !error && tickers.length > 0 && !hasMarketCap && <p className={styles.collectionNote}>Market capitalisation is unavailable for this collection.</p>}
+        <div className={styles.resultsStack} data-has-market-cap={hasMarketCap}>
           {results.map((result) => (
             <Link className={styles.resultCard} key={result.id} href={`/ticker/${result.symbol}`}>
               <div className={styles.resultContent}>
-                <div className={styles.resultMeta}><span>{result.symbol}</span><strong>{result.sector || result.exchange}</strong></div>
-                <h2>{result.company_name}</h2>
-                <p>{result.industry || "Company profile loaded from the StonksInHand database."}</p>
-                <div className={styles.resultStats}>
-                  <div><span>Exchange</span><strong>{result.exchange}</strong></div>
-                  <div><span>Market cap</span><strong>{formatMarketCap(result.market_cap)}</strong></div>
-                </div>
+                <span className={styles.resultTicker}>{result.symbol}<small>{result.exchange}</small></span>
+                <div className={styles.resultIdentity}><h2>{result.company_name}</h2><p>{result.industry || "Company profile loaded from the StonksInHand database."}</p></div>
+                <span className={styles.resultSector}>{result.sector || result.exchange}</span>
+                {hasMarketCap && <div className={styles.resultStats}>
+                  <span>Market cap</span><strong>{formatMarketCap(result.market_cap)}</strong>
+                </div>}
               </div>
             </Link>
           ))}

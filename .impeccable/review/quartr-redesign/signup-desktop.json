@@ -1,0 +1,21 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "40px",
+      "text": "Create your watchlist",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "Your account",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1440,
+    "height": 1000,
+    "width": 1440
+  }
+}

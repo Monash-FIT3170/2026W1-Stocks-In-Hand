@@ -159,10 +159,11 @@ export default function SignInRoute() {
   }
 
   return (
-    <section className={styles.authPage}>
+    <section className={`${styles.authPage} ${styles.authSplitPage}`}>
+      <div className={styles.authComposition}>
+        <header className={styles.authIntro}><h1>Welcome back</h1><p>Access your saved ASX watchlist and company research.</p><Link href="/search">Explore company research</Link></header>
         <form className={styles.authCard} onSubmit={handleSubmit}>
-          <h1>Welcome back</h1>
-          <p>Access your saved ASX watchlist and company research.</p>
+          <h2>{awaitingMfa ? "Verify your sign-in" : "Sign in"}</h2>
           {!awaitingMfa ? (
             <>
               <AuthField
@@ -217,6 +218,7 @@ export default function SignInRoute() {
           ) : null}
           <span className={styles.authSwap}>Don&apos;t have an account?<Link href="/sign-up">Sign up</Link></span>
         </form>
+      </div>
     </section>
   )
 }

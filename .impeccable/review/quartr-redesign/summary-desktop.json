@@ -1,0 +1,86 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "32px",
+      "text": "Research summary",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Topical research",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Revenue",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Strategy",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Risk",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Dividend",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Organisation",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "Public discussion",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Revenue evidence",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Filing details",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Latest filing signal",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Filing activity themes",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Facts & interpretation",
+      "weight": "550"
+    },
+    {
+      "size": "18px",
+      "text": "This research has not been classified",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Public discussion coverage",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1430,
+    "height": 1000,
+    "width": 1440
+  }
+}

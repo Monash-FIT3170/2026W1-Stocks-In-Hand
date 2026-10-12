@@ -80,7 +80,6 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
     <section aria-label="Announcement filters" className={styles.filterPanel}>
       <div className={styles.panelHeading}>
         <div>
-          <span className={styles.panelKicker}>Market filters</span>
           <h2>Refine the feed</h2>
         </div>
         {hasFilters ? <Link className={styles.resetLink} href="/announcements">Reset all</Link> : null}
@@ -89,7 +88,7 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
         <label className={styles.field}>
           <span>Sector</span>
           <select aria-label="Filter by sector" onChange={handleSectorChange} value={sector}>
-            <option value="">All market sectors</option>
+            <option value="">All sectors</option>
             {SECTORS.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>

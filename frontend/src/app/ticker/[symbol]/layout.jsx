@@ -1,4 +1,5 @@
-import { TickerBriefShell } from "../../components/ticker/TickerBriefShell"
+import { CompanyData } from "../../components/company/CompanyData"
+import { CompanyWorkspace } from "../../components/company/CompanyWorkspace"
 
 const DEPLOYED_TICKERS = [
   "ANZ",
@@ -29,5 +30,5 @@ export async function generateMetadata({ params }) {
 
 export default async function TickerLayout({ children, params }) {
   const { symbol } = await params
-  return <TickerBriefShell symbol={symbol.toUpperCase()}>{children}</TickerBriefShell>
+  return <CompanyData key={symbol.toUpperCase()} symbol={symbol.toUpperCase()}><CompanyWorkspace>{children}</CompanyWorkspace></CompanyData>
 }

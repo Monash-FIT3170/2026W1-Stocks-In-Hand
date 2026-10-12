@@ -1,0 +1,113 @@
+Browser tab: 4, Title: "COH news | StonksInHand", URL: "http://127.0.0.1:3000/ticker/COH/news/".
+1 AXWebArea COH news | StonksInHand, URL: 127.0.0.1:3000/ticker/COH/news/
+	2 link Description: Skip to main content, Value: 127.0.0.1:3000/ticker/COH/news/#main-content
+	3 container
+		4 link Description: StonksInHand home, Value: 127.0.0.1:3000/
+		5 container Primary
+			6 link Description: Search, Value: 127.0.0.1:3000/search/
+			7 link Description: Market feed, Value: 127.0.0.1:3000/announcements/
+			8 button (collapsed) About, Secondary Actions: Expand
+		9 link Description: Sign in, Value: 127.0.0.1:3000/sign-in/
+	10 text COH News
+	11 container main-content
+		12 container
+			13 link Description: Company search, Value: 127.0.0.1:3000/search/
+			14 text COH Cochlear Limited Health Care Latest source  Oct 12, 2026
+			15 container Latest available quote
+				16 text Latest available quote
+				17 text $129.54
+				18 text +0.90% daily change
+			19 link Description: Open watchlist, Value: 127.0.0.1:3000/watchlist/
+		20 container
+			21 container COH research views
+				22 link Description: Research summary, Value: 127.0.0.1:3000/ticker/COH/
+				23 link Description: Source records, Value: 127.0.0.1:3000/ticker/COH/news/
+				24 link Description: Deep dive, Value: 127.0.0.1:3000/ticker/COH/deep-dive/
+			25 link Description: About the data, Value: 127.0.0.1:3000/data-sources/
+		39 text Selected record: Ceasing to be a substantial holder
+		40 heading Source records, Value: 1
+			41 text Source records
+		42 container
+			43 text Inspect the material behind  COH  research.
+		44 container
+			45 text Search records
+			46 search text field (settable) Search records
+		47 container
+			48 button (collapsed) Filters & order, Secondary Actions: Expand
+				49 text Filters & order
+		50 container
+			51 text 10  of  10  collected records
+		52 content list Collected source records
+			53 checkbox Official filing Oct 12, 2026 Ceasing to be a substantial holder ASX announcement, Value: 1
+				54 text Official filing
+				55 text Oct 12, 2026
+				56 text Ceasing to be a substantial holder
+				57 text ASX announcement
+			58 checkbox Publisher news Oct 10, 2026 COH share price: why investors like healthcare shares raskmedia.com.au, Value: 0
+				59 text Publisher news
+				60 text Oct 10, 2026
+				61 text COH share price: why investors like healthcare shares
+				62 text raskmedia.com.au
+			63 checkbox Value: 0, Publisher news Oct 9, 2026 Dale Gillham: The Billion-Dollar AI Investment Trap Facing Tech Giants themarketherald.com.au
+				64 text Publisher news
+				65 text Oct 9, 2026
+				66 text Dale Gillham: The Billion-Dollar AI Investment Trap Facing Tech Giants
+				67 text themarketherald.com.au
+			68 checkbox Official filing Oct 6, 2026 Change in substantial holding ASX announcement, Value: 0
+				69 text Official filing
+				70 text Oct 6, 2026
+				71 text Change in substantial holding
+				72 text ASX announcement
+			73 checkbox Publisher news Oct 4, 2026 DOW and Cochlear Ltd: 2 ASX shares to dig into raskmedia.com.au, Value: 0
+				74 text Publisher news
+				75 text Oct 4, 2026
+				76 text DOW and Cochlear Ltd: 2 ASX shares to dig into
+				77 text raskmedia.com.au
+			78 checkbox Value: 0, Publisher news Oct 2, 2026 Dale Gillham: Is Australia Facing a Real Recession or Just Talk? themarketherald.com.au
+				79 text Publisher news
+				80 text Oct 2, 2026
+				81 text Dale Gillham: Is Australia Facing a Real Recession or Just Talk?
+				82 text themarketherald.com.au
+			83 checkbox Value: 0, Publisher news Oct 1, 2026 Thursday’s HotCopper trends: Meteoric Resources, Marmota, Manuka Resources and other daily topics themarketherald.com.au
+				84 text Publisher news
+				85 text Oct 1, 2026
+				86 text Thursday’s HotCopper trends: Meteoric Resources, Marmota, Manuka Resources and other daily topics
+				87 text themarketherald.com.au
+			88 checkbox Official filing Sep 29, 2026 Defence of Class Action Proceedings ASX announcement, Value: 0
+				89 text Official filing
+				90 text Sep 29, 2026
+				91 text Defence of Class Action Proceedings
+				92 text ASX announcement
+			93 checkbox Publisher news Sep 27, 2026 Are COH shares or WOW shares better value in 2026? raskmedia.com.au, Value: 0
+				94 text Publisher news
+				95 text Sep 27, 2026
+				96 text Are COH shares or WOW shares better value in 2026?
+				97 text raskmedia.com.au
+			98 checkbox Value: 0, Publisher news Sep 25, 2026 Dale Gillham: Why Rate Hikes Alone Won’t Fix Australia’s Economic Squeeze themarketherald.com.au
+				99 text Publisher news
+				100 text Sep 25, 2026
+				101 text Dale Gillham: Why Rate Hikes Alone Won’t Fix Australia’s Economic Squeeze
+				102 text themarketherald.com.au
+		103 container Description: Selected source record, ID: source-reader
+			104 text Official filing
+			105 text Oct 12, 2026
+			106 heading Ceasing to be a substantial holder, Value: 2
+				107 text Ceasing to be a substantial holder
+			108 link Description: View original ASX filing, Value: coh.live.irmau.com/irm/pdf/df1c0c91-1b27-4ddc-af40-0803d06300e6/Platform/ListPage/Ceasing-to-be-a-substantial-holder.pdf
+			109 text Analysis is incomplete for this record. Read the original material for the full details.
+			110 text AI-assisted context. The original material remains the authority for this record.
+		111 text This view contains up to ten persisted records returned by the service. It is not an exhaustive archive.
+	29 container
+		30 container Research
+			31 link Description: Company search, Value: 127.0.0.1:3000/search/
+			32 link Description: Announcements, Value: 127.0.0.1:3000/announcements/
+			33 link Description: Watchlist, Value: 127.0.0.1:3000/watchlist/
+		34 container Company
+			35 link Description: About, Value: 127.0.0.1:3000/about/
+			36 link Description: Terms, Value: 127.0.0.1:3000/terms/
+			37 link Description: Data sources, Value: 127.0.0.1:3000/data-sources/
+		38 text © 2026 StonksInHand. AI-assisted briefs are informational and should be checked against original sources.
+	112 pop up button (collapsed) Description: Open Next.js Dev Tools, ID: next-logo, Secondary Actions: Expand
+		113 image
+
+The focused UI element is 1 AXWebArea COH news | StonksInHand, URL: 127.0.0.1:3000/ticker/COH/news/

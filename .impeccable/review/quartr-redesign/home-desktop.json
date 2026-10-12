@@ -1,0 +1,41 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "64px",
+      "text": "Understand any ASX stock\nin 60 seconds",
+      "weight": "550"
+    },
+    {
+      "size": "19px",
+      "text": "Research starts here.",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Ceasing to be a substantial holder",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Briefs in plain English",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Material updates in focus",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Source-aware by design",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1430,
+    "height": 1000,
+    "width": 1440
+  }
+}

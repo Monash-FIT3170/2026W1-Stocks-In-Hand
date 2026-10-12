@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { companyRoute } from "./recordPresentation"
 import styles from "../research/ResearchSurface.module.css"
 
 export function TrendingStocks({ stocks = [] }) {
@@ -12,13 +13,14 @@ export function TrendingStocks({ stocks = [] }) {
         {stocks.length > 0
           ? stocks.map((item, index) => {
               const symbol = typeof item === "string" ? item : item.symbol
-              const count = typeof item === "string" ? null : item.announcement_count
+              const count = typeof item === "string" ? null : item.count ?? item.announcement_count
+              const href = companyRoute(symbol)
+              if (!href) return null
               return (
-                <Link className={styles.trendItem} href={`/ticker/${symbol}`} key={symbol}>
+                <Link className={styles.trendItem} href={href} key={symbol}>
                   <span className={styles.trendRank}>{String(index + 1).padStart(2, "0")}</span>
                   <span className={styles.trendSymbol}>{symbol}</span>
-                  <span className={styles.trendTrack} aria-hidden="true"><span style={{ width: `${Math.max(24, 100 - index * 22)}%` }} /></span>
-                  <span className={styles.trendCount}>{count ? `${count} ${count === 1 ? "update" : "updates"}` : "Active"}</span>
+                  <span className={styles.trendCount}>{count ? `${count} ${count === 1 ? "update" : "updates"}` : "View research"}</span>
                 </Link>
               )
             })

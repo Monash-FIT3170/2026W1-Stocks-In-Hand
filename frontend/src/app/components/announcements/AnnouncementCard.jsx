@@ -1,40 +1,43 @@
 import Link from "next/link"
-import styles from "../research/ResearchSurface.module.css"
-import { CitationLinks } from "../ticker/CitationLinks"
+import styles from "./AnnouncementCard.module.css"
+import { companyRoute, meaningfulText, originalUrl, recordSources, sourceKind } from "./recordPresentation"
 
-// Shared announcement summary card.
-// Used by both the global market feed and the ticker news tab. Keep the data
-// shape simple here: each card expects an item with ticker, tag, time, title, about,
-// changed, matters, and url fields.
-export function AnnouncementCard({ item }) {
-  const filingUrl = item.url || null
-  const sourceLabel = item.source_label || "View original source"
+function Arrow({ external = false }) {
+  return <svg aria-hidden="true" viewBox="0 0 24 24">{external ? <path d="M6 18 18 6M6 6h12v12" /> : <path d="M4 12h16m-6-6 6 6-6 6" />}</svg>
+}
 
-  return (
-    <article className={styles.announcementCard}>
-      <div className={styles.sourceRail}>
-        <span className={styles.sourceIndex} aria-hidden="true" />
-        <span className={styles.tickerMark}>{item.ticker}</span>
-        <span className={styles.sourceKind}>{item.tag || item.source_type || "Source record"}</span>
+export function AnnouncementCard({ item, headingLevel = "h3", grouped = false }) {
+  const Title = headingLevel
+  const company = companyRoute(item.ticker)
+  const symbol = item.ticker === "ASX" ? "Market-wide" : item.ticker || "Market-wide"
+  const kind = sourceKind(item.source_type || item.tag)
+  const about = meaningfulText(item.about, item.title)
+  const changed = meaningfulText(item.changed, item.title)
+  const matters = meaningfulText(item.matters, item.title)
+  const { primary, additional } = recordSources(item)
+  const research = [["What changed", changed], ["Research angle", matters]].filter(([, text]) => text && text !== about)
+  const hasDetails = research.length > 0 || additional.length > 0
+
+  return <article className={styles.record}>
+    <div className={styles.meta}>
+      {company ? <Link className={styles.ticker} href={company}>{symbol}</Link> : <span className={styles.ticker}>{symbol}</span>}
+      <span className={styles.kind}>{kind}</span>
+      {item.source_name && <span className={styles.publisher}>{item.source_name}</span>}
+      {(!grouped || /\d{1,2}:\d{2}/.test(item.time || "")) && <time>{item.time || "Date unavailable"}</time>}
+    </div>
+    <Title className={styles.title}>{item.title || "Untitled source record"}</Title>
+    {about && <p className={styles.excerpt}>{about}</p>}
+    {!about && !changed && !matters && <p className={styles.pending}>Analysis pending</p>}
+    <div className={styles.actions}>
+      {primary ? <a href={primary} target="_blank" rel="noopener noreferrer">{item.source_label || "Open original source"}<Arrow external /></a> : <span className={styles.pending}>Original link unavailable</span>}
+      {company && <Link href={`${company}/news`}>Open {symbol} research<Arrow /></Link>}
+    </div>
+    {hasDetails && <details className={styles.detail}>
+      <summary>{research.length ? "Research details" : "Additional sources"}</summary>
+      <div className={styles.detailBody}>
+        {research.map(([label, text]) => <section key={label}><h4>{label}</h4><p>{text}</p></section>)}
+        {additional.length > 0 && <section><h4>Additional evidence</h4>{additional.map((source, index) => <div key={`${source.url}-${index}`}><a href={originalUrl(source.url)} target="_blank" rel="noopener noreferrer">{source.title || source.label || "Original source"}</a>{source.evidence_text && <p>{source.evidence_text}</p>}</div>)}</section>}
       </div>
-      <div className={styles.announcementBody}>
-        <div className={styles.announcementMeta}>
-          <span>{item.source_name || item.tag || "Market source"}</span><b aria-hidden="true" /><time>{item.time}</time>
-        </div>
-        <h2>{item.title}</h2>
-        <div className={styles.announcementLead}>
-          <div><h3>What changed</h3><p>{item.changed}</p></div>
-          <div className={styles.researchAngle}><h3>Research angle</h3><p>{item.matters}</p></div>
-        </div>
-        <div className={styles.announcementContext}><h3>Context</h3><p>{item.about}</p></div>
-        <footer className={styles.announcementFooter}>
-          <div className={styles.announcementActions}>
-            <Link href={`/ticker/${item.ticker}/news`}>Open {item.ticker} research</Link>
-            {filingUrl ? <a href={filingUrl} rel="noreferrer" target="_blank">{sourceLabel}</a> : null}
-          </div>
-          <CitationLinks sources={item.sources} />
-        </footer>
-      </div>
-    </article>
-  )
+    </details>}
+  </article>
 }
