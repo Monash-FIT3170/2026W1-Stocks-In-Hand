@@ -67,6 +67,13 @@ def test_analysis_storage_merges_fields_and_records_prompt_version() -> None:
     db.query.side_effect = [artifact_query, summary_query]
     summary = {
         **_structured_summary(),
+        "claim_evidence": [
+            {
+                "text": "The company announced the program.",
+                "kind": "confirmed_fact",
+                "passage": "The company announced a new program today.",
+            },
+        ],
         "summary_text": combine_summary_text(_structured_summary()),
         "model_used": "bedrock:test-model",
         "prompt_version": "llm-announcement-summary-v3",
@@ -88,4 +95,13 @@ def test_analysis_storage_merges_fields_and_records_prompt_version() -> None:
     ]
     assert summary_row.prompt_version == "llm-announcement-summary-v3"
     assert summary_row.model_used == "bedrock:test-model"
+    assert artifact.artifact_metadata["claim_evidence"] == summary["claim_evidence"]
     db.commit.assert_called_once()
+
+
+def test_summary_evidence_can_be_required_for_legacy_backfill() -> None:
+    summary = _structured_summary()
+    assert has_complete_summary_metadata(summary) is True
+    assert has_complete_summary_metadata(summary, require_evidence=True) is False
+    summary["claim_evidence"] = []
+    assert has_complete_summary_metadata(summary, require_evidence=True) is True

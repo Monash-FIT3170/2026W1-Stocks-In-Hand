@@ -6,6 +6,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from app.services.claim_traceability import normalise_claim_evidence
+
 
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
@@ -26,17 +28,25 @@ def normalise_summary_metadata(summary: Mapping[str, Any] | None) -> dict[str, A
         value = summary.get(key)
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
             result[key] = [item.strip() for item in value if item.strip()]
+    if "claim_evidence" in summary:
+        result["claim_evidence"] = normalise_claim_evidence(summary)
     return result
 
 
-def has_complete_summary_metadata(metadata: Mapping[str, Any] | None) -> bool:
+def has_complete_summary_metadata(
+    metadata: Mapping[str, Any] | None,
+    *,
+    require_evidence: bool = False,
+) -> bool:
     """Return whether all display and clarity fields have valid values."""
     if not isinstance(metadata, Mapping):
         return False
     return all(
         isinstance(metadata.get(key), str) and bool(metadata[key].strip())
         for key in SUMMARY_TEXT_KEYS
-    ) and all(isinstance(metadata.get(key), list) for key in SUMMARY_LIST_KEYS)
+    ) and all(isinstance(metadata.get(key), list) for key in SUMMARY_LIST_KEYS) and (
+        not require_evidence or isinstance(metadata.get("claim_evidence"), list)
+    )
 
 
 def combine_summary_text(summary: Mapping[str, Any] | None) -> str:

@@ -351,7 +351,7 @@ def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
     missing = [
         artifact_id
         for artifact_id, metadata in rows
-        if not has_complete_summary_metadata(metadata)
+        if not has_complete_summary_metadata(metadata, require_evidence=True)
     ]
     return missing[:limit], len(missing)
 

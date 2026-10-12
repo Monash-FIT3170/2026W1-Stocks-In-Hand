@@ -14,6 +14,7 @@ from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse
+from app.services.claim_traceability import exact_source_passage, validated_claim_evidence
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -311,13 +312,16 @@ def _source_from_values(label, title, url, published_at=None, evidence_text=None
         "url": cleaned_url,
         "published_at": published_at.isoformat() if published_at else None,
         "evidence_text": _preview(evidence_text, 180),
-}
+    }
 
 
 def _is_safe_source_url(value: str | None) -> bool:
     if not value:
         return False
-    parsed_url = urlparse(value)
+    try:
+        parsed_url = urlparse(value)
+    except ValueError:
+        return False
     return parsed_url.scheme in {"http", "https"} and bool(parsed_url.netloc)
 
 
@@ -331,17 +335,15 @@ def _artifact_source_url(artifact: Artifact) -> str | None:
 
 def _exact_source_passage(raw_text: object, claim: object) -> str | None:
     """Return the claim only when it is a verbatim passage in the document."""
-    document = _clean_text(raw_text)
-    cleaned_claim = _clean_text(claim)
-    if not isinstance(document, str) or not isinstance(cleaned_claim, str):
-        return None
-
-    match = re.search(re.escape(cleaned_claim), document, flags=re.IGNORECASE)
-    return match.group(0) if match else None
+    return exact_source_passage(raw_text, claim)
 
 
-def _source_for_claim(artifact: Artifact, claim: str) -> dict | None:
-    exact_passage = _exact_source_passage(artifact.raw_text, claim)
+def _source_for_claim(
+    artifact: Artifact,
+    claim: str,
+    passage: str | None = None,
+) -> dict | None:
+    exact_passage = passage or _exact_source_passage(artifact.raw_text, claim)
     source = _source_from_values(
         label=_format_label(artifact.source_type, "Source"),
         title=artifact.title,
@@ -350,8 +352,7 @@ def _source_for_claim(artifact: Artifact, claim: str) -> dict | None:
         evidence_text=exact_passage,
     )
     if source and exact_passage:
-        # Claim strings are capped by the summary contract, so keep the complete
-        # verified passage rather than converting it into a generic preview.
+        # Keep the complete verified passage rather than a generic preview.
         source["evidence_text"] = exact_passage
     return source
 
@@ -365,11 +366,17 @@ def _traceable_claims_for_artifact(
     if not artifact:
         return []
 
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    evidence = {
+        (record["kind"], record["text"]): record["passage"]
+        for record in validated_claim_evidence(metadata, artifact.raw_text)
+    }
+
     return [
         {
             "text": claim,
             "kind": kind,
-            "source": _source_for_claim(artifact, claim),
+            "source": _source_for_claim(artifact, claim, evidence.get((kind, claim))),
         }
         for kind, claims in (
             ("confirmed_fact", confirmed_facts),

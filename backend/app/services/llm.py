@@ -10,20 +10,21 @@ import httpx
 
 from app.core.config import settings
 from app.services import bedrock
+from app.services.claim_traceability import validated_claim_evidence
 
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "llm-category-v2"
 NEWS_SUMMARY_PROMPT_VERSION = "llm-news-summary-v2"
 PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "llm-public-discussion-summary-v2"
-SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v3"
+SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v4"
 REDDIT_DIGEST_PROMPT_VERSION = "llm-reddit-digest-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
 SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)
 SUMMARY_REPAIR_ATTEMPTS = 2
 _UNQUOTED_SUMMARY_KEY = re.compile(
-    rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
+    rf"(?m)^(\s*)({'|'.join((*SUMMARY_KEYS, 'claim_evidence'))})\s*:"
 )
 REDDIT_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral"}
 GROQ_RETRY_PROMPT_CHARS = 6000
@@ -121,6 +122,10 @@ def parse_summary_response(
                     f"LLM summary response key '{key}' must be a list of strings"
                 )
             summary[key] = [item.strip() for item in value if item.strip()]
+        if "claim_evidence" in data:
+            if not isinstance(data["claim_evidence"], list):
+                raise ValueError("LLM summary claim_evidence must be a list")
+            summary["claim_evidence"] = data["claim_evidence"]
     return summary
 
 
@@ -130,10 +135,12 @@ def _build_summary_repair_prompt(
     include_clarity: bool,
 ) -> str:
     required_fields = ", ".join(
-        SUMMARY_KEYS if include_clarity else SUMMARY_TEXT_KEYS
+        (*SUMMARY_KEYS, "claim_evidence") if include_clarity else SUMMARY_TEXT_KEYS
     )
     clarity_instruction = (
-        "confirmed_facts and speculation must each be arrays of strings."
+        "confirmed_facts and speculation must each be arrays of strings. "
+        "claim_evidence must be an array of objects with text, kind, and passage. "
+        "Preserve existing quotations exactly; do not invent missing passages."
         if include_clarity
         else ""
     )
@@ -248,11 +255,15 @@ changed: one sentence explaining what changed, or "No material change identified
 matters: one sentence explaining why it may matter to investors.
 confirmed_facts: an array of concise claims explicitly supported by the announcement, limited to current or historical facts.
 speculation: an array of concise forward-looking claims, including forecasts, targets, expectations, opinions, intentions, or possible investor impacts.
+claim_evidence: an array with one object per claim, using text (the unchanged claim), kind (confirmed_fact or speculation), and passage (a verbatim supporting quotation from the announcement text).
 
 Classify claims by what they say, not who said them. A forecast made in an official
 announcement is still speculation. Do not repeat a claim in both arrays. Use an empty
 array when the supplied text does not support a category. Limit confirmed_facts to five
 items and speculation to three items. Keep every string under 40 words.
+Claims may be paraphrased, but each passage must copy the source wording exactly.
+Keep passages under 120 words. Omit claims without a supporting passage. Do not use
+extracted fields as quotations or invent source wording.
 
 Title:
 {title}
@@ -439,7 +450,7 @@ def summarise_announcement(
     raw_text: str,
 ) -> dict[str, object]:
     """Summarise an official ASX announcement."""
-    return _parse_summary_with_repair(
+    summary = _parse_summary_with_repair(
         _call_llm(
             _build_summary_prompt(
                 title=title,
@@ -449,6 +460,8 @@ def summarise_announcement(
             )
         )
     )
+    summary["claim_evidence"] = validated_claim_evidence(summary, raw_text)
+    return summary
 
 
 def summarise_news_article(

@@ -14,12 +14,14 @@ The schema these tests cover is the current migrated application schema,
 including watchlist alerts and public discussion ticker mentions.
 """
 
+import json
 import sys
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -814,6 +816,92 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
     assert saved.summaries[0].summary_text == (
         "The dividend payment date was confirmed."
     )
+
+
+def test_claim_evidence_survives_analysis_storage_and_ticker_overview(
+    db_session: Session,
+) -> None:
+    """Generated quotations should survive worker storage and API readback."""
+    from app.api.routes import ticker as ticker_route
+    from app.crud.artifact import store_artifact_analysis
+    from app.services import llm
+    from lambdas import analysis
+
+    ticker = Ticker(
+        symbol=f"T{uuid.uuid4().hex[:8].upper()}",
+        company_name="Traceability Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+    passage = "Revenue totalled $112 million, up from $100 million last year."
+    summary = {
+        "summary": "Revenue rose.",
+        "about": "Annual results.",
+        "changed": "Revenue increased by 12%.",
+        "matters": "Investors can assess the results.",
+        "confirmed_facts": ["Revenue increased by 12%."],
+        "speculation": [],
+    }
+    artifact = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="financial_results",
+        title="Annual results",
+        document_url="https://example.test/results.pdf",
+        raw_text=passage,
+        content_hash=f"traceability-{uuid.uuid4()}",
+        published_at=datetime(2040, 1, 2, tzinfo=timezone.utc),
+        analysis_status=AnalysisStatus.COMPLETED,
+        artifact_metadata=summary,
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add(ArtifactSummary(artifact_id=artifact.id, summary_text="Revenue rose."))
+    db_session.commit()
+
+    with patch.object(analysis, "database_session") as session:
+        session.return_value.__enter__.return_value = db_session
+        missing, _ = analysis._missing_summary_artifact_ids(100)
+    assert artifact.id in missing
+
+    evidence = {
+        "text": "Revenue increased by 12%.",
+        "kind": "confirmed_fact",
+        "passage": passage,
+    }
+    with patch.object(llm, "_call_llm", return_value=json.dumps({
+        **summary,
+        "claim_evidence": [evidence],
+    })):
+        generated = llm.summarise_announcement(
+            title=artifact.title,
+            category="revenue",
+            extracted_data={},
+            raw_text=passage,
+        )
+    values = analysis._summary_values(SimpleNamespace(
+        summary=generated,
+        summary_model="bedrock:test-model",
+        summary_prompt_version=llm.SUMMARY_PROMPT_VERSION,
+    ))
+    store_artifact_analysis(db_session, artifact_id=artifact.id, raw_text=passage, summary=values)
+    db_session.expire_all()
+
+    with patch.object(analysis, "database_session") as session:
+        session.return_value.__enter__.return_value = db_session
+        missing, _ = analysis._missing_summary_artifact_ids(100)
+    assert artifact.id not in missing
+
+    with patch.object(ticker_route, "_live_quote", return_value=None):
+        overview = ticker_route.get_ticker_overview(ticker.symbol, db=db_session)
+    claim = overview["clarity"]["traceable_claims"][0]
+    assert claim["text"] == evidence["text"]
+    assert claim["source"]["evidence_text"] == passage
+    assert claim["source"]["url"] == artifact.document_url
+    assert claim["source"]["published_at"].startswith("2040-01-02")
+    assert artifact.artifact_metadata["claim_evidence"] == [evidence]
+    assert artifact.summaries[0].prompt_version == "llm-announcement-summary-v4"
 
 
 def test_announcements_feed_and_trending_include_supported_content_sources(

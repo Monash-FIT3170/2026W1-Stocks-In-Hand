@@ -28,6 +28,9 @@ function ClaimList({ emptyMessage, items, kind, traceableClaims }) {
                     {source.evidence_text}
                   </blockquote>
                 )}
+                {!source.evidence_text && (
+                  <span className={styles.claimSourceUnavailable}>Exact passage unavailable</span>
+                )}
                 <CitationLinks compact sources={[source]} />
               </>
             )}

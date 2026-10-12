@@ -1029,3 +1029,61 @@ def test_claim_traceability_falls_back_to_the_next_safe_source_url() -> None:
     assert result["traceable_claims"][0]["source"]["url"] == (
         "https://example.test/safe"
     )
+
+
+def test_claim_traceability_uses_verified_passages_for_paraphrased_claims() -> None:
+    """A paraphrased claim should keep its text and show the source wording."""
+    from app.api.routes.ticker import _clarity_for_artifact
+
+    artifact = MagicMock()
+    artifact.raw_text = "Revenue totalled $112 million, compared with $100 million last year."
+    artifact.artifact_metadata = {
+        "confirmed_facts": ["Revenue increased by 12%."],
+        "speculation": [],
+        "claim_evidence": [
+            {
+                "text": "Revenue increased by 12%.",
+                "kind": "confirmed_fact",
+                "passage": artifact.raw_text,
+            },
+        ],
+    }
+    artifact.source_type = "asx_announcement"
+    artifact.title = "Results update"
+    artifact.document_url = "https://example.test/results.pdf"
+    artifact.published_at = None
+
+    claim = _clarity_for_artifact(artifact)["traceable_claims"][0]
+
+    assert claim["text"] == "Revenue increased by 12%."
+    assert claim["source"]["evidence_text"] == artifact.raw_text
+    artifact.raw_text = "The document was replaced with an unrelated update."
+    stale_claim = _clarity_for_artifact(artifact)["traceable_claims"][0]
+    assert stale_claim["source"]["evidence_text"] is None
+
+
+def test_summary_metadata_replaces_stale_claim_evidence() -> None:
+    """Regenerating claims must not retain quotations from the previous summary."""
+    from app.api.routes.gemini import _has_current_summary, _summary_metadata
+
+    metadata = {
+        "about": "An update.",
+        "confirmed_facts": ["An old claim."],
+        "speculation": [],
+        "claim_evidence": [
+            {"text": "An old claim.", "kind": "confirmed_fact", "passage": "Old source."},
+        ],
+    }
+    result = _summary_metadata(metadata, {"confirmed_facts": ["A new claim."], "speculation": []})
+    assert result["claim_evidence"] == []
+    assert metadata["claim_evidence"]
+    assert _has_current_summary(result, require_evidence=True) is True
+    legacy = {key: value for key, value in result.items() if key != "claim_evidence"}
+    assert _has_current_summary(legacy, require_evidence=True) is False
+
+
+def test_claim_traceability_rejects_malformed_document_urls() -> None:
+    """A malformed URL should not break the ticker overview."""
+    from app.api.routes.ticker import _is_safe_source_url
+
+    assert _is_safe_source_url("https://[invalid-host/results.pdf") is False

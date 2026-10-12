@@ -11,6 +11,7 @@ from app.models.artifact import Artifact
 from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.services import llm as llm_service
+from app.services.claim_traceability import normalise_claim_evidence
 
 router = APIRouter(prefix="/gemini", tags=["gemini"])
 
@@ -71,15 +72,18 @@ def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
             value = summary.get(key)
             next_metadata[key] = list(value) if isinstance(value, list) else []
 
+    if "confirmed_facts" in summary or "speculation" in summary:
+        next_metadata["claim_evidence"] = normalise_claim_evidence(summary)
+
     return next_metadata
 
 
-def _has_current_summary(metadata: dict) -> bool:
+def _has_current_summary(metadata: dict, *, require_evidence: bool = False) -> bool:
     """Return whether metadata includes both summary copy and clarity lists."""
     return bool(metadata.get("about")) and all(
         isinstance(metadata.get(key), list)
         for key in llm_service.SUMMARY_LIST_KEYS
-    )
+    ) and (not require_evidence or isinstance(metadata.get("claim_evidence"), list))
 
 
 @router.post("/categorise/recent")
@@ -158,7 +162,10 @@ def summarise_ticker_artifacts(
 
     for artifact in artifacts:
         metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        if _has_current_summary(metadata):
+        if _has_current_summary(
+            metadata,
+            require_evidence=artifact.source_type == "asx_announcement",
+        ):
             skipped += 1
             continue
 
