@@ -10,20 +10,21 @@ import httpx
 
 from app.core.config import settings
 from app.services import bedrock
+from app.services.traceability import EVIDENCE_INSTRUCTION, bind_claim_evidence
 
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "llm-category-v2"
-NEWS_SUMMARY_PROMPT_VERSION = "llm-news-summary-v2"
-PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "llm-public-discussion-summary-v2"
-SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v3"
+NEWS_SUMMARY_PROMPT_VERSION = "llm-news-summary-v3"
+PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "llm-public-discussion-summary-v3"
+SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v4"
 REDDIT_DIGEST_PROMPT_VERSION = "llm-reddit-digest-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
 SUMMARY_KEYS = (*SUMMARY_TEXT_KEYS, *SUMMARY_LIST_KEYS)
 SUMMARY_REPAIR_ATTEMPTS = 2
 _UNQUOTED_SUMMARY_KEY = re.compile(
-    rf"(?m)^(\s*)({'|'.join(SUMMARY_KEYS)})\s*:"
+    rf"(?m)^(\s*)({'|'.join((*SUMMARY_KEYS, 'claim_evidence'))})\s*:"
 )
 REDDIT_SENTIMENTS = {"bullish", "bearish", "mixed", "neutral"}
 GROQ_RETRY_PROMPT_CHARS = 6000
@@ -121,6 +122,11 @@ def parse_summary_response(
                     f"LLM summary response key '{key}' must be a list of strings"
                 )
             summary[key] = [item.strip() for item in value if item.strip()]
+    if "claim_evidence" in data:
+        value = data["claim_evidence"]
+        if not isinstance(value, list):
+            raise ValueError("LLM claim_evidence must be an array")
+        summary["claim_evidence"] = value
     return summary
 
 
@@ -142,7 +148,8 @@ def _build_summary_repair_prompt(
 Repair a malformed model response into one valid JSON object.
 
 Preserve the response's meaning. Do not add facts, explanations, markdown, or keys.
-Return exactly these keys: {required_fields}.
+Return these keys: {required_fields}, and preserve claim_evidence if present.
+claim_evidence must be an array of objects with field, index, and quote. Never invent quotations.
 summary, about, changed, and matters must be strings. {clarity_instruction}
 If a required value cannot be recovered, use an empty string or empty array.
 
@@ -248,6 +255,7 @@ changed: one sentence explaining what changed, or "No material change identified
 matters: one sentence explaining why it may matter to investors.
 confirmed_facts: an array of concise claims explicitly supported by the announcement, limited to current or historical facts.
 speculation: an array of concise forward-looking claims, including forecasts, targets, expectations, opinions, intentions, or possible investor impacts.
+{EVIDENCE_INSTRUCTION}
 
 Classify claims by what they say, not who said them. A forecast made in an official
 announcement is still speculation. Do not repeat a claim in both arrays. Use an empty
@@ -286,6 +294,7 @@ summary: a concise 2-3 sentence summary.
 about: one sentence explaining the main subject of the story.
 changed: one sentence explaining the reported development, or "No material change identified." if unclear.
 matters: one sentence explaining why the story may matter to investors.
+{EVIDENCE_INSTRUCTION}
 
 Title:
 {title}
@@ -317,6 +326,7 @@ summary: a concise 1-2 sentence summary of what the author says.
 about: one sentence naming the main company, event, or topic discussed.
 changed: one sentence describing the claimed development, or "No claimed change identified." if unclear.
 matters: one sentence explaining why the topic may interest investors, without endorsing the claim.
+{EVIDENCE_INSTRUCTION}
 
 Source type:
 {source_type}
@@ -439,7 +449,7 @@ def summarise_announcement(
     raw_text: str,
 ) -> dict[str, object]:
     """Summarise an official ASX announcement."""
-    return _parse_summary_with_repair(
+    summary = _parse_summary_with_repair(
         _call_llm(
             _build_summary_prompt(
                 title=title,
@@ -450,6 +460,10 @@ def summarise_announcement(
         )
     )
 
+    if "claim_evidence" in summary:
+        summary["claim_evidence"] = bind_claim_evidence(summary, raw_text)
+    return summary
+
 
 def summarise_news_article(
     *,
@@ -458,7 +472,7 @@ def summarise_news_article(
     raw_text: str,
 ) -> dict[str, object]:
     """Summarise a financial news article."""
-    return _parse_summary_with_repair(
+    summary = _parse_summary_with_repair(
         _call_llm(
             _build_news_summary_prompt(
                 title=title,
@@ -469,6 +483,10 @@ def summarise_news_article(
         include_clarity=False,
     )
 
+    if "claim_evidence" in summary:
+        summary["claim_evidence"] = bind_claim_evidence(summary, raw_text)
+    return summary
+
 
 def summarise_public_discussion(
     *,
@@ -477,7 +495,7 @@ def summarise_public_discussion(
     raw_text: str,
 ) -> dict[str, object]:
     """Summarise one public discussion post."""
-    return _parse_summary_with_repair(
+    summary = _parse_summary_with_repair(
         _call_llm(
             _build_public_discussion_summary_prompt(
                 title=title,
@@ -487,6 +505,10 @@ def summarise_public_discussion(
         ),
         include_clarity=False,
     )
+
+    if "claim_evidence" in summary:
+        summary["claim_evidence"] = bind_claim_evidence(summary, raw_text)
+    return summary
 
 
 def summarise_reddit_digest(

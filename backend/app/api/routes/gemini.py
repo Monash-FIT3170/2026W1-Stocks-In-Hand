@@ -71,12 +71,13 @@ def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
             value = summary.get(key)
             next_metadata[key] = list(value) if isinstance(value, list) else []
 
+    next_metadata["claim_evidence"] = summary.get("claim_evidence", [])
     return next_metadata
 
 
 def _has_current_summary(metadata: dict) -> bool:
     """Return whether metadata includes both summary copy and clarity lists."""
-    return bool(metadata.get("about")) and all(
+    return bool(metadata.get("about")) and isinstance(metadata.get("claim_evidence"), list) and all(
         isinstance(metadata.get(key), list)
         for key in llm_service.SUMMARY_LIST_KEYS
     )

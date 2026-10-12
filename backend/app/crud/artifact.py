@@ -60,6 +60,8 @@ def _stage_artifact_analysis(
 
     artifact.raw_text = raw_text
     summary_metadata = normalise_summary_metadata(summary)
+    if summary is not None:
+        summary_metadata.setdefault("claim_evidence", [])
     artifact.artifact_metadata = {
         **(artifact.artifact_metadata or {}),
         **(metadata or {}),

@@ -19,6 +19,7 @@ from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.services.summary_metadata import normalise_summary_metadata
 from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
@@ -147,10 +148,8 @@ def _summarise_and_store_artifact(
         return
 
     metadata = dict(artifact.artifact_metadata or {})
-    for key in ("summary", "about", "changed", "matters"):
-        value = summary.get(key)
-        if value:
-            metadata[key] = value
+    metadata.update(normalise_summary_metadata(summary))
+    metadata["claim_evidence"] = summary.get("claim_evidence", [])
     artifact.artifact_metadata = metadata
 
     db.add(ArtifactSummary(

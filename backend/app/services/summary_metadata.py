@@ -26,6 +26,16 @@ def normalise_summary_metadata(summary: Mapping[str, Any] | None) -> dict[str, A
         value = summary.get(key)
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
             result[key] = [item.strip() for item in value if item.strip()]
+    evidence = summary.get("claim_evidence")
+    if isinstance(evidence, list):
+        # Source matching is performed with raw text at generation and read time.
+        result["claim_evidence"] = [
+            {key: item[key] for key in (
+                "field", "index", "claim_text", "quote", "start_char", "end_char",
+                "source_text_sha256",
+            ) if key in item}
+            for item in evidence if isinstance(item, dict)
+        ]
     return result
 
 

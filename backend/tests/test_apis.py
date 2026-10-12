@@ -812,7 +812,7 @@ def test_summarise_news_artifact_uses_news_prompt() -> None:
         result = gemini.summarise_artifact(artifact.id, db=db)
 
     assert result["about"] == "The story covers BHP's quarterly copper output."
-    assert result["prompt_version"] == "llm-news-summary-v2"
+    assert result["prompt_version"] == gemini.llm_service.NEWS_SUMMARY_PROMPT_VERSION
     summarise_news.assert_called_once_with(
         title="BHP production story",
         source_name="Example News",
@@ -854,6 +854,7 @@ def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
     assert _has_current_summary(
         {
             "about": "A current summary.",
+            "claim_evidence": [],
             "confirmed_facts": [],
             "speculation": [],
         }

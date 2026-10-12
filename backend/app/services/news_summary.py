@@ -11,6 +11,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.services import llm as summary_service
+from app.services.summary_metadata import normalise_summary_metadata
 
 SUMMARY_METADATA_KEYS = ("summary", "about", "changed", "matters")
 NEWS_SOURCE_TYPE = "news"
@@ -30,8 +31,8 @@ def has_news_summary_metadata(artifact: Artifact) -> bool:
 
 
 def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
-    raw_text = (artifact.raw_text or "").strip()
-    if not raw_text:
+    raw_text = artifact.raw_text or ""
+    if not raw_text.strip():
         raise ValueError("News artifact has no text to summarise")
 
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
@@ -46,10 +47,8 @@ def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
     )
 
     next_metadata = dict(metadata)
-    for key in SUMMARY_METADATA_KEYS:
-        value = summary.get(key)
-        if isinstance(value, str) and value.strip():
-            next_metadata[key] = value
+    next_metadata.update(normalise_summary_metadata(summary))
+    next_metadata["claim_evidence"] = summary.get("claim_evidence", [])
     artifact.artifact_metadata = next_metadata
 
     db_summary = ArtifactSummary(
