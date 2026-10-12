@@ -392,14 +392,8 @@ key_themes: an array of short recurring themes.
 """.strip()
 
 
-def _groq_failed_generation(response: httpx.Response) -> str | None:
-    """Recover rejected JSON as untrusted model text for downstream validation.
-
-    Groq JSON mode can reject malformed generations before returning choices.
-    Summary callers already have bounded JSON repair and source-quote checks;
-    let them process the generated text without treating other HTTP failures as
-    model output. Never expose the provider's error body or credentials.
-    """
+def _groq_json_error(response: httpx.Response) -> dict | None:
+    """Identify only JSON validation failures without exposing provider details."""
     if response.status_code != 400:
         return None
     try:
@@ -409,7 +403,13 @@ def _groq_failed_generation(response: httpx.Response) -> str | None:
     error = data.get("error") if isinstance(data, dict) else None
     if not isinstance(error, dict) or error.get("code") != "json_validate_failed":
         return None
-    generated = error.get("failed_generation")
+    return error
+
+
+def _groq_failed_generation(response: httpx.Response) -> str | None:
+    """Recover rejected JSON as untrusted text for downstream validation."""
+    error = _groq_json_error(response)
+    generated = error.get("failed_generation") if error else None
     return generated if isinstance(generated, str) and generated.strip() else None
 
 
@@ -436,6 +436,12 @@ def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if _groq_json_error(exc.response) and "response_format" in payload:
+                # JSON mode can reject output without recoverable generated text.
+                # Retry once as text; callers still enforce their JSON schema and
+                # summary callers still repair JSON and validate source quotes.
+                payload.pop("response_format")
+                continue
             generated = _groq_failed_generation(exc.response)
             if generated is not None:
                 return generated
