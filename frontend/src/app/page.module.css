@@ -2111,3 +2111,84 @@ button.emptyCard:hover {
   }
 
 }
+
+.claimEvidence,
+.claimEvidenceMissing {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.claimEvidence summary,
+.timelineClaims > summary {
+  color: #155d45;
+  cursor: pointer;
+  font-weight: 650;
+  padding: 6px 0;
+}
+
+.claimEvidence summary:focus-visible,
+.timelineClaims > summary:focus-visible {
+  outline: 2px solid #155d45;
+  outline-offset: 4px;
+}
+
+.claimEvidenceBody {
+  background: #f5f8f6;
+  border: 1px solid #dce5df;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 6px;
+}
+
+.claimEvidenceBody blockquote {
+  border-left: 3px solid #82a891;
+  margin: 0 0 12px;
+  padding-left: 12px;
+}
+
+.claimEvidenceBody blockquote p {
+  color: #26392f;
+  font-size: 13px;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.claimEvidenceBody a,
+.claimEvidenceMissing a {
+  color: #155d45;
+  text-decoration: underline;
+}
+
+.claimEvidenceBody .claimEvidenceNote {
+  color: #626d65;
+  font-size: 11px;
+  margin: 8px 0 0;
+}
+
+.claimEvidenceMissing {
+  color: #6a706c;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.claimEvidenceMissing > span {
+  font-size: inherit;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.timelineClaims {
+  margin: 12px 0;
+}
+
+.timelineClaims ul {
+  padding-left: 18px;
+}
+
+.timelineClaims li {
+  margin-bottom: 16px;
+}

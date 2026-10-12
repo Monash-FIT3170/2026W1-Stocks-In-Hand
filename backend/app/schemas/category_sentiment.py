@@ -4,6 +4,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from app.schemas.public_discussion import PublicDiscussionSource
+from app.schemas.traceability import TracedClaim
 
 
 class RedditSummary(BaseModel):
@@ -33,6 +34,7 @@ class CategorySentimentResult(BaseModel):
     chunks_analyzed: int = 0
     sources_count: int = 0
     sources: list[PublicDiscussionSource] = Field(default_factory=list)
+    claims: list[TracedClaim] = Field(default_factory=list)
     latest_analyzed_at: Optional[datetime] = None
 
 

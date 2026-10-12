@@ -21,6 +21,7 @@ from app.schemas.category_sentiment import (
 )
 from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
+from app.services.traceability import trace_claims
 
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
 CATEGORY_SENTIMENT_KEYS = (*llm_service.CATEGORY_KEYS, "user_discussion")
@@ -549,6 +550,7 @@ def _aggregate_stored_category(
         "chunks_analyzed": len(usable),
         "sources_count": len(usable),
         "sources": sources,
+        "claims": [claim for artifact, *_rest in usable for claim in trace_claims(artifact)],
         "latest_analyzed_at": latest_analyzed_at,
     }
 

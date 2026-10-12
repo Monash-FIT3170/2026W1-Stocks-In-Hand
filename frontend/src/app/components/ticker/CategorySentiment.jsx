@@ -1,3 +1,5 @@
+import { ClaimTraceList } from "./ClaimTraceList"
+import { CitationLinks } from "./CitationLinks"
 import styles from "../../page.module.css"
 
 const CATEGORY_ORDER = [
@@ -98,6 +100,8 @@ export function CategorySentiment({ sentiment }) {
                 <span style={{ width: confidence || "0%" }} />
               </div>
               <p>{summaryText({ key, label, result })}</p>
+              {available ? <ClaimTraceList claims={result.claims} /> : null}
+              {available ? <CitationLinks sources={result.sources} /> : null}
               <strong>{available ? `${confidence} average model confidence` : "No analysed signal"}</strong>
             </section>
           )

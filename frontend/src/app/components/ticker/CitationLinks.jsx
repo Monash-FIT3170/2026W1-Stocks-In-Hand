@@ -1,3 +1,4 @@
+import { safeSourceUrl } from "../../lib/traceability"
 import styles from "../../page.module.css"
 
 function formatSourceDate(value) {
@@ -15,7 +16,7 @@ function formatSourceDate(value) {
 // Compact citation links used across ticker brief sections.
 // Each source should include label, title, url, and optional published_at/evidence_text.
 export function CitationLinks({ sources = [] }) {
-  const validSources = sources.filter((source) => source?.url)
+  const validSources = sources.filter((source) => safeSourceUrl(source?.url))
 
   if (validSources.length === 0) {
     return null

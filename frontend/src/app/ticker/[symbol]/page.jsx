@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import { SparkIcon } from "../../components/icons"
 import { CategorySentiment } from "../../components/ticker/CategorySentiment"
 import { CitationLinks } from "../../components/ticker/CitationLinks"
+import { ClaimEvidence } from "../../components/ticker/ClaimEvidence"
+import { findClaim } from "../../lib/traceability"
 import { ClarityLayer } from "../../components/ticker/ClarityLayer"
 import { PublicDiscussionStatus } from "../../components/ticker/PublicDiscussionStatus"
 import { useTickerBrief } from "../../components/ticker/TickerBriefShell"
@@ -86,10 +88,11 @@ export default function TickerSummaryRoute() {
           <span>Latest filing</span>
         </div>
         <p>{data.story}</p>
+        <ClaimEvidence claim={findClaim(data.claims, "about", data.story)} source={data.sources?.[0]} />
         <strong>{sourceCopy}</strong>
         <CitationLinks sources={data.sources} />
       </article>
-      <ClarityLayer clarity={data.clarity} sources={data.sources} />
+      <ClarityLayer clarity={data.clarity} sources={data.sources} claims={data.claims} />
       <article className={styles.sentimentCard}>
         <h2>{data.sentiment_label}</h2>
         {data.sentiment_status === "available" ? (

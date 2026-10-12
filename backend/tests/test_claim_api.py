@@ -71,3 +71,22 @@ def test_ticker_feeds_and_brief_expose_same_claim_evidence(monkeypatch):
     timeline = ticker_routes.get_ticker_deep_dive_timeline("BHP", db)[0]
     assert overview["claims"] == news["claims"] == timeline["claims"]
     assert any(item["status"] == "quoted" for item in overview["claims"])
+
+
+def test_category_signals_keep_constituent_claim_sources_distinct():
+    from app.api.routes.category_sentiment import _aggregate_stored_category
+    from app.models.artifact_sentiment import ArtifactSentiment
+    from app.schemas.category_sentiment import CategorySentimentResult
+
+    first, second = stored_artifact(), stored_artifact()
+    second.document_url = "https://example.test/second-report.pdf"
+    rows = [(item, ArtifactSentiment(
+        sentiment_label="positive", confidence_score=0.9,
+        model_used="test", created_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    )) for item in (first, second)]
+    payload = CategorySentimentResult(**_aggregate_stored_category("revenue", rows)).model_dump(mode="json")
+    facts = [claim for claim in payload["claims"] if claim["field"] == "confirmed_facts"]
+    assert len(facts) == 2
+    assert facts[0]["id"] != facts[1]["id"]
+    assert {claim["source"]["url"] for claim in facts} == {first.document_url, second.document_url}
+    assert all(claim["status"] == "quoted" for claim in facts)

@@ -569,12 +569,14 @@ def test_sentiment_route_reads_stored_analysis_without_finbert() -> None:
     db.query.return_value.filter.return_value.first.return_value = ticker_record
 
     revenue_artifact = MagicMock(
+        id=uuid.uuid4(), published_at=None,
         source_type="asx_announcement",
         artifact_type="financial_results",
         title="ANZ revenue increased",
         artifact_metadata={"about": "Revenue increased during the half year."},
     )
     reddit_artifact = MagicMock(
+        id=uuid.uuid4(), published_at=None,
         source_type="reddit",
         artifact_type="reddit_post",
         title="Investors discuss ANZ",

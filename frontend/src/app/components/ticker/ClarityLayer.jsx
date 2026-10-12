@@ -1,20 +1,27 @@
 import { BadgeIcon, SparkIcon } from "../icons"
 import styles from "../../page.module.css"
 import { CitationLinks } from "./CitationLinks"
+import { ClaimEvidence } from "./ClaimEvidence"
+import { findClaim } from "../../lib/traceability"
 
-function ClaimList({ emptyMessage, items }) {
+function ClaimList({ emptyMessage, items, field, claims, source }) {
   if (items.length === 0) {
     return <p className={styles.clarityEmpty}>{emptyMessage}</p>
   }
 
   return (
     <ul className={styles.clarityClaims}>
-      {items.map((item) => <li key={item}>{item}</li>)}
+      {items.map((item) => (
+        <li key={item}>
+          {item}
+          <ClaimEvidence claim={findClaim(claims, field, item)} source={source} />
+        </li>
+      ))}
     </ul>
   )
 }
 
-export function ClarityLayer({ clarity = {}, sources = [] }) {
+export function ClarityLayer({ clarity = {}, sources = [], claims = [] }) {
   const confirmedFacts = clarity.confirmed_facts || []
   const speculation = clarity.speculation || []
 
@@ -41,7 +48,7 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
       <div className={styles.clarityHeader}>
         <div>
           <span>Clarity layer</span>
-          <h2>What&apos;s verified?</h2>
+          <h2>What does the source say?</h2>
         </div>
         <strong className={styles.clarityReady}>Classified</strong>
       </div>
@@ -56,13 +63,16 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
           <div className={styles.clarityGroupTitle}>
             <BadgeIcon />
             <div>
-              <h3>Confirmed facts</h3>
-              <p>Directly supported by the official announcement.</p>
+              <h3>Reported facts</h3>
+              <p>Current or historical claims attributed to the source.</p>
             </div>
           </div>
           <ClaimList
             emptyMessage="No confirmed factual claims were identified."
             items={confirmedFacts}
+            field="confirmed_facts"
+            claims={claims}
+            source={sources[0]}
           />
           <CitationLinks sources={sources} />
         </section>
@@ -78,6 +88,9 @@ export function ClarityLayer({ clarity = {}, sources = [] }) {
           <ClaimList
             emptyMessage="No speculative or forward-looking claims were identified."
             items={speculation}
+            field="speculation"
+            claims={claims}
+            source={sources[0]}
           />
         </section>
       </div>

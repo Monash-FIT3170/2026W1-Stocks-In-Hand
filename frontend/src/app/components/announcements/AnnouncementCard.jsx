@@ -1,5 +1,7 @@
 import Link from "next/link"
 import styles from "../../page.module.css"
+import { ClaimEvidence } from "../ticker/ClaimEvidence"
+import { findClaim, safeSourceUrl } from "../../lib/traceability"
 import { CitationLinks } from "../ticker/CitationLinks"
 
 // Shared announcement summary card.
@@ -7,7 +9,8 @@ import { CitationLinks } from "../ticker/CitationLinks"
 // shape simple here: each card expects an item with ticker, tag, time, title, about,
 // changed, matters, and url fields.
 export function AnnouncementCard({ item }) {
-  const filingUrl = item.url || null
+  const filingUrl = safeSourceUrl(item.url)
+  const source = { title: item.title, url: filingUrl }
   const sourceLabel = item.source_label || "View original source"
 
   return (
@@ -19,9 +22,18 @@ export function AnnouncementCard({ item }) {
       </div>
       <h2>{item.title}</h2>
       <div className={styles.explainGrid}>
-        <div><span>What it&apos;s about</span><p>{item.about}</p></div>
-        <div><span>What changed</span><p>{item.changed}</p></div>
-        <div><span>Why it matters</span><p>{item.matters}</p></div>
+        <div>
+          <span>What it&apos;s about</span><p>{item.about}</p>
+          <ClaimEvidence claim={findClaim(item.claims, "about", item.about)} source={source} />
+        </div>
+        <div>
+          <span>What changed</span><p>{item.changed}</p>
+          <ClaimEvidence claim={findClaim(item.claims, "changed", item.changed)} source={source} />
+        </div>
+        <div>
+          <span>Why it matters</span><p>{item.matters}</p>
+          <ClaimEvidence claim={findClaim(item.claims, "matters", item.matters)} source={source} />
+        </div>
       </div>
       <div className={styles.cardActions}>
         <Link href={`/ticker/${item.ticker}/news`}>View {item.ticker} news feed</Link>

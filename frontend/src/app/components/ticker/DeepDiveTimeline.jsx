@@ -1,6 +1,8 @@
 "use client"
 
 import { useState } from "react"
+import { ClaimTraceList } from "./ClaimTraceList"
+import { ClaimEvidence } from "./ClaimEvidence"
 import { CitationLinks } from "./CitationLinks"
 import styles from "../../page.module.css"
 
@@ -46,6 +48,9 @@ export function DeepDiveTimeline({ timeline }) {
                 </div>
               )}
               <p>{item.detail}</p>
+              {item.claims?.length > 0
+                ? <ClaimTraceList claims={item.claims} />
+                : <ClaimEvidence source={item.sources?.[0]} />}
               <CitationLinks sources={item.sources} />
             </div>
           </article>
