@@ -859,6 +859,10 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
+        artifact_metadata={
+            "feed_eligible": True,
+            "about": "Investors discuss a company-specific market update.",
+        },
     )
     news = Artifact(
         ticker_id=ticker.id,
@@ -868,18 +872,37 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="News article body",
         published_at=published_at,
         content_hash=f"news-{uuid.uuid4()}",
-        artifact_metadata={"source_name": "Example News"},
+        artifact_metadata={
+            "source_name": "Example News",
+            "feed_eligible": True,
+            "about": "The publisher reports a company-specific development.",
+        },
     )
-    db_session.add_all([announcement, reddit, news])
+    rejected_reddit = Artifact(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="Off-topic meme",
+        raw_text="Informal chatter without financial substance",
+        published_at=published_at,
+        content_hash=f"rejected-reddit-{uuid.uuid4()}",
+        artifact_metadata={
+            "feed_eligible": False,
+            "reason": "The post is informal chatter without financial substance.",
+        },
+    )
+    db_session.add_all([announcement, reddit, news, rejected_reddit])
     db_session.flush()
-    db_session.add(
-        ArtifactTickerMention(
-            artifact_id=reddit.id,
-            ticker_id=ticker.id,
-            match_method="ticker_symbol",
-            match_confidence=0.85,
-            matched_text=symbol,
-        )
+    db_session.add_all(
+        [
+            ArtifactTickerMention(
+                artifact_id=artifact.id,
+                ticker_id=ticker.id,
+                match_method="ticker_symbol",
+                match_confidence=0.85,
+                matched_text=symbol,
+            )
+            for artifact in (reddit, rejected_reddit)
+        ]
     )
     db_session.commit()
 
@@ -893,6 +916,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     assert announcement.id in announcement_ids
     assert reddit.id in announcement_ids
     assert news.id in announcement_ids
+    assert rejected_reddit.id not in announcement_ids
     items_by_id = {item.id: item for item in announcements}
     assert items_by_id[announcement.id].source_type == "asx_announcement"
     assert items_by_id[reddit.id].source_type == "reddit"
