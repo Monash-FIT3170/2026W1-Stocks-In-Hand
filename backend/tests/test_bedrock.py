@@ -36,6 +36,29 @@ def _response(
     }
 
 
+def test_parse_feed_eligibility_response_requires_a_bounded_decision() -> None:
+    result = llm.parse_feed_eligibility_response(
+        json.dumps(
+            {
+                "feed_eligible": False,
+                "relevance_confidence": 0.94,
+                "reason": "The post is an off-topic meme.",
+            }
+        )
+    )
+
+    assert result == {
+        "feed_eligible": False,
+        "relevance_confidence": 0.94,
+        "reason": "The post is an off-topic meme.",
+    }
+
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        llm.parse_feed_eligibility_response(
+            '{"feed_eligible": true, "relevance_confidence": 2, "reason": "x"}'
+        )
+
+
 def test_invoke_text_uses_bounded_gpt_oss_request() -> None:
     """Bedrock requests must use the approved model and output bounds."""
     client = MagicMock()
