@@ -334,6 +334,14 @@ def _summary_values(output: AnalysisOutput) -> dict | None:
     }
 
 
+def _required_summary_values(output: AnalysisOutput) -> dict:
+    """Return a displayable summary or fail the analysis for a later retry."""
+    values = _summary_values(output)
+    if values is None or not str(values.get("about") or "").strip():
+        raise RuntimeError("Analysis did not produce a What it's about summary")
+    return values
+
+
 def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
     """Find completed ASX artifacts missing display or clarity summary fields."""
     with database_session() as db:
@@ -593,7 +601,25 @@ def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
             "raw_text": raw_text,
             "source_type": source_type,
             "source_name": source_name if isinstance(source_name, str) else None,
+            "has_ticker_match": bool(artifact.ticker_id or artifact.ticker_mentions),
         }
+
+
+def _assess_stored_text_eligibility(state: dict) -> dict[str, object]:
+    """Reject unmatched Reddit posts, then assess remaining non-official text."""
+    if state["source_type"] == "reddit" and not state["has_ticker_match"]:
+        return {
+            "feed_eligible": False,
+            "relevance_confidence": 1.0,
+            "reason": "The post does not mention a supported ASX company or ticker.",
+        }
+    from app.services import llm as llm_service
+
+    return llm_service.assess_feed_eligibility(
+        title=state["title"],
+        source_type=state["source_type"],
+        raw_text=state["raw_text"],
+    )
 
 
 def _analyse_public_discussion_artifact(
@@ -621,6 +647,39 @@ def _analyse_public_discussion_artifact(
 
         mark_inline_artifact_analysis_started(db, artifact_id)
 
+    assessment = _assess_stored_text_eligibility(state)
+    from app.services import llm as llm_service
+
+    eligibility_metadata = {
+        **assessment,
+        "feed_eligibility_prompt_version": llm_service.FEED_ELIGIBILITY_PROMPT_VERSION,
+    }
+    if not assessment["feed_eligible"]:
+        with database_session() as db:
+            from app.crud.artifact import store_artifact_analysis
+
+            store_artifact_analysis(
+                db,
+                artifact_id=artifact_id,
+                raw_text=state["raw_text"],
+                metadata=eligibility_metadata,
+            )
+        with database_session() as db:
+            from app.crud.scrape_run import mark_inline_artifact_analysis_completed
+
+            mark_inline_artifact_analysis_completed(db, artifact_id)
+        log_event(
+            stage=STAGE,
+            event="feed_candidate_excluded",
+            started_at=started_at,
+            correlation_id=correlation,
+            run_id=state["run_id"],
+            artifact_id=artifact_id,
+            attempt=attempt,
+            source_type=state["source_type"],
+        )
+        return
+
     is_news = state["source_type"] == "news"
     if is_news:
         output = analyse_news_text(
@@ -636,6 +695,7 @@ def _analyse_public_discussion_artifact(
         )
 
     category = "news_article" if is_news else "user_discussion"
+    summary = _required_summary_values(output)
 
     with database_session() as db:
         from app.crud.artifact import store_artifact_analysis
@@ -647,8 +707,9 @@ def _analyse_public_discussion_artifact(
             metadata={
                 "category": category,
                 "category_confidence": 1.0,
+                **eligibility_metadata,
             },
-            summary=_summary_values(output),
+            summary=summary,
             sentiment=_sentiment_values(output),
         )
 
@@ -739,6 +800,7 @@ def _analyse_object(
         }
     )
     sentiment = _sentiment_values(output)
+    summary = _required_summary_values(output)
 
     with database_session() as db:
         from app.crud.artifact import store_artifact_analysis
@@ -748,7 +810,7 @@ def _analyse_object(
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
             metadata=analysis_metadata,
-            summary=_summary_values(output),
+            summary=summary,
             sentiment=sentiment,
         )
 

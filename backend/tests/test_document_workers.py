@@ -730,9 +730,14 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     )
     output = AnalysisOutput(
         parsed=parsed,
-        summary=None,
-        summary_model=None,
-        summary_prompt_version=None,
+        summary={
+            "summary": "CSL reported increased revenue.",
+            "about": "The filing summarises CSL's half-year results.",
+            "changed": "Reported revenue increased.",
+            "matters": "The result informs investor expectations.",
+        },
+        summary_model="bedrock:test-model",
+        summary_prompt_version="llm-announcement-summary-v3",
         sentiment={
             "sentiment_label": "positive",
             "label": "positive",
@@ -820,6 +825,9 @@ def test_analysis_stores_results_then_marks_completed(monkeypatch):
     assert calls["stored"]["metadata"]["category"] == "HalfYearResults"
     assert calls["stored"]["metadata"]["classification_method"] == "rules-v2"
     assert calls["stored"]["sentiment"]["sentiment_label"] == "positive"
+    assert calls["stored"]["summary"]["about"] == (
+        "The filing summarises CSL's half-year results."
+    )
     assert calls["completed"] is True
     assert calls["published"] == {
         "artifact_id": artifact_id,
@@ -1185,6 +1193,15 @@ def test_analysis_worker_persists_public_discussion_results(
         "analyse_public_discussion_text",
         lambda **_kwargs: output,
     )
+    monkeypatch.setattr(
+        analysis,
+        "_assess_stored_text_eligibility",
+        lambda _state: {
+            "feed_eligible": True,
+            "relevance_confidence": 0.95,
+            "reason": "Substantive company-specific discussion.",
+        },
+    )
     monkeypatch.setattr(analysis, "database_session", fake_session)
     monkeypatch.setattr(
         "app.crud.scrape_run.mark_inline_artifact_analysis_started",
@@ -1207,7 +1224,70 @@ def test_analysis_worker_persists_public_discussion_results(
 
     assert calls["started"] is True
     assert calls["stored"]["metadata"]["category"] == "user_discussion"
+    assert calls["stored"]["metadata"]["feed_eligible"] is True
     assert calls["stored"]["sentiment"]["sentiment_label"] == "neutral"
+    assert calls["completed"] is True
+
+
+def test_analysis_worker_excludes_ineligible_content_without_summarising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_id = uuid4()
+    calls: dict[str, object] = {}
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    monkeypatch.setattr(
+        analysis,
+        "_public_discussion_artifact_state",
+        lambda _artifact_id: {
+            "completed": False,
+            "run_id": None,
+            "title": "Weekend meme thread",
+            "raw_text": "Who else is bored?",
+            "source_type": "reddit",
+            "has_ticker_match": True,
+        },
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_assess_stored_text_eligibility",
+        lambda _state: {
+            "feed_eligible": False,
+            "relevance_confidence": 0.99,
+            "reason": "The post is informal chatter without financial substance.",
+        },
+    )
+    monkeypatch.setattr(
+        analysis,
+        "analyse_public_discussion_text",
+        lambda **_kwargs: pytest.fail("Ineligible content must not be summarised"),
+    )
+    monkeypatch.setattr(analysis, "database_session", fake_session)
+    monkeypatch.setattr(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
+        lambda *_args, **_kwargs: calls.setdefault("started", True),
+    )
+    monkeypatch.setattr(
+        "app.crud.artifact.store_artifact_analysis",
+        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
+    )
+    monkeypatch.setattr(
+        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
+        lambda *_args, **_kwargs: calls.setdefault("completed", True),
+    )
+
+    analysis._analyse_public_discussion_artifact(
+        artifact_id=artifact_id,
+        correlation="message-1",
+        attempt=1,
+    )
+
+    assert calls["started"] is True
+    assert calls["stored"]["metadata"]["feed_eligible"] is False
+    assert "summary" not in calls["stored"]
     assert calls["completed"] is True
 
 
@@ -1260,6 +1340,15 @@ def test_analysis_worker_persists_news_results(
         analysis,
         "analyse_news_text",
         lambda **_kwargs: output,
+    )
+    monkeypatch.setattr(
+        analysis,
+        "_assess_stored_text_eligibility",
+        lambda _state: {
+            "feed_eligible": True,
+            "relevance_confidence": 0.98,
+            "reason": "Substantive company-specific financial news.",
+        },
     )
     monkeypatch.setattr(analysis, "database_session", fake_session)
     monkeypatch.setattr(

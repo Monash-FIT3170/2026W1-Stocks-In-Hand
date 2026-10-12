@@ -2,7 +2,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.artifact import Artifact
@@ -19,7 +19,14 @@ from app.services.summary_metadata import (
 _WHITESPACE = re.compile(r"\s+")
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 _SYDNEY_TZ = ZoneInfo("Australia/Sydney")
-FEED_SOURCE_TYPES = ("asx_announcement", "news", "reddit")
+def _feed_eligible_filter():
+    return or_(
+        Artifact.source_type == "asx_announcement",
+        and_(
+            Artifact.source_type.in_(("news", "reddit")),
+            Artifact.artifact_metadata["feed_eligible"].as_boolean().is_(True),
+        ),
+    )
 
 
 def _clean_text(value: object) -> str | None:
@@ -27,15 +34,6 @@ def _clean_text(value: object) -> str | None:
         return None
     cleaned = _WHITESPACE.sub(" ", value).strip()
     return cleaned or None
-
-
-def _preview_text(value: object, max_length: int = 220) -> str | None:
-    cleaned = _clean_text(value)
-    if not cleaned:
-        return None
-    if len(cleaned) <= max_length:
-        return cleaned
-    return f"{cleaned[:max_length].rstrip()}..."
 
 
 def _metadata_value(metadata: dict | None, *keys: str) -> str | None:
@@ -142,8 +140,7 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
             )
             or _clean_text(summary_fields.get("summary"))
             or _metadata_value(metadata, "summary")
-            or _preview_text(artifact.raw_text)
-            or title
+            or "Summary pending."
         ),
         changed=(
             _clean_text(summary_fields.get("changed"))
@@ -182,7 +179,7 @@ def get_announcements(
                 ArtifactTickerMention.ticker
             ),
         )
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
     )
 
     has_custom_range = start_date is not None or end_date is not None
@@ -231,7 +228,7 @@ def get_trending_announcements(
             Artifact.id.label("artifact_id"),
         )
         .filter(Artifact.ticker_id.isnot(None))
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
         .filter(date_value >= cutoff)
     )
     mentioned_artifacts = (
@@ -240,7 +237,7 @@ def get_trending_announcements(
             ArtifactTickerMention.artifact_id.label("artifact_id"),
         )
         .join(Artifact, Artifact.id == ArtifactTickerMention.artifact_id)
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
         .filter(date_value >= cutoff)
     )
     feed_artifacts = direct_artifacts.union_all(mentioned_artifacts).subquery()

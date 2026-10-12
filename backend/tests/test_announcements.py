@@ -116,7 +116,7 @@ def test_announcement_mapping_recovers_legacy_combined_bedrock_summary() -> None
     )
 
 
-def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
+def test_announcement_mapping_never_uses_raw_text_as_a_summary() -> None:
     artifact = Artifact(
         id=uuid.uuid4(),
         source_type="asx_announcement",
@@ -131,8 +131,8 @@ def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
 
     assert result.ticker == "ASX"
     assert result.tag == "Asx Announcement Other"
-    assert result.about.startswith("Long raw text")
-    assert result.about.endswith("...")
+    assert result.about == "Summary pending."
+    assert "Long raw text" not in result.about
     assert result.changed == "No change summary available yet."
     assert result.matters == "No impact summary available yet."
     assert result.url == "https://example.test/file.pdf"
