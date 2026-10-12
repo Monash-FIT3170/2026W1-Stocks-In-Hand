@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from scrapers.registry import available_tickers, scrape
-from config import OUTPUT_DIR
+from cli_config import OUTPUT_DIR
 
 SEP = "-" * 60
 

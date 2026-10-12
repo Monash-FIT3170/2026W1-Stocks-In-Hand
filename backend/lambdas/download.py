@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from app.messages import QueueBMessage
+from app.status import DownloadStatus
 from lambdas.common import (
     PermanentDocumentError,
     canonicalize_url,
@@ -173,7 +174,7 @@ def _handle_record(record: dict) -> None:
         message = _parse_message(record)
         artifact_state = _load_artifact(message)
         s3 = boto3.client("s3")
-        if artifact_state["status"] == "stored" and _object_exists(
+        if artifact_state["status"] == DownloadStatus.STORED and _object_exists(
             s3,
             bucket=artifact_state["s3_bucket"],
             key=artifact_state["s3_key"],

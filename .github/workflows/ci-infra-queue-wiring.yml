@@ -16,22 +16,26 @@ on:
     paths:
       - "infra/template.yaml"
       - "infra/samconfig.toml"
+      - "infra/github-oidc.yaml"
       - "backend/app/messages.py"
       - "backend/app/services/scrape_queue.py"
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
+      - ".github/workflows/verify-staging-queue-wiring.yml"
   pull_request:
     paths:
       - "infra/template.yaml"
       - "infra/samconfig.toml"
+      - "infra/github-oidc.yaml"
       - "backend/app/messages.py"
       - "backend/app/services/scrape_queue.py"
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
+      - ".github/workflows/verify-staging-queue-wiring.yml"
 
 permissions:
   contents: read

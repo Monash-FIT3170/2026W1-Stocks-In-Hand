@@ -176,6 +176,11 @@ Public discussion collection defaults to Bluesky and Mastodon, ten items each,
 with one concurrent scheduler invocation. Reddit and blogs require their SSM
 settings before they are included.
 
+Scheduled Marketaux articles and public discussion posts use the analysis queue
+for summary generation. General ASX posts do not need a supported ticker match.
+After deploying this wiring, repeat one bounded Marketaux and provider canary to
+queue previously stored items that still have pending summaries.
+
 ## Security and reliability
 
 - Both S3 buckets block public access and require TLS.

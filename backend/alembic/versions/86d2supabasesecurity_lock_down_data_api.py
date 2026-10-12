@@ -8,6 +8,7 @@ Create Date: 2026-08-13
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import text
 
 
 revision: str = "86d2supabasesecurity"
@@ -30,34 +31,40 @@ TABLES = (
     "alembic_version",
 )
 
+# Supabase creates these Data API roles automatically; a plain local/test
+# Postgres instance (docker-compose-tests.yml, local dev) does not. Row
+# level security is still enabled/disabled either way -- only the
+# REVOKE/GRANT against these specific roles is conditional, so behaviour
+# against a real Supabase database is unchanged.
+DATA_API_ROLES = ("anon", "authenticated")
 
-def _change_data_api_privileges(table: str, action: str, recipient_keyword: str) -> None:
-    """Change Supabase role privileges without breaking plain PostgreSQL installs."""
-    for role in ("anon", "authenticated"):
-        op.execute(
-            f"""
-            DO $$
-            BEGIN
-                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-                    {action} ON TABLE public."{table}" {recipient_keyword} {role};
-                END IF;
-            END
-            $$
-            """
-        )
+
+def _existing_roles(names: Sequence[str]) -> list[str]:
+    bind = op.get_bind()
+    rows = bind.execute(
+        text("SELECT rolname FROM pg_roles WHERE rolname = ANY(:names)"),
+        {"names": list(names)},
+    )
+    return sorted(row[0] for row in rows)
 
 
 def upgrade() -> None:
+    roles = _existing_roles(DATA_API_ROLES)
     for table in TABLES:
         op.execute(f'ALTER TABLE public."{table}" ENABLE ROW LEVEL SECURITY')
-        _change_data_api_privileges(table, "REVOKE ALL PRIVILEGES", "FROM")
+        if roles:
+            op.execute(
+                f'REVOKE ALL PRIVILEGES ON TABLE public."{table}" '
+                f"FROM {', '.join(roles)}"
+            )
 
 
 def downgrade() -> None:
+    roles = _existing_roles(DATA_API_ROLES)
     for table in reversed(TABLES):
         op.execute(f'ALTER TABLE public."{table}" DISABLE ROW LEVEL SECURITY')
-        _change_data_api_privileges(
-            table,
-            "GRANT SELECT, INSERT, UPDATE, DELETE",
-            "TO",
-        )
+        if roles:
+            op.execute(
+                f'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public."{table}" '
+                f"TO {', '.join(roles)}"
+            )

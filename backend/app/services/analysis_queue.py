@@ -15,7 +15,12 @@ def _sqs_client() -> Any:
     return boto3.client("sqs", region_name=settings.AWS_REGION)
 
 
-def enqueue_public_discussion_analysis(artifact_id: UUID) -> str:
+def enqueue_stored_artifact_analysis(artifact_id: UUID) -> str:
+    """Queue analysis for text already stored in the artifacts table.
+
+    The legacy wire message name is retained so deployments can process messages
+    produced before stored news was added to this queue.
+    """
     if not settings.ANALYSIS_QUEUE_URL:
         raise RuntimeError("ANALYSIS_QUEUE_URL is not configured")
     message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
@@ -24,3 +29,8 @@ def enqueue_public_discussion_analysis(artifact_id: UUID) -> str:
         MessageBody=message.model_dump_json(),
     )
     return str(response["MessageId"])
+
+
+def enqueue_public_discussion_analysis(artifact_id: UUID) -> str:
+    """Backward-compatible producer name for existing callers."""
+    return enqueue_stored_artifact_analysis(artifact_id)

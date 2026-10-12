@@ -99,6 +99,31 @@ the sender variable is non-empty and that the Brevo parameter exists as a
 print the API key. Deploy the current `infra/github-oidc.yaml` first so the
 GitHub role has permission to perform this check.
 
+Marketaux is required only when Marketaux collection is enabled. Store its API
+token as a `SecureString` without printing or committing it:
+
+```bash
+read -s "MARKETAUX_API_TOKEN?Marketaux API token: "
+aws ssm put-parameter \
+  --region "$AWS_REGION" \
+  --name /stocks-in-hand/staging/marketaux-api-token \
+  --type SecureString \
+  --value "$MARKETAUX_API_TOKEN" \
+  --overwrite
+unset MARKETAUX_API_TOKEN
+```
+
+When `enable_marketaux=true`, the deployment checks the parameter type before
+building the change set. The weekly schedule collects at most five tickers per
+run and 25 articles per ticker. `ScheduleEnabled` must also be `true` for this
+automatic collection to run. The API can still fetch Marketaux news on demand
+when Marketaux is enabled and the weekly schedule is disabled.
+
+Scheduled Marketaux records are stored first, then sent to the analysis queue.
+The analysis worker uses the news-specific Bedrock prompt and stores the four
+display fields before the announcements page reads them. A repeated bounded run
+also queues duplicate articles that were stored before this wiring existed.
+
 Reddit credentials and the blog feed allowlist are optional. Store them only
 when those sources are enabled:
 
@@ -376,6 +401,8 @@ PublicDiscussionPerSourceLimit=10
 Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
 the feed allowlist exists. Each EventBridge event has a stable idempotency key,
 the Lambda has reserved concurrency one, and at most five blog feeds run.
+Collected public posts are queued for analysis even when they discuss the ASX
+market generally and do not name one of the supported company tickers.
 
 ## 10. Configure GitHub Actions with OIDC
 
@@ -431,12 +458,14 @@ change a value on the next approved merge:
 AUTO_DEPLOY_AUTH_PROVIDER
 AUTO_DEPLOY_ENABLE_SCHEDULE
 AUTO_DEPLOY_ENABLE_PUBLIC_DISCUSSION_SCHEDULE
+AUTO_DEPLOY_ENABLE_MARKETAUX
 AUTO_DEPLOY_ENABLE_ANALYSIS
 AUTO_DEPLOY_ENABLE_NOTIFICATIONS
 AUTO_DEPLOY_ENABLE_BEDROCK
 AUTO_DEPLOY_SCHEDULED_TICKERS
 AUTO_DEPLOY_SCHEDULED_PUBLIC_DISCUSSION_SOURCES
 AUTO_DEPLOY_PUBLIC_DISCUSSION_PER_SOURCE_LIMIT
+AUTO_DEPLOY_MARKETAUX_PER_TICKER_LIMIT
 ```
 
 Leave notifications, schedules, and Bedrock disabled until their smoke tests

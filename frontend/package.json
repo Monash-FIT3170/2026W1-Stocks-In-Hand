@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start -p 3000",
+    "preview": "next build && npx serve out",
+    "lint": "eslint .",
     "test": "vitest run"
   },
   "dependencies": {
@@ -20,6 +22,8 @@
     "sharp": "0.35.0"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^15.5.21",
     "vitest": "4.1.11"
   }
 }

@@ -77,6 +77,10 @@ def load_runtime_configuration() -> None:
     parameter_names = {
         "DATABASE_URL": os.getenv("DATABASE_URL_PARAMETER", ""),
         "BREVO_API_KEY": os.getenv("BREVO_API_KEY_PARAMETER", ""),
+        "MARKETAUX_API_TOKEN": os.getenv(
+            "MARKETAUX_API_TOKEN_PARAMETER",
+            "",
+        ),
         "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID_PARAMETER", ""),
         "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET_PARAMETER", ""),
         "PUBLIC_DISCUSSION_FEED_URLS": os.getenv(

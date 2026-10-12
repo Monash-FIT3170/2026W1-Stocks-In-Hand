@@ -13,6 +13,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import uuid
 from app.database.base import Base
+from app.status import AnalysisStatus, DownloadStatus
 
 class Artifact(Base):
     __tablename__ = "artifacts"
@@ -58,8 +59,8 @@ class Artifact(Base):
     file_size_bytes = Column(BigInteger, nullable=True)
     s3_bucket = Column(String, nullable=True)
     s3_key = Column(Text, nullable=True)
-    download_status = Column(String, nullable=False, default="pending")
-    analysis_status = Column(String, nullable=False, default="pending")
+    download_status = Column(String, nullable=False, default=DownloadStatus.PENDING)
+    analysis_status = Column(String, nullable=False, default=AnalysisStatus.PENDING)
     downloaded_at = Column(DateTime(timezone=True), nullable=True)
     analyzed_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)

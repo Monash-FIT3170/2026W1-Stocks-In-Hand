@@ -66,7 +66,8 @@ The analysis path is:
 This means:
 
 1. An `Artifact` belongs to a ticker and to the platform it came from.
-2. `parsing/storage.py` writes the artifact, then its summary and sentiment.
+2. `crud.artifact.store_artifact_analysis` (called from `lambdas/analysis.py`) writes
+   the artifact, then its summary and sentiment.
 3. The ticker overview, news feed, and deep-dive endpoints read them back
    through the `summaries` and `sentiments` backrefs.
 
