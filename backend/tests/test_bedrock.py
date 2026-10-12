@@ -181,7 +181,7 @@ def test_announcement_summary_repairs_malformed_model_json_once() -> None:
     assert invoke.call_count == 2
     repair_prompt = invoke.call_args_list[1].args[0]
     assert json.dumps(malformed, ensure_ascii=False) in repair_prompt
-    assert invoke.call_args_list[1].kwargs == {"temperature": 0}
+    assert invoke.call_args_list[1].kwargs == {"temperature": 0, "summary_clarity": True}
 
 
 def test_announcement_summary_retries_a_malformed_repair_once() -> None:
@@ -215,7 +215,7 @@ def test_announcement_summary_retries_a_malformed_repair_once() -> None:
     assert invoke.call_count == 3
     final_repair_prompt = invoke.call_args_list[2].args[0]
     assert json.dumps(truncated_repair, ensure_ascii=False) in final_repair_prompt
-    assert invoke.call_args_list[2].kwargs == {"temperature": 0}
+    assert invoke.call_args_list[2].kwargs == {"temperature": 0, "summary_clarity": True}
 
 
 def test_summary_parser_quotes_only_known_unquoted_keys() -> None:
