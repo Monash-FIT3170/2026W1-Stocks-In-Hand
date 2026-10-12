@@ -14,6 +14,7 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.schemas.ticker import TickerCreate, TickerResponse
 from app.services.traceability import trace_claims
+from app.services.source_links import artifact_source_url
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
@@ -311,7 +312,7 @@ def _sources_for_artifact(artifact: Artifact):
     source = _source_from_values(
         label=_format_label(artifact.source_type, "Source"),
         title=artifact.title,
-        url=artifact.url,
+        url=artifact_source_url(artifact),
         published_at=artifact.published_at or artifact.created_at,
         evidence_text=artifact.raw_text,
     )
@@ -540,7 +541,7 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
                 "matters",
                 "No investment impact summary available yet.",
             ),
-            "url": artifact.url,
+            "url": artifact_source_url(artifact),
             "source_type": artifact.source_type,
             "source_name": _metadata_source_name(artifact),
             "source_label": _source_action_label(artifact),

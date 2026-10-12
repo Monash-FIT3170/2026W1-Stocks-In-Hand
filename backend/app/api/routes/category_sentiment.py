@@ -22,6 +22,7 @@ from app.schemas.category_sentiment import (
 from app.services import llm as llm_service
 from app.services import sentiment as sentiment_service
 from app.services.traceability import trace_claims
+from app.services.source_links import artifact_source_url
 
 router = APIRouter(prefix="/sentiment", tags=["sentiment"])
 CATEGORY_SENTIMENT_KEYS = (*llm_service.CATEGORY_KEYS, "user_discussion")
@@ -465,11 +466,7 @@ def _source_for_stored_artifact(artifact: Artifact) -> dict[str, Any]:
     return {
         "source_type": text_value("source_type") or "unknown",
         "title": text_value("title"),
-        "url": (
-            text_value("canonical_url")
-            or text_value("document_url")
-            or text_value("url")
-        ),
+        "url": artifact_source_url(artifact),
         "author": text_value("author"),
         "published_at": published_at,
     }

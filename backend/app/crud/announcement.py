@@ -6,6 +6,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.services.traceability import trace_claims
+from app.services.source_links import artifact_source_url
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
@@ -157,10 +158,7 @@ def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
             or _metadata_value(metadata, "matters", "why_it_matters")
             or "No impact summary available yet."
         ),
-        url=(
-            _clean_text(artifact.url)
-            or _metadata_value(metadata, "source_url", "pdf_url")
-        ),
+        url=artifact_source_url(artifact),
     )
 
 

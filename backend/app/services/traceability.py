@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
-from urllib.parse import urlsplit
+from app.services.source_links import artifact_source_url, safe_source_url
 
 TEXT_FIELDS = ("summary", "about", "changed", "matters")
 LIST_FIELDS = ("confirmed_facts", "speculation")
@@ -53,21 +53,6 @@ def source_passages(raw_text: str) -> dict[str, dict]:
 def numbered_source_text(raw_text: str) -> str:
     """Label evidence passages without changing the stored quotation text."""
     return "\n\n".join(f"[{key}]\n{value['quote']}" for key, value in source_passages(raw_text).items())
-
-
-def safe_source_url(value: object) -> str | None:
-    """Only expose absolute HTTP(S) links without embedded credentials."""
-    if not isinstance(value, str) or any(ord(char) < 32 for char in value):
-        return None
-    try:
-        parsed = urlsplit(value.strip())
-        if parsed.scheme.lower() in {"http", "https"} and parsed.hostname and not (
-            parsed.username or parsed.password
-        ):
-            return value.strip()
-    except ValueError:
-        pass
-    return None
 
 
 def claim_text(summary: Mapping, field: object, index: object) -> str | None:
@@ -149,9 +134,7 @@ def trace_claims(artifact) -> list[dict]:
         return []
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     raw_text = artifact.raw_text if isinstance(artifact.raw_text, str) else ""
-    source_url = next((url for value in (
-        getattr(artifact, "document_url", None), metadata.get("pdf_url"), getattr(artifact, "url", None),
-    ) if (url := safe_source_url(value))), None)
+    source_url = artifact_source_url(artifact)
     evidence = bind_claim_evidence(metadata, raw_text)
     claims = []
     for field in (*TEXT_FIELDS, *LIST_FIELDS):
