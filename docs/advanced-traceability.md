@@ -66,3 +66,7 @@ npm run build
 Backend tests cover quote fidelity, whitespace, fabricated excerpts, stale evidence, duplicate passages, invalid indexes, unsafe URLs, storage normalization, and public API serialization. Component tests cover escaped quotations, missing evidence, factual/speculative separation, and mismatched displayed wording.
 
 For a manual check, regenerate one artifact, open its ticker summary, expand a quotation below a reported fact and one below a forecast, and open their original document links. Check ticker news and market announcement cards, then the deep-dive “Trace individual claims” panel. Repeat at a narrow mobile width. Use an older artifact to confirm missing evidence is labelled clearly.
+
+## Groq JSON-mode errors
+
+A Groq `400 json_validate_failed` response means JSON-mode validation rejected the generated output; a successful short connectivity test does not rule this out. When the provider includes a non-empty `failed_generation` string, the application treats it as untrusted model output and passes it through the normal summary parser and bounded repair process. Quotations still have to match the stored source text after repair. Other HTTP errors retain their failure status, and provider error bodies are not exposed to users. A generation that cannot be repaired still fails instead of being saved as a valid summary.

@@ -392,6 +392,27 @@ key_themes: an array of short recurring themes.
 """.strip()
 
 
+def _groq_failed_generation(response: httpx.Response) -> str | None:
+    """Recover rejected JSON as untrusted model text for downstream validation.
+
+    Groq JSON mode can reject malformed generations before returning choices.
+    Summary callers already have bounded JSON repair and source-quote checks;
+    let them process the generated text without treating other HTTP failures as
+    model output. Never expose the provider's error body or credentials.
+    """
+    if response.status_code != 400:
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict) or error.get("code") != "json_validate_failed":
+        return None
+    generated = error.get("failed_generation")
+    return generated if isinstance(generated, str) and generated.strip() else None
+
+
 def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
@@ -415,6 +436,9 @@ def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            generated = _groq_failed_generation(exc.response)
+            if generated is not None:
+                return generated
             if (
                 exc.response.status_code == 413
                 and not reduced_for_payload_limit
@@ -424,7 +448,9 @@ def _call_groq(prompt: str, *, temperature: float = 0.2) -> str:
                 reduced_for_payload_limit = True
                 continue
             if exc.response.status_code != 429:
-                raise RuntimeError("Groq model invocation failed") from exc
+                raise RuntimeError(
+                    f"Groq model invocation failed (HTTP {exc.response.status_code})"
+                ) from exc
             response = exc.response
         except httpx.RequestError as exc:
             raise RuntimeError("Groq model invocation failed") from exc
