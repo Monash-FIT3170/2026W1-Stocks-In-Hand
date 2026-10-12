@@ -13,6 +13,7 @@ class ClaimEvidence(BaseModel):
     start_char: int
     end_char: int
     source_text_sha256: str
+    passage_id: str | None = None
 
 
 class ClaimSource(BaseModel):

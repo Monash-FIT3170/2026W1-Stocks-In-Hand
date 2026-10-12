@@ -32,7 +32,7 @@ def normalise_summary_metadata(summary: Mapping[str, Any] | None) -> dict[str, A
         result["claim_evidence"] = [
             {key: item[key] for key in (
                 "field", "index", "claim_text", "quote", "start_char", "end_char",
-                "source_text_sha256",
+                "source_text_sha256", "passage_id",
             ) if key in item}
             for item in evidence if isinstance(item, dict)
         ]

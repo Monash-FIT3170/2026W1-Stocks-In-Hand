@@ -19,7 +19,7 @@ def stored_artifact():
     metadata = {
         "about": "Revenue increased.", "changed": "Revenue rose 12%.",
         "confirmed_facts": ["Revenue rose 12%."], "speculation": [],
-        "claim_evidence": [{"field": "confirmed_facts", "index": 0, "quote": "Revenue increased by 12%."}],
+        "claim_evidence": [{"field": "confirmed_facts", "index": 0, "quote": "", "passage_id": "S001"}],
     }
     raw = "Revenue increased by 12%."
     metadata["claim_evidence"] = bind_claim_evidence(metadata, raw)
@@ -46,6 +46,7 @@ def test_claim_endpoint_serializes_provenance_and_handles_missing_artifacts(monk
     assert fact["source"]["artifact_id"] == str(artifact.id)
     assert fact["source"]["url"] == artifact.document_url
     assert fact["evidence"][0]["quote"] == artifact.raw_text
+    assert fact["evidence"][0]["passage_id"] == "S001"
     assert client.get(f"/artifacts/{uuid4()}/claims").status_code == 404
     assert client.get("/artifacts/not-a-uuid/claims").status_code == 422
 

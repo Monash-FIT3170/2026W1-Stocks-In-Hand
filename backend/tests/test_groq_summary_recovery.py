@@ -144,7 +144,7 @@ def test_supported_groq_models_request_typed_required_quotation_records(include_
     assert schema["additionalProperties"] is False
     assert "claim_evidence" in schema["required"]
     evidence = schema["properties"]["claim_evidence"]["items"]
-    assert evidence["required"] == ["field", "index", "quote"]
+    assert evidence["required"] == ["field", "index", "quote", "passage_id"]
     assert evidence["additionalProperties"] is False
     assert ("confirmed_facts" in schema["properties"]) is include_clarity
     assert ("confirmed_facts" in evidence["properties"]["field"]["enum"]) is include_clarity
@@ -155,3 +155,11 @@ def test_other_groq_models_retain_json_object_compatibility():
     with patch.object(llm.settings, "LLM_PROVIDER", "groq"), patch.object(llm.settings, "GROQ_MODEL", "custom-model"), patch.object(llm.settings, "GROQ_API_KEY", "test-key"), patch.object(llm.httpx, "post", return_value=accepted) as invoke:
         llm._call_llm("Synthetic input", summary_clarity=True)
     assert invoke.call_args.kwargs["json"]["response_format"] == {"type": "json_object"}
+
+
+def test_model_passage_enum_is_limited_to_supplied_source_ids():
+    accepted = response(200, {"choices": [{"message": {"content": json.dumps(summary())}}]})
+    with patch.object(llm.settings, "LLM_PROVIDER", "groq"), patch.object(llm.settings, "GROQ_MODEL", "openai/gpt-oss-20b"), patch.object(llm.settings, "GROQ_API_KEY", "test-key"), patch.object(llm.httpx, "post", return_value=accepted) as invoke:
+        llm._call_llm("Synthetic input", summary_clarity=True, summary_passage_ids=["S001", "S002"])
+    evidence = invoke.call_args.kwargs["json"]["response_format"]["json_schema"]["schema"]["properties"]["claim_evidence"]["items"]
+    assert evidence["properties"]["passage_id"]["enum"] == ["", "S001", "S002"]

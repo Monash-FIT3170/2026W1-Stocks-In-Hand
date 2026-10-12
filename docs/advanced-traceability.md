@@ -4,7 +4,7 @@ ClickUp story: `86d48cxxz` — every claim should be traceable to its source so 
 
 ## Behaviour
 
-Generated artifact summaries request supporting direct quotations from the source text. Each factual or speculative list item has its own claim reference. The `summary`, `about`, `changed`, and `matters` text fields also receive evidence references. News and individual public discussion summaries use the same evidence format.
+Generated artifact summaries receive numbered passages from the stored source text and cite those passage IDs. The backend retrieves the exact stored passage as the direct quotation, preserving PDF table layout and line breaks. Each factual or speculative list item has its own claim reference. The `summary`, `about`, `changed`, and `matters` text fields also receive evidence references. News and individual public discussion summaries use the same evidence format.
 
 The ticker summary, announcement cards (market and ticker feeds), deep-dive timeline, and category signal cards let users expand quotations and open the original source. Forecasts retain their speculation label even when the source explicitly states them. Quotations are rendered as escaped text, with original line breaks preserved.
 
@@ -28,9 +28,13 @@ A source link alone does not count as a matched quotation. Claims without usable
 
 Indexes are zero-based, and text fields use index `0`. Character offsets identify a Python Unicode string slice (`raw_text[start_char:end_char]`), with an exclusive end. They refer to extracted text, not positions in HTML or bytes in a PDF. Page numbers are not inferred from text offsets.
 
-Quotation matching accepts whitespace differences from PDF line wrapping. Numbers, wording, case and punctuation must match. Quotes are restricted to 12–1200 characters; at most 64 proposed evidence entries are processed per artifact. Duplicates and invalid field/index references are discarded. Blank clarity items are removed with their evidence indexes remapped to preserve the original association.
+New model evidence records include `passage_id` (for example `S002`). Passages contain at most 600 characters and are bounded to the first 18,000 source characters supplied to the model. Numbered passage citations are resolved locally to exact text and offsets, rather than trusting model-copied quotation wording. Unknown IDs are rejected, and strict Groq schemas enumerate only supplied IDs. Model quote text cannot replace the stored passage.
+
+Legacy quotation matching accepts whitespace differences from PDF line wrapping. Numbers, wording, case and punctuation must match. Quotes are restricted to 12–1200 characters; at most 64 proposed evidence entries are processed per artifact. Duplicates and invalid field/index references are discarded. Blank clarity items are removed with their evidence indexes remapped to preserve the original association.
 
 A quotation match establishes fidelity to the stored text. It does not establish that the publisher's statement is true or that the passage logically supports the generated interpretation. The UI tells users to review the source in context. OCR may affect the quality of the stored text.
+
+The model is instructed to preserve PDF table labels, including distinguishing the date of a previous notice from a current filing date. Passage fidelity does not independently validate the model’s interpretation of those labels.
 
 At read time, quotations are checked again against the current claim wording and complete source text fingerprint. A changed claim or changed source text invalidates previous evidence. Source title, artifact ID and publication date come from the artifact; the URL prefers `document_url`, then legacy `pdf_url`, then `url`. Model-supplied URLs are discarded. Only absolute HTTP(S) links without credentials are exposed. Reading evidence never downloads a user-supplied URL or invokes the model.
 
@@ -49,7 +53,7 @@ Existing fields remain available. Category signals expose constituent artifact c
 
 ## Existing records and regeneration
 
-No database migration is required: evidence is stored in the existing JSON metadata column. New summaries persist evidence through the queued analysis worker, manual summary API and local parsing path. New summaries clear previous evidence when the model omits it. Prompt provenance versions are `llm-announcement-summary-v4`, `llm-news-summary-v3` and `llm-public-discussion-summary-v3`.
+No database migration is required: evidence is stored in the existing JSON metadata column. New summaries persist evidence through the queued analysis worker, manual summary API and local parsing path. New summaries clear previous evidence when the model omits it. Prompt provenance versions are `llm-announcement-summary-v5`, `llm-news-summary-v4` and `llm-public-discussion-summary-v4`.
 
 For an existing artifact, an administrator can use `POST /gemini/summarise/artifact/{artifact_id}` to regenerate its summary and evidence with the configured LLM. Despite the legacy route name, it uses the configured provider. Ticker-wide summary backfill revisits summaries without a `claim_evidence` array. A regenerated summary can still have missing quotations if none passed validation. Regeneration changes summary wording and may invoke a paid provider; no production backfill is performed automatically.
 

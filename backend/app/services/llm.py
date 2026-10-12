@@ -10,14 +10,14 @@ import httpx
 
 from app.core.config import settings
 from app.services import bedrock
-from app.services.traceability import EVIDENCE_INSTRUCTION, bind_claim_evidence
+from app.services.traceability import EVIDENCE_INSTRUCTION, bind_claim_evidence, numbered_source_text, source_passages
 
 
 CATEGORY_KEYS = ("revenue", "strategy", "risk", "dividend", "organisational")
 PROMPT_VERSION = "llm-category-v2"
-NEWS_SUMMARY_PROMPT_VERSION = "llm-news-summary-v3"
-PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "llm-public-discussion-summary-v3"
-SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v4"
+NEWS_SUMMARY_PROMPT_VERSION = "llm-news-summary-v4"
+PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION = "llm-public-discussion-summary-v4"
+SUMMARY_PROMPT_VERSION = "llm-announcement-summary-v5"
 REDDIT_DIGEST_PROMPT_VERSION = "llm-reddit-digest-v2"
 SUMMARY_TEXT_KEYS = ("summary", "about", "changed", "matters")
 SUMMARY_LIST_KEYS = ("confirmed_facts", "speculation")
@@ -196,7 +196,10 @@ Repair a malformed model response into one valid JSON object.
 
 Preserve supported meaning. Do not add external facts, explanations, markdown, or keys.
 Return these keys: {required_fields}, claim_evidence.
-claim_evidence must be an array of objects with field, index, and quote. Preserve
+claim_evidence must be an array of objects with field, index, quote, and passage_id.
+Use numbered passage IDs from the source context; quote may be empty when an ID
+is supplied. Preserve the field labels in tables; a previous notice date is not
+the current filing date. Preserve
 existing quotations or recover supporting verbatim excerpts from the source
 context. Never invent quotations. Use an empty array only when no supporting
 source passage is available.
@@ -218,6 +221,7 @@ def _parse_summary_with_repair(
     *,
     include_clarity: bool = True,
     source_prompt: str | None = None,
+    passage_ids: list[str] | None = None,
 ) -> dict[str, object]:
     try:
         return parse_summary_response(text, include_clarity=include_clarity)
@@ -233,6 +237,7 @@ def _parse_summary_with_repair(
             ),
             temperature=0,
             summary_clarity=include_clarity,
+            summary_passage_ids=passage_ids,
         )
         try:
             return parse_summary_response(repaired, include_clarity=include_clarity)
@@ -298,7 +303,7 @@ def _build_summary_prompt(
     raw_text: str,
 ) -> str:
     extracted_json = json.dumps(extracted_data or {}, default=str, indent=2)[:6000]
-    text = raw_text[:18000]
+    text = numbered_source_text(raw_text)
     return f"""
 You are summarising an official ASX announcement for retail investors.
 
@@ -339,7 +344,7 @@ def _build_news_summary_prompt(
     source_name: str | None,
     raw_text: str,
 ) -> str:
-    text = raw_text[:18000]
+    text = numbered_source_text(raw_text)
     return f"""
 You are summarising a financial news story for retail investors.
 
@@ -370,7 +375,7 @@ def _build_public_discussion_summary_prompt(
     source_type: str,
     raw_text: str,
 ) -> str:
-    text = raw_text[:18000]
+    text = numbered_source_text(raw_text)
     return f"""
 You are summarising one public discussion post for retail investors.
 
@@ -449,7 +454,7 @@ def _groq_failed_generation(response: httpx.Response) -> str | None:
     return generated if isinstance(generated, str) and generated.strip() else None
 
 
-def _summary_response_format(include_clarity: bool) -> dict:
+def _summary_response_format(include_clarity: bool, passage_ids: list[str] | None = None) -> dict:
     """Require the summary and quotation contract on supported Groq models."""
     properties = {key: {"type": "string"} for key in SUMMARY_TEXT_KEYS}
     if include_clarity:
@@ -462,8 +467,9 @@ def _summary_response_format(include_clarity: bool) -> dict:
                 "field": {"type": "string", "enum": list(properties)},
                 "index": {"type": "integer"},
                 "quote": {"type": "string"},
+                "passage_id": {"type": "string", **({"enum": ["", *passage_ids]} if passage_ids is not None else {})},
             },
-            "required": ["field", "index", "quote"],
+            "required": ["field", "index", "quote", "passage_id"],
             "additionalProperties": False,
         },
     }
@@ -558,6 +564,7 @@ def active_model_name() -> str:
 
 def _call_llm(
     prompt: str, *, temperature: float = 0.2, summary_clarity: bool | None = None,
+    summary_passage_ids: list[str] | None = None,
 ) -> str:
     if settings.LLM_PROVIDER == "bedrock":
         return bedrock.invoke_text(prompt, temperature=temperature)
@@ -565,7 +572,7 @@ def _call_llm(
         if summary_clarity is not None and settings.GROQ_MODEL in GROQ_STRICT_SUMMARY_MODELS:
             return _call_groq(
                 prompt, temperature=0,
-                response_format=_summary_response_format(summary_clarity),
+                response_format=_summary_response_format(summary_clarity, summary_passage_ids),
             )
         return _call_groq(prompt, temperature=temperature)
     raise RuntimeError(f"Unsupported LLM provider: {settings.LLM_PROVIDER}")
@@ -587,8 +594,10 @@ def summarise_announcement(
     prompt = _build_summary_prompt(
         title=title, category=category, extracted_data=extracted_data, raw_text=raw_text,
     )
+    passage_ids = list(source_passages(raw_text))
     summary = _parse_summary_with_repair(
-        _call_llm(prompt, summary_clarity=True), source_prompt=prompt,
+        _call_llm(prompt, summary_clarity=True, summary_passage_ids=passage_ids),
+        source_prompt=prompt, passage_ids=passage_ids,
     )
 
     if "claim_evidence" in summary:
@@ -604,8 +613,10 @@ def summarise_news_article(
 ) -> dict[str, object]:
     """Summarise a financial news article."""
     prompt = _build_news_summary_prompt(title=title, source_name=source_name, raw_text=raw_text)
+    passage_ids = list(source_passages(raw_text))
     summary = _parse_summary_with_repair(
-        _call_llm(prompt, summary_clarity=False), include_clarity=False, source_prompt=prompt,
+        _call_llm(prompt, summary_clarity=False, summary_passage_ids=passage_ids),
+        include_clarity=False, source_prompt=prompt, passage_ids=passage_ids,
     )
 
     if "claim_evidence" in summary:
@@ -623,8 +634,10 @@ def summarise_public_discussion(
     prompt = _build_public_discussion_summary_prompt(
         title=title, source_type=source_type, raw_text=raw_text,
     )
+    passage_ids = list(source_passages(raw_text))
     summary = _parse_summary_with_repair(
-        _call_llm(prompt, summary_clarity=False), include_clarity=False, source_prompt=prompt,
+        _call_llm(prompt, summary_clarity=False, summary_passage_ids=passage_ids),
+        include_clarity=False, source_prompt=prompt, passage_ids=passage_ids,
     )
 
     if "claim_evidence" in summary:

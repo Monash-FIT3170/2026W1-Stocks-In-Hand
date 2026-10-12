@@ -131,3 +131,46 @@ def test_blank_claim_cleanup_does_not_move_quotation_to_a_different_claim():
     assert len(evidence) == 1
     assert evidence[0]["index"] == 0
     assert evidence[0]["claim_text"] == "Revenue rose 12%."
+
+
+def test_numbered_table_passage_uses_stored_text_even_when_model_quote_is_empty():
+    raw = "Name of Director Example Person\nDate of last notice 12 January 2026\nDate of change 7 October 2026\nNumber acquired\n\n5,000\n"
+    data = {**summary(), "claim_evidence": [{"field": "confirmed_facts", "index": 0, "quote": "", "passage_id": "S001"}]}
+    evidence = bind_claim_evidence(data, raw)
+    assert evidence[0]['quote'] == raw
+    assert evidence[0]['passage_id'] == 'S001'
+    assert raw[evidence[0]['start_char']:evidence[0]['end_char']] == evidence[0]['quote']
+    assert normalise_summary_metadata({**data, 'claim_evidence': evidence})['claim_evidence'] == evidence
+
+
+def test_passage_references_cannot_fabricate_displayed_quotation():
+    data = {**summary(), 'claim_evidence': [{'field': 'confirmed_facts', 'index': 0, 'quote': 'Revenue rose by 999%.', 'passage_id': 'S001'}]}
+    raw = 'Revenue increased by 12%.'
+    assert bind_claim_evidence(data, raw)[0]['quote'] == raw
+
+
+@pytest.mark.parametrize('passage_id', ['S999', 'S1', 'https://malicious.test', 1, False, []])
+def test_invalid_passage_reference_is_rejected_even_if_quote_matches(passage_id):
+    data = {**summary(), 'claim_evidence': [{'field': 'confirmed_facts', 'index': 0, 'quote': 'Revenue increased by 12%.', 'passage_id': passage_id}]}
+    assert bind_claim_evidence(data, 'Revenue increased by 12%.') == []
+
+
+def test_passage_offsets_are_stable_and_bounded_to_the_model_source_window():
+    from app.services.traceability import source_passages, SOURCE_WINDOW_CHARS
+    raw = ('PDF label and value 15000\n' * 1000)
+    passages = source_passages(raw)
+    assert passages == source_passages(raw)
+    previous_end = 0
+    for passage in passages.values():
+        assert passage['start_char'] == previous_end
+        assert passage['end_char'] <= SOURCE_WINDOW_CHARS
+        assert passage['end_char'] - passage['start_char'] <= 600
+        assert raw[passage['start_char']:passage['end_char']] == passage['quote']
+        previous_end = passage['end_char']
+
+
+def test_cited_passage_does_not_survive_a_changed_source_snapshot():
+    raw = 'Revenue increased by 12%.'
+    data = {**summary(), 'claim_evidence': [{'field': 'confirmed_facts', 'index': 0, 'quote': '', 'passage_id': 'S001'}]}
+    data['claim_evidence'] = bind_claim_evidence(data, raw)
+    assert bind_claim_evidence(data, raw + ' Updated.') == []
