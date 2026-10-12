@@ -126,7 +126,28 @@ def parse_summary_response(
         value = data["claim_evidence"]
         if not isinstance(value, list):
             raise ValueError("LLM claim_evidence must be an array")
-        summary["claim_evidence"] = value
+        # Clarity parsing removes blank items. Keep evidence indexes aligned
+        # with their original claims rather than assigning a quote to a neighbor.
+        proposals = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            item = dict(item)
+            field, index = item.get("field"), item.get("index")
+            if isinstance(field, str) and field in SUMMARY_LIST_KEYS:
+                original = data.get(field)
+                if (
+                    not include_clarity
+                    or not isinstance(original, list)
+                    or type(index) is not int
+                    or not 0 <= index < len(original)
+                ):
+                    continue
+                if not isinstance(original[index], str) or not original[index].strip():
+                    continue
+                item["index"] = sum(bool(text.strip()) for text in original[:index])
+            proposals.append(item)
+        summary["claim_evidence"] = proposals
     return summary
 
 

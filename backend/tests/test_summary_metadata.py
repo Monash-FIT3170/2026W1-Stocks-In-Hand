@@ -9,6 +9,7 @@ from uuid import uuid4
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.crud.artifact import store_artifact_analysis
+from app.services.traceability import bind_claim_evidence
 from app.services.summary_metadata import (
     combine_summary_text,
     has_complete_summary_metadata,
@@ -72,6 +73,12 @@ def test_analysis_storage_merges_fields_and_records_prompt_version() -> None:
         "prompt_version": "llm-announcement-summary-v3",
     }
 
+    summary["claim_evidence"] = bind_claim_evidence(
+        {**summary, "claim_evidence": [{
+            "field": "about", "index": 0, "quote": "Stored filing text",
+        }]},
+        "Stored filing text",
+    )
     result = store_artifact_analysis(
         db,
         artifact_id=artifact_id,
@@ -86,6 +93,8 @@ def test_analysis_storage_merges_fields_and_records_prompt_version() -> None:
     assert artifact.artifact_metadata["confirmed_facts"] == [
         "The company announced the program."
     ]
+    assert artifact.artifact_metadata["claim_evidence"] == summary["claim_evidence"]
+    assert len(artifact.artifact_metadata["claim_evidence"]) == 1
     assert summary_row.prompt_version == "llm-announcement-summary-v3"
     assert summary_row.model_used == "bedrock:test-model"
     db.commit.assert_called_once()

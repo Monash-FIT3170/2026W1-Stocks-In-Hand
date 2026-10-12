@@ -117,3 +117,17 @@ def test_linked_news_and_discussion_summaries_bind_evidence(generate, kwargs):
     with patch.object(llm, "_call_llm", return_value=json.dumps(data)):
         result = generate(title="Update", raw_text="Revenue increased by 12%.", **kwargs)
     assert result["claim_evidence"][0]["claim_text"] == data["changed"]
+
+
+def test_blank_claim_cleanup_does_not_move_quotation_to_a_different_claim():
+    data = summary()
+    data["confirmed_facts"] = ["", "Revenue rose 12%.", "Profit grew."]
+    data["claim_evidence"] = [
+        {"field": "confirmed_facts", "index": 0, "quote": "Revenue increased by 12%."},
+        {"field": "confirmed_facts", "index": 1, "quote": "Revenue increased by 12%."},
+    ]
+    parsed = llm.parse_summary_response(json.dumps(data))
+    evidence = bind_claim_evidence(parsed, "Revenue increased by 12%.")
+    assert len(evidence) == 1
+    assert evidence[0]["index"] == 0
+    assert evidence[0]["claim_text"] == "Revenue rose 12%."

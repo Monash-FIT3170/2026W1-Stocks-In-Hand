@@ -461,3 +461,10 @@ a rules score, not a probability. Ambiguous and unknown results remain
 See [the advanced content classification guide](docs/advanced-content-classification.md)
 for the taxonomy, fixture evaluator, extension process and bounded
 reclassification command.
+
+## Claim traceability
+
+Artifact summaries can show direct source quotations beside their claims, with links
+to the original document and explicit missing-evidence states. See the
+[advanced traceability guide](docs/advanced-traceability.md) for the API contract,
+quotation validation and regeneration of older summaries.
