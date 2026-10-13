@@ -1,10 +1,13 @@
 import re
 from pathlib import Path
 
+import yaml
+
 from tools import sync_tickers
 from tools.template_model import possible_strings, template_model
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 
 
 def test_ticker_list_copies_match_the_catalogue() -> None:
@@ -367,42 +370,62 @@ def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
     deploy = (
         REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
     ).read_text(encoding="utf-8")
-    rollback = (
-        REPOSITORY_ROOT
-        / ".github"
-        / "workflows"
-        / "prepare-staging-backend-rollback.yml"
-    ).read_text(encoding="utf-8")
 
     assert "enable_public_discussion_schedule:" in deploy
     assert "PublicDiscussionSchedulerFunction=" in deploy
     assert "PublicDiscussionPerSourceLimit=" in deploy
     assert "OutputKey=='FrontendUrl'" in deploy
     assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in deploy
-    assert "PublicDiscussionSchedulerFunction=" in rollback
-
-
-IMAGE_URI_PARAMETERS = {"ApiImageUri", "ScraperImageUri", "AnalysisImageUri"}
 
 
 def _workflow(name: str) -> str:
-    return (REPOSITORY_ROOT / ".github" / "workflows" / name).read_text(
-        encoding="utf-8"
-    )
+    return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+
+def _steps(name: str) -> list[dict]:
+    workflow = yaml.safe_load(_workflow(name))
+    return [step for job in workflow["jobs"].values() for step in job.get("steps") or []]
+
+
+def test_release_workflows_never_build_sam_deploy_themselves() -> None:
+    """Only tools/release.py knows the parameters and the image repositories."""
+    builders = {
+        path.name
+        for path in WORKFLOWS.glob("*.yml")
+        for step in _steps(path.name)
+        if any(
+            text in step.get("run", "")
+            for text in ("sam deploy", "--parameter-overrides", "--image-repositories")
+        )
+    }
+
+    assert builders <= {"deploy-staging.yml"}
+
+
+def test_rollback_plans_through_the_release_module_then_applies() -> None:
+    [step] = [
+        step
+        for step in _steps("prepare-staging-backend-rollback.yml")
+        if "tools.release" in step.get("run", "")
+    ]
+    run = step["run"]
+
+    assert step["working-directory"] == "backend"
+    assert "python -m tools.release plan --rollback --no-execute" in run
+    assert run.index("tools.release plan") < run.index("python -m tools.release apply")
 
 
 def test_release_workflows_map_every_image_function_to_a_repository() -> None:
     functions = template_model().image_functions()
+    text = _workflow("deploy-staging.yml")
 
     assert "NotificationFunction" in functions
-    for workflow in ("deploy-staging.yml", "prepare-staging-backend-rollback.yml"):
-        text = _workflow(workflow)
-        missing = [
-            function
-            for function in functions
-            if f'--image-repositories "{function}=' not in text
-        ]
-        assert missing == [], workflow
+    missing = [
+        function
+        for function in functions
+        if f'--image-repositories "{function}=' not in text
+    ]
+    assert missing == []
 
 
 def test_deploy_supplies_every_parameter_without_a_default() -> None:
@@ -416,23 +439,6 @@ def test_deploy_supplies_every_parameter_without_a_default() -> None:
     assert required
     for name in required:
         assert f'"{name}=' in deploy, name
-
-
-def test_rollback_keeps_live_parameters_and_swaps_only_images() -> None:
-    rollback = _workflow("prepare-staging-backend-rollback.yml")
-
-    assert '--query "Stacks[0].Parameters"' in rollback
-    assert '--parameter-overrides "${PARAMETER_OVERRIDES[@]}"' in rollback
-    for name in IMAGE_URI_PARAMETERS:
-        assert f'"{name}=$ECR_REGISTRY/' in rollback
-    # Any other literal override would replace the live value, as the old
-    # hard-coded AuthProvider=legacy and feature switches did.
-    hard_coded = [
-        name
-        for name in template_model().parameters
-        if name not in IMAGE_URI_PARAMETERS and f'"{name}=' in rollback
-    ]
-    assert hard_coded == []
 
 
 def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:

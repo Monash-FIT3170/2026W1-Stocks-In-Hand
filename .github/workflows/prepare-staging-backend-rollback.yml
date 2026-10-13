@@ -28,21 +28,21 @@ jobs:
     env:
       AWS_REGION: ap-southeast-2
       STACK_NAME: stocks-in-hand-staging
-      PARAMETER_PATH_PREFIX: /stocks-in-hand/staging
+      RELEASE_SHA: ${{ inputs.release_sha }}
 
     steps:
-      - name: Validate the rollback SHA
-        shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
-        run: |
-          if ! [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "release_sha must be a full 40-character Git SHA" >&2
-            exit 1
-          fi
-
       - name: Check out the current infrastructure template
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyYAML
+        shell: bash
+        # The release module needs only PyYAML, not the backend dependencies.
+        run: pip install --disable-pip-version-check PyYAML==6.0.3
 
       - name: Configure AWS credentials through OIDC
         uses: aws-actions/configure-aws-credentials@v6.1.2
@@ -50,32 +50,6 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           role-session-name: stocks-in-hand-backend-rollback
-
-      - name: Resolve AWS values and verify rollback images
-        shell: bash
-        env:
-          RELEASE_SHA: ${{ inputs.release_sha }}
-        run: |
-          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          ECR_REGISTRY="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
-          CFN_ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/stocks-in-hand-cloudformation-execution"
-          # A rollback swaps image tags only. Every other parameter (auth
-          # provider, feature switches, custom domain, alert sender, schedules)
-          # keeps the value the live stack runs with now.
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Parameters" \
-            --output json > current-stack-parameters.json
-          for image in api scraper analysis; do
-            aws ecr describe-images \
-              --repository-name "stocks-in-hand-$image" \
-              --image-ids "imageTag=$RELEASE_SHA"
-          done
-          {
-            echo "ECR_REGISTRY=$ECR_REGISTRY"
-            echo "CFN_ROLE_ARN=$CFN_ROLE_ARN"
-            echo "RELEASE_SHA=$RELEASE_SHA"
-          } >> "$GITHUB_ENV"
 
       - name: Set up AWS SAM
         uses: aws-actions/setup-sam@v2
@@ -86,38 +60,17 @@ jobs:
 
       - name: Create the rollback change set without executing it
         shell: bash
+        working-directory: backend
+        # The plan checks the SHA and the rollback images, keeps every live
+        # parameter (auth provider, feature switches, custom domain, alert
+        # sender, schedules) and swaps only the three image URIs.
         run: |
-          mapfile -t PARAMETER_OVERRIDES < <(
-            jq -r '.[]
-              | select(.ParameterKey | IN("ApiImageUri", "ScraperImageUri", "AnalysisImageUri") | not)
-              | "\(.ParameterKey)=\(.ParameterValue)"' current-stack-parameters.json
-          )
-          if [ "${#PARAMETER_OVERRIDES[@]}" -eq 0 ]; then
-            echo "Could not read the current stack parameters" >&2
-            exit 1
-          fi
-          PARAMETER_OVERRIDES+=(
-            "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA"
-            "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA"
-            "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
-          )
-          sam deploy \
-            --template-file infra/template.yaml \
+          python -m tools.release plan --rollback --no-execute \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
-            --capabilities CAPABILITY_IAM \
-            --role-arn "$CFN_ROLE_ARN" \
-            --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-            --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-            --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-            --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-            --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-            --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
-            --image-repositories "NotificationFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-            --no-confirm-changeset \
-            --no-execute-changeset \
-            --no-fail-on-empty-changeset \
-            --parameter-overrides "${PARAMETER_OVERRIDES[@]}"
+            --release-sha "$RELEASE_SHA" \
+            --out "$RUNNER_TEMP/rollback-plan.json"
+          python -m tools.release apply "$RUNNER_TEMP/rollback-plan.json"
 
       - name: Export the rollback change set
         id: change_set
