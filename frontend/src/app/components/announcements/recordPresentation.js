@@ -1,4 +1,7 @@
-const COMPANY_TICKERS = new Set(["ANZ", "BHP", "CBA", "COL", "COH", "CSL", "MQG", "ORG", "RIO", "TCL", "TLS", "WDS", "WES"])
+// Generated from the backend ticker catalogue: run `python -m tools.sync_tickers` in backend/.
+import DEPLOYED_TICKERS from "../../ticker/tickers.json"
+
+const COMPANY_TICKERS = new Set(DEPLOYED_TICKERS)
 
 export function companyRoute(ticker) {
   const symbol = String(ticker || "").toUpperCase()
