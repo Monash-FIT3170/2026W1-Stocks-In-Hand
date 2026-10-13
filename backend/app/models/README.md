@@ -69,7 +69,7 @@ This means:
 2. `crud.artifact.store_artifact_analysis` (called from `lambdas/analysis.py`) writes
    the artifact, then its summary and sentiment.
 3. The ticker overview, news feed, and deep-dive endpoints read them back
-   through the `summaries` and `sentiments` backrefs.
+   through the `summaries` and `sentiments` relationships.
 
 Duplicate artifacts are rejected at insert time by `content_hash`, so there is
 no duplicate flag to filter on when reading.

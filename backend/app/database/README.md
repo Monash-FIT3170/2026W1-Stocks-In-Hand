@@ -62,7 +62,7 @@ The ORM relationship chain is:
 
 `crud.artifact.store_artifact_analysis` (called from `lambdas/analysis.py`) writes
 all three in one pass, and the ticker brief endpoints read them back through the
-`summaries` and `sentiments` backrefs.
+`summaries` and `sentiments` relationships.
 
 The full schema is ten tables, created by the `0001_initial_minimal` migration.
 See `app/models/README.md` for the complete list.
