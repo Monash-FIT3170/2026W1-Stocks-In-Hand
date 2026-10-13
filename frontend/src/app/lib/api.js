@@ -3,6 +3,12 @@ import {
   isCognitoAuthEnabled,
   signOutFromCognito,
 } from "../../auth/cognito"
+import {
+  getPreviewAnnouncements,
+  getPreviewTickers,
+  getPreviewTrending,
+  isLocalPreviewHost,
+} from "./previewData"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
 const requestCache = new Map()
@@ -115,21 +121,36 @@ export async function fetchAnnouncements(filters = {}) {
   }
 
   const query = params.toString()
-  return fetchJson(`/announcements/${query ? `?${query}` : ""}`)
+  try {
+    return await fetchJson(`/announcements/${query ? `?${query}` : ""}`)
+  } catch (error) {
+    if (isLocalPreviewHost()) return getPreviewAnnouncements(filters)
+    throw error
+  }
 }
 
 export async function fetchTrendingAnnouncements({ days = 7, limit = 4 } = {}) {
   const params = new URLSearchParams()
   params.set("days", String(days))
   params.set("limit", String(limit))
-  return fetchJson(`/announcements/trending?${params.toString()}`)
+  try {
+    return await fetchJson(`/announcements/trending?${params.toString()}`)
+  } catch (error) {
+    if (isLocalPreviewHost()) return getPreviewTrending({ days, limit })
+    throw error
+  }
 }
 
 export async function fetchTickers({ limit = 100, skip = 0 } = {}) {
   const params = new URLSearchParams()
   params.set("skip", String(skip))
   params.set("limit", String(limit))
-  return fetchJson(`/tickers/?${params.toString()}`)
+  try {
+    return await fetchJson(`/tickers/?${params.toString()}`)
+  } catch (error) {
+    if (isLocalPreviewHost()) return getPreviewTickers({ limit, skip })
+    throw error
+  }
 }
 
 export async function fetchTickerOverview(symbol) {

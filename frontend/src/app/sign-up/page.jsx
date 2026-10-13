@@ -91,10 +91,11 @@ export default function SignUpRoute() {
   }
 
   return (
-    <section className={styles.authPage}>
+    <section className={`${styles.authPage} ${styles.authSplitPage}`}>
+      <div className={styles.authComposition}>
+        <header className={styles.authIntro}><h1>Create your watchlist</h1><p>Create a watchlist for the ASX companies you want to monitor.</p><Link href="/search">Explore company research</Link></header>
         <form className={styles.authCard} onSubmit={handleSubmit}>
-          <h1>Create your watchlist</h1>
-          <p>Create a watchlist for the ASX companies you want to monitor.</p>
+          <h2>Your account</h2>
           <AuthField
             autoComplete="name"
             label="Full name"
@@ -131,8 +132,9 @@ export default function SignUpRoute() {
             {isSubmitting ? "Creating…" : "Create account"}
           </button>
           <span className={styles.authSwap}>Already have an account?<Link href="/sign-in">Sign in</Link></span>
+          <div className={styles.securityNote}>Choose a unique password. It is never displayed in the app.</div>
         </form>
-        <div className={styles.securityNote}>Choose a unique password. It is never displayed in the app.</div>
+      </div>
     </section>
   )
 }

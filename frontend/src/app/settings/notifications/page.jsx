@@ -258,7 +258,7 @@ export default function NotificationSettingsPage() {
           <fieldset className={styles.ruleGroup} disabled={!draft.enabled || isSaving}>
             <legend>Confidence threshold</legend>
             <div className={styles.rangeHeader}>
-              <span>Only send stronger signals</span>
+              <span>Classification confidence</span>
               <output htmlFor="confidence-threshold">{Math.round(draft.min_confidence * 100)}%</output>
             </div>
             <input

@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { PlusIcon } from "../components/icons"
+import { CloseIcon, PlusIcon } from "../components/icons"
 import { apiFetch } from "../lib/api"
 import { buildWatchlistCreatePayload } from "../lib/watchlists"
 import styles from "../page.module.css"
@@ -404,7 +404,7 @@ export default function WatchlistRoute() {
                       onClick={() => removeCompany(stock)}
                       type="button"
                     >
-                      ×
+                      <CloseIcon />
                     </button>
                   </article>
                 )
@@ -439,7 +439,7 @@ export default function WatchlistRoute() {
                   <h2 id="add-company-title">Add Company</h2>
                   <p id="add-company-description">Select an ASX company to monitor in your watchlist.</p>
                 </div>
-                <button aria-label="Close add company" onClick={closeAddCompany} type="button">×</button>
+                <button aria-label="Close add company" onClick={closeAddCompany} type="button"><CloseIcon /></button>
               </div>
               <label className={styles.watchlistSearch}>
                 <span>Search companies</span>

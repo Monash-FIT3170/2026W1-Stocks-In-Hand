@@ -1,0 +1,21 @@
+{
+  "overflow": false,
+  "values": [
+    {
+      "label": "Start date",
+      "right": 256,
+      "value": "2026-10-01",
+      "width": 202
+    },
+    {
+      "label": "End date",
+      "right": 256,
+      "value": "2026-10-12",
+      "width": 202
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 320
+  }
+}

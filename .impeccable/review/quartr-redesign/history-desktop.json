@@ -1,0 +1,66 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "32px",
+      "text": "Deep dive",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "Ceasing to be a substantial holder",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "COH share price: why investors like healthcare shares",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Dale Gillham: The Billion-Dollar AI Investment Trap Facing Tech Giants",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "Change in substantial holding",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "DOW and Cochlear Ltd: 2 ASX shares to dig into",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Dale Gillham: Is Australia Facing a Real Recession or Just Talk?",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Thursday’s HotCopper trends: Meteoric Resources, Marmota, Manuka Resources and other daily topics",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "Defence of Class Action Proceedings",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Are COH shares or WOW shares better value in 2026?",
+      "weight": "550"
+    },
+    {
+      "size": "28px",
+      "text": "Dale Gillham: Why Rate Hikes Alone Won’t Fix Australia’s Economic Squeeze",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1430,
+    "height": 1000,
+    "width": 1440
+  }
+}

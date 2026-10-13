@@ -1,0 +1,81 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "44px",
+      "text": "Browse ASX companies",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "ANZ Group Holdings Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "BHP Group Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Commonwealth Bank of Australia",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Cochlear Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Coles Group Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "CSL Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Macquarie Group Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Origin Energy Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Rio Tinto Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Transurban Group",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Telstra Group Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Woodside Energy Group Limited",
+      "weight": "550"
+    },
+    {
+      "size": "20px",
+      "text": "Wesfarmers Limited",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1430,
+    "height": 1000,
+    "width": 1440
+  }
+}

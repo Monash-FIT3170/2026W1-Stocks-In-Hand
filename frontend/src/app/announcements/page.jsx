@@ -1,13 +1,17 @@
 "use client"
 
 import { Suspense, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
 import { AnnouncementFilters } from "../components/announcements/AnnouncementFilters"
 import { TrendingStocks } from "../components/announcements/TrendingStocks"
+import { groupByPublicationDate } from "../components/announcements/recordPresentation"
+import { ArrowIcon } from "../components/company/CompanyPrimitives"
 import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
 import { appendAnnouncementPage } from "./pagination"
-import styles from "../page.module.css"
+import pageStyles from "../page.module.css"
+import styles from "../components/research/ResearchSurface.module.css"
 
 const ANNOUNCEMENT_PAGE_SIZE = 6
 
@@ -165,38 +169,47 @@ function AnnouncementsContent() {
     trendingStocks,
   } = state
   const { today, sector, startDate, endDate } = filters
+  const isPreview = announcementCards.some((item) => item.is_preview)
+    || trendingStocks.some((item) => typeof item === "object" && item?.is_preview)
 
   return (
-    <section className={styles.contentPage}>
-        <div className={styles.announcementsHero}>
-          <div>
-            <h1>Market Updates</h1>
-            <p>Recent ASX filings, publisher news, and Reddit discussions with links back to the original sources.</p>
+    <section className={`${pageStyles.contentPage} ${styles.surface}`}>
+        <header className={styles.feedHero}>
+          <div className={styles.feedIntro}>
+            <h1>Market intelligence, organised by source.</h1>
+            <p>Scan the latest ASX filings, publisher coverage, and public discussion—then move directly to the evidence behind each update.</p>
           </div>
-          <div className={styles.announcementControls}>
-            <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
-            <TrendingStocks stocks={trendingStocks} />
-          </div>
+          <div className={styles.feedScope}><strong>The material behind the market.</strong><p>Official filings, publisher coverage and public discussion, with their original sources kept in view.</p><Link href="/data-sources">About our sources<ArrowIcon /></Link></div>
+        </header>
+        {isPreview ? <div className={styles.previewNotice}><strong>Local preview data</strong><span>Illustrative records are shown because the local API is not connected.</span></div> : null}
+        <div className={styles.feedWorkbench}>
+          <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
         </div>
-        <div className={styles.announcementList}>
-          {isLoading ? <div className={styles.contentSkeleton} aria-live="polite">Loading announcements…</div> : null}
-          {errorMessage ? <div className={styles.emptyCard} role="alert"><h2>Could not load announcements</h2><p>{errorMessage}</p><button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button></div> : null}
-          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.emptyCard}><h2>No market updates found</h2><p>Adjust the filters or collect new ASX, news, and Reddit content.</p></div> : null}
-          {announcementCards.map((item) => <AnnouncementCard item={item} key={item.id} />)}
-          {loadMoreError ? <p className={styles.authError} role="alert">{loadMoreError}</p> : null}
+        <div className={styles.feedLayout}><section className={styles.feedReading} aria-labelledby="latest-records-heading">
+        <div className={styles.feedHeading}>
+          <h2 id="latest-records-heading">Latest source records</h2>
+          {!isLoading && !errorMessage ? <span>{announcementCards.length} shown</span> : null}
+        </div>
+        <div className={styles.feedList}>
+          {isLoading ? <div className={styles.statePanel} aria-live="polite">Loading source records…</div> : null}
+          {errorMessage ? <div className={styles.statePanel} role="alert"><h2>Could not load announcements</h2><p>{errorMessage}</p><button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button></div> : null}
+          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.statePanel}><h2>No market updates found</h2><p>Adjust the filters or collect new ASX, news, and Reddit content.</p></div> : null}
+          {groupByPublicationDate(announcementCards).map((group) => <section className={styles.dateGroup} key={group.label}><h3>{group.label}</h3>{group.items.map((item) => <AnnouncementCard item={item} headingLevel="h4" grouped key={item.id} />)}</section>)}
+          {loadMoreError ? <p role="alert">{loadMoreError}</p> : null}
           {hasMore ? (
-            <button className={styles.loadMoreButton} disabled={isLoadingMore} onClick={loadMoreAnnouncements} type="button">
+            <button className={styles.loadMore} disabled={isLoadingMore} onClick={loadMoreAnnouncements} type="button">
               {isLoadingMore ? "Loading more…" : "Show more announcements"}
             </button>
           ) : null}
         </div>
+        </section><aside className={styles.feedContext}><TrendingStocks stocks={trendingStocks} /><div className={styles.contextGuide}><h2>Read it at the source.</h2><p>AI-assisted context is a starting point. Open the original material to verify a claim and understand its full context.</p><Link href="/data-sources">How sources are used</Link></div></aside></div>
     </section>
   )
 }
 
 export default function AnnouncementsRoute() {
   return (
-    <Suspense fallback={<section className={styles.contentPage}><div className={styles.contentSkeleton}>Loading announcements…</div></section>}>
+    <Suspense fallback={<section className={pageStyles.contentPage}><div className={styles.statePanel}>Loading announcements…</div></section>}>
       <AnnouncementsContent />
     </Suspense>
   )
