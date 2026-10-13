@@ -1,0 +1,10 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "scrollY": 0,
+  "url": "http://127.0.0.1:3000/announcements/?start_date=2026-10-01&end_date=2026-10-12",
+  "viewport": {
+    "documentWidth": 310,
+    "height": 844,
+    "width": 320
+  }
+}

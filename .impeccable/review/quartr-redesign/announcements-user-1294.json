@@ -1,0 +1,10 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "scrollY": 0,
+  "url": "http://127.0.0.1:3000/announcements/",
+  "viewport": {
+    "documentWidth": 1284,
+    "height": 1143,
+    "width": 1294
+  }
+}

@@ -1,0 +1,566 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T18:15:34.256Z",
+  "title": "Design System: StonksInHand",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Quiet canvas",
+        "canonical": "#fbfcfc",
+        "tonalRamp": [
+          "oklch(15% 0.0011 197.1)",
+          "oklch(27% 0.0011 197.1)",
+          "oklch(38% 0.0011 197.1)",
+          "oklch(49% 0.0011 197.1)",
+          "oklch(61% 0.0011 197.1)",
+          "oklch(72% 0.0011 197.1)",
+          "oklch(84% 0.0011 197.1)",
+          "oklch(95% 0.0011 197.1)"
+        ]
+      },
+      "canvas-subtle": {
+        "role": "neutral",
+        "displayName": "Cool controls",
+        "canonical": "#f4f6f8",
+        "tonalRamp": [
+          "oklch(15% 0.0034 247.9)",
+          "oklch(27% 0.0034 247.9)",
+          "oklch(38% 0.0034 247.9)",
+          "oklch(49% 0.0034 247.9)",
+          "oklch(61% 0.0034 247.9)",
+          "oklch(72% 0.0034 247.9)",
+          "oklch(84% 0.0034 247.9)",
+          "oklch(95% 0.0034 247.9)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "White document",
+        "canonical": "#fff",
+        "tonalRamp": [
+          "oklch(15% 0.0000 0.0)",
+          "oklch(27% 0.0000 0.0)",
+          "oklch(38% 0.0000 0.0)",
+          "oklch(49% 0.0000 0.0)",
+          "oklch(61% 0.0000 0.0)",
+          "oklch(72% 0.0000 0.0)",
+          "oklch(84% 0.0000 0.0)",
+          "oklch(95% 0.0000 0.0)"
+        ]
+      },
+      "surface-context": {
+        "role": "neutral",
+        "displayName": "Stone context",
+        "canonical": "#f3f2ef",
+        "tonalRamp": [
+          "oklch(15% 0.0041 91.4)",
+          "oklch(27% 0.0041 91.4)",
+          "oklch(38% 0.0041 91.4)",
+          "oklch(49% 0.0041 91.4)",
+          "oklch(61% 0.0041 91.4)",
+          "oklch(72% 0.0041 91.4)",
+          "oklch(84% 0.0041 91.4)",
+          "oklch(95% 0.0041 91.4)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Near-black ink",
+        "canonical": "#101214",
+        "tonalRamp": [
+          "oklch(15% 0.0052 248.1)",
+          "oklch(27% 0.0052 248.1)",
+          "oklch(38% 0.0052 248.1)",
+          "oklch(49% 0.0052 248.1)",
+          "oklch(61% 0.0052 248.1)",
+          "oklch(72% 0.0052 248.1)",
+          "oklch(84% 0.0052 248.1)",
+          "oklch(95% 0.0052 248.1)"
+        ]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "Secondary ink",
+        "canonical": "#4e5965",
+        "tonalRamp": [
+          "oklch(15% 0.0240 250.6)",
+          "oklch(27% 0.0240 250.6)",
+          "oklch(38% 0.0240 250.6)",
+          "oklch(49% 0.0240 250.6)",
+          "oklch(61% 0.0240 250.6)",
+          "oklch(72% 0.0240 250.6)",
+          "oklch(84% 0.0240 250.6)",
+          "oklch(95% 0.0240 250.6)"
+        ]
+      },
+      "ink-tertiary": {
+        "role": "neutral",
+        "displayName": "Tertiary ink",
+        "canonical": "#626a73",
+        "tonalRamp": [
+          "oklch(15% 0.0173 251.3)",
+          "oklch(27% 0.0173 251.3)",
+          "oklch(38% 0.0173 251.3)",
+          "oklch(49% 0.0173 251.3)",
+          "oklch(61% 0.0173 251.3)",
+          "oklch(72% 0.0173 251.3)",
+          "oklch(84% 0.0173 251.3)",
+          "oklch(95% 0.0173 251.3)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Fine line",
+        "canonical": "#dfe4e8",
+        "tonalRamp": [
+          "oklch(15% 0.0077 241.7)",
+          "oklch(27% 0.0077 241.7)",
+          "oklch(38% 0.0077 241.7)",
+          "oklch(49% 0.0077 241.7)",
+          "oklch(61% 0.0077 241.7)",
+          "oklch(72% 0.0077 241.7)",
+          "oklch(84% 0.0077 241.7)",
+          "oklch(95% 0.0077 241.7)"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong control line",
+        "canonical": "#818991",
+        "tonalRamp": [
+          "oklch(15% 0.0153 248.1)",
+          "oklch(27% 0.0153 248.1)",
+          "oklch(38% 0.0153 248.1)",
+          "oklch(49% 0.0153 248.1)",
+          "oklch(61% 0.0153 248.1)",
+          "oklch(72% 0.0153 248.1)",
+          "oklch(84% 0.0153 248.1)",
+          "oklch(95% 0.0153 248.1)"
+        ]
+      },
+      "brand": {
+        "role": "primary",
+        "displayName": "Cobalt interaction",
+        "canonical": "#2f5bea",
+        "tonalRamp": [
+          "oklch(15% 0.2210 265.8)",
+          "oklch(27% 0.2210 265.8)",
+          "oklch(38% 0.2210 265.8)",
+          "oklch(49% 0.2210 265.8)",
+          "oklch(61% 0.2210 265.8)",
+          "oklch(72% 0.2210 265.8)",
+          "oklch(84% 0.2210 265.8)",
+          "oklch(95% 0.2210 265.8)"
+        ]
+      },
+      "brand-soft": {
+        "role": "primary",
+        "displayName": "Pale cobalt selection",
+        "canonical": "#e9eeff",
+        "tonalRamp": [
+          "oklch(15% 0.0235 272.8)",
+          "oklch(27% 0.0235 272.8)",
+          "oklch(38% 0.0235 272.8)",
+          "oklch(49% 0.0235 272.8)",
+          "oklch(61% 0.0235 272.8)",
+          "oklch(72% 0.0235 272.8)",
+          "oklch(84% 0.0235 272.8)",
+          "oklch(95% 0.0235 272.8)"
+        ]
+      },
+      "positive": {
+        "role": "neutral",
+        "displayName": "Positive classification",
+        "canonical": "#13795b",
+        "tonalRamp": [
+          "oklch(15% 0.0998 167.1)",
+          "oklch(27% 0.0998 167.1)",
+          "oklch(38% 0.0998 167.1)",
+          "oklch(49% 0.0998 167.1)",
+          "oklch(61% 0.0998 167.1)",
+          "oklch(72% 0.0998 167.1)",
+          "oklch(84% 0.0998 167.1)",
+          "oklch(95% 0.0998 167.1)"
+        ]
+      },
+      "positive-soft": {
+        "role": "neutral",
+        "displayName": "Positive state surface",
+        "canonical": "#e5f5ef",
+        "tonalRamp": [
+          "oklch(15% 0.0186 171.5)",
+          "oklch(27% 0.0186 171.5)",
+          "oklch(38% 0.0186 171.5)",
+          "oklch(49% 0.0186 171.5)",
+          "oklch(61% 0.0186 171.5)",
+          "oklch(72% 0.0186 171.5)",
+          "oklch(84% 0.0186 171.5)",
+          "oklch(95% 0.0186 171.5)"
+        ]
+      },
+      "warning": {
+        "role": "neutral",
+        "displayName": "Attention state",
+        "canonical": "#8a5b00",
+        "tonalRamp": [
+          "oklch(15% 0.1079 74.2)",
+          "oklch(27% 0.1079 74.2)",
+          "oklch(38% 0.1079 74.2)",
+          "oklch(49% 0.1079 74.2)",
+          "oklch(61% 0.1079 74.2)",
+          "oklch(72% 0.1079 74.2)",
+          "oklch(84% 0.1079 74.2)",
+          "oklch(95% 0.1079 74.2)"
+        ]
+      },
+      "warning-soft": {
+        "role": "neutral",
+        "displayName": "Attention state surface",
+        "canonical": "#fff3d6",
+        "tonalRamp": [
+          "oklch(15% 0.0400 88.2)",
+          "oklch(27% 0.0400 88.2)",
+          "oklch(38% 0.0400 88.2)",
+          "oklch(49% 0.0400 88.2)",
+          "oklch(61% 0.0400 88.2)",
+          "oklch(72% 0.0400 88.2)",
+          "oklch(84% 0.0400 88.2)",
+          "oklch(95% 0.0400 88.2)"
+        ]
+      },
+      "negative": {
+        "role": "neutral",
+        "displayName": "Negative/error state",
+        "canonical": "#b4233b",
+        "tonalRamp": [
+          "oklch(15% 0.1790 18.3)",
+          "oklch(27% 0.1790 18.3)",
+          "oklch(38% 0.1790 18.3)",
+          "oklch(49% 0.1790 18.3)",
+          "oklch(61% 0.1790 18.3)",
+          "oklch(72% 0.1790 18.3)",
+          "oklch(84% 0.1790 18.3)",
+          "oklch(95% 0.1790 18.3)"
+        ]
+      },
+      "negative-soft": {
+        "role": "neutral",
+        "displayName": "Negative/error state surface",
+        "canonical": "#fdecef",
+        "tonalRamp": [
+          "oklch(15% 0.0188 5.3)",
+          "oklch(27% 0.0188 5.3)",
+          "oklch(38% 0.0188 5.3)",
+          "oklch(49% 0.0188 5.3)",
+          "oklch(61% 0.0188 5.3)",
+          "oklch(72% 0.0188 5.3)",
+          "oklch(84% 0.0188 5.3)",
+          "oklch(95% 0.0188 5.3)"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Keyboard focus",
+        "canonical": "#2f5bea",
+        "tonalRamp": [
+          "oklch(15% 0.2210 265.8)",
+          "oklch(27% 0.2210 265.8)",
+          "oklch(38% 0.2210 265.8)",
+          "oklch(49% 0.2210 265.8)",
+          "oklch(61% 0.2210 265.8)",
+          "oklch(72% 0.2210 265.8)",
+          "oklch(84% 0.2210 265.8)",
+          "oklch(95% 0.2210 265.8)"
+        ]
+      },
+      "overlay": {
+        "role": "neutral",
+        "displayName": "Modal backdrop",
+        "canonical": "rgb(16 18 20 / 48%)",
+        "tonalRamp": [
+          "oklch(15% 0.0052 248.1)",
+          "oklch(27% 0.0052 248.1)",
+          "oklch(38% 0.0052 248.1)",
+          "oklch(49% 0.0052 248.1)",
+          "oklch(61% 0.0052 248.1)",
+          "oklch(72% 0.0052 248.1)",
+          "oklch(84% 0.0052 248.1)",
+          "oklch(95% 0.0052 248.1)"
+        ]
+      },
+      "action-hover": {
+        "role": "neutral",
+        "displayName": "Charcoal action hover",
+        "canonical": "#292c30",
+        "tonalRamp": [
+          "oklch(15% 0.0084 255.6)",
+          "oklch(27% 0.0084 255.6)",
+          "oklch(38% 0.0084 255.6)",
+          "oklch(49% 0.0084 255.6)",
+          "oklch(61% 0.0084 255.6)",
+          "oklch(72% 0.0084 255.6)",
+          "oklch(84% 0.0084 255.6)",
+          "oklch(95% 0.0084 255.6)"
+        ]
+      },
+      "context-line": {
+        "role": "neutral",
+        "displayName": "Stone-region divider",
+        "canonical": "#d4d5d2",
+        "tonalRamp": [
+          "oklch(15% 0.0042 121.6)",
+          "oklch(27% 0.0042 121.6)",
+          "oklch(38% 0.0042 121.6)",
+          "oklch(49% 0.0042 121.6)",
+          "oklch(61% 0.0042 121.6)",
+          "oklch(72% 0.0042 121.6)",
+          "oklch(84% 0.0042 121.6)",
+          "oklch(95% 0.0042 121.6)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "display",
+        "purpose": "Home introductory title."
+      },
+      "public-headline": {
+        "displayName": "public headline",
+        "purpose": "About and Data sources titles."
+      },
+      "browse-headline": {
+        "displayName": "browse headline",
+        "purpose": "Feed, search and watchlist titles."
+      },
+      "company-identity": {
+        "displayName": "company identity",
+        "purpose": "Company identity and split account introductions."
+      },
+      "task-headline": {
+        "displayName": "task headline",
+        "purpose": "Contained account, settings and result titles."
+      },
+      "research-headline": {
+        "displayName": "research headline",
+        "purpose": "Company research view titles."
+      },
+      "headline": {
+        "displayName": "headline",
+        "purpose": "Section headings."
+      },
+      "title": {
+        "displayName": "title",
+        "purpose": "Evidence and context headings."
+      },
+      "body": {
+        "displayName": "body",
+        "purpose": "Substantive research and source prose."
+      },
+      "intro": {
+        "displayName": "intro",
+        "purpose": "Introductory copy."
+      },
+      "label": {
+        "displayName": "label",
+        "purpose": "Field labels and secondary controls."
+      },
+      "primary-action": {
+        "displayName": "primary action",
+        "purpose": "Primary submission control text."
+      },
+      "metadata": {
+        "displayName": "metadata",
+        "purpose": "Record attribution and dates."
+      }
+    },
+    "shadows": [
+      {
+        "name": "shadow-soft",
+        "value": "0 16px 40px rgb(16 18 20 / 10%)",
+        "purpose": "Floating date/source-filter controls; removed on mobile contained controls."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(.22, 1, .36, 1)",
+        "purpose": "Navigation transforms and home exhibit entrance."
+      },
+      {
+        "name": "control-transition",
+        "value": "160ms",
+        "purpose": "Action background and alert-switch feedback."
+      },
+      {
+        "name": "navigation-transition",
+        "value": "180ms",
+        "purpose": "Navigation toggle and menu transitions."
+      },
+      {
+        "name": "exhibit-enter",
+        "value": "340ms",
+        "purpose": "Home exhibit translates 8px into place when motion is allowed."
+      },
+      {
+        "name": "reduced-motion-duration",
+        "value": ".01ms",
+        "purpose": "Global reduced-motion override with one animation iteration."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "record-mobile",
+        "value": "640px"
+      },
+      {
+        "name": "mobile-layout",
+        "value": "767px"
+      },
+      {
+        "name": "desktop-navigation",
+        "value": "768px"
+      },
+      {
+        "name": "settings-stack",
+        "value": "850px"
+      },
+      {
+        "name": "company-intermediate",
+        "value": "1000px"
+      },
+      {
+        "name": "feed-intermediate",
+        "value": "1050px"
+      },
+      {
+        "name": "frame-intermediate",
+        "value": "1199px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Canonical page/account submission action: 48px target, 550 weight, disabled and hover feedback.",
+      "html": "<button class=\"ds-primaryAction\" type=\"button\">Search</button>",
+      "css": ".ds-primaryAction{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-primaryAction{border: 0; border-radius: 6px; min-height: 48px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--ink,#101214); color: #fff; text-decoration: none; font-size: 14px; font-weight: 550; white-space: nowrap; transition: background-color 160ms;}.ds-primaryAction:hover{background: #292c30;}.ds-primaryAction svg{width: 18px; height: 18px;}.ds-primaryAction:disabled{opacity: .55;}.ds-primaryAction:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}@media(prefers-reduced-motion:reduce){.ds-primaryAction{transition-duration:.01ms}}"
+    },
+    {
+      "name": "Secondary Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Bordered secondary task or route action from the shared page styles.",
+      "html": "<a class=\"ds-secondaryButton\" href=\"/search\">Company search</a>",
+      "css": ".ds-secondaryButton{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-secondaryButton{display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong,#818991); border-radius: 6px; background: var(--surface,#fff); color: var(--ink,#101214); font-size: 14px; font-weight: 500; text-decoration: none;}.ds-secondaryButton:hover{background: var(--canvas-subtle,#f4f6f8);}.ds-secondaryButton:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}"
+    },
+    {
+      "name": "Source Search",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "The source-library field with its explicit accessible name preserved independently of label visibility.",
+      "html": "<div class=\"ds-libraryTools\"><label class=\"ds-searchControl\"><span>Search records</span><input type=\"search\" aria-label=\"Search records\" placeholder=\"Title, source or research context\"></label></div>",
+      "css": ".ds-libraryTools{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-libraryTools{display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 20px; padding: 20px; background: var(--canvas-subtle,#f4f6f8); border: 1px solid var(--line,#dfe4e8); border-radius: 8px; align-items: end;}.ds-libraryTools label{display: grid; gap: 8px; font-size: 14px; min-width: 0;}.ds-libraryTools label>span{color: var(--ink-secondary,#4e5965);}.ds-libraryTools input,.ds-libraryTools select{min-width: 0; width: 100%; min-height: 48px; border: 1px solid var(--line-strong,#818991); border-radius: 6px; padding: 0 12px; font-size: 16px; background: var(--surface,#fff); color: var(--ink,#101214);}.ds-libraryTools{grid-template-columns:1fr}.ds-libraryTools input{caret-color:var(--brand,#2f5bea)}.ds-libraryTools input::placeholder{color:var(--ink-tertiary,#626a73);opacity:1}.ds-libraryTools input:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}"
+    },
+    {
+      "name": "Company View Navigation",
+      "kind": "nav",
+      "refersTo": "company-navigation",
+      "description": "The three implemented company views, with underline active state and wrapping mobile geometry.",
+      "html": "<div class=\"ds-navigationRail\"><nav aria-label=\"COH research views\"><a class=\"ds-activeView\" aria-current=\"page\" href=\"/ticker/COH\">Research summary</a><a class=\"ds-viewLink\" href=\"/ticker/COH/news\">Source records</a><a class=\"ds-viewLink\" href=\"/ticker/COH/deep-dive\">Deep dive</a></nav></div>",
+      "css": ".ds-navigationRail,.ds-viewLink,.ds-activeView{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-navigationRail{display: flex; align-items: center; gap: 24px; border-block: 1px solid var(--line,#dfe4e8);}.ds-navigationRail nav{display: flex; gap: 24px; min-width: 0;}.ds-viewLink,.ds-activeView{display: flex; align-items: center; min-height: 52px; padding: 12px 0; text-decoration: none; color: var(--ink-secondary,#4e5965); font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px;}.ds-activeView{color: var(--ink,#101214); font-weight: 550; border-bottom-color: var(--ink,#101214);}.ds-viewLink:hover{color: var(--ink,#101214);}.ds-navigationRail a:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}@media(max-width:767px){.ds-navigationRail nav{gap:16px;width:100%;flex-wrap:wrap}.ds-viewLink,.ds-activeView{min-height:48px;font-size:13px}}"
+    },
+    {
+      "name": "Feed Ticker Tag",
+      "kind": "chip",
+      "refersTo": "ticker-tag",
+      "description": "Actual COH company identifier using the clickable feed tag treatment; no invented metric.",
+      "html": "<a class=\"ds-ticker\" href=\"/ticker/COH\">COH</a>",
+      "css": ".ds-ticker{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;display:inline-flex;align-items:center;min-height:44px;padding:0 8px;border-radius:4px;background:var(--surface-context,#f3f2ef);color:var(--ink,#101214);font-size:13px;font-weight:550;text-decoration:none}.ds-ticker:hover{background:var(--brand-soft,#e9eeff);color:var(--brand,#2f5bea)}.ds-ticker:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}"
+    },
+    {
+      "name": "Neutral Classification",
+      "kind": "chip",
+      "refersTo": "sentiment-neutral",
+      "description": "Text-labelled neutral status badge from the company topic styling.",
+      "html": "<span class=\"ds-neutral\">Neutral</span>",
+      "css": ".ds-neutral{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-neutral{display: inline-flex; align-items: center; width: fit-content; border-radius: 4px; padding: 4px 7px; font-size: 13px; font-weight: 450; line-height: 1.4;}.ds-neutral{color: var(--ink-secondary,#4e5965); background: var(--canvas-subtle,#f4f6f8);}"
+    },
+    {
+      "name": "Source Reader",
+      "kind": "card",
+      "refersTo": "reading-panel",
+      "description": "Selected-record document using real unavailable-analysis copy; preview fragment does not supply a source URL.",
+      "html": "<article class=\"ds-sourceReader\" aria-label=\"Selected source record\"><div class=\"ds-readerMeta\">Date unavailable</div><h2>Untitled source record</h2><p class=\"ds-compactNote\">Analysis is incomplete for this record. Read the original material for the full details.</p><p class=\"ds-finePrint\">AI-assisted context. The original material remains the authority for this record.</p></article>",
+      "css": ".ds-sourceReader,.ds-readerMeta,.ds-compactNote,.ds-finePrint{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-finePrint{font-size: 14px; line-height: 1.6; color: var(--ink-secondary,#4e5965);}.ds-finePrint{font-size: 12px; line-height: 1.6; margin: 20px 0 0; max-width: 85ch;}.ds-sourceReader{min-width: 0; background: var(--surface,#fff); border: 1px solid var(--line,#dfe4e8); border-radius: 8px; padding: 32px; align-self: start;}.ds-readerMeta{display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--ink-secondary,#4e5965);}.ds-sourceReader h2{font-size: 28px; font-weight: 550; line-height: 1.3; letter-spacing: -.025em; margin: 16px 0 12px; overflow-wrap: anywhere;}.ds-sourceReader section{margin-top: 32px;}.ds-sourceReader h3{font-size: 18px; font-weight: 550; margin: 0 0 12px;}.ds-sourceReader section>p{font-size: 16px; line-height: 1.65; margin: 0; max-width: 72ch; color: var(--ink,#101214); white-space: pre-wrap; overflow-wrap: anywhere;}.ds-compactNote{padding: 16px; background: var(--canvas-subtle,#f4f6f8); border-radius: 6px; font-size: 14px; line-height: 1.6; color: var(--ink-secondary,#4e5965); margin-top: 24px;}@media(max-width:767px){.ds-sourceReader{padding:24px 20px}.ds-sourceReader h2{font-size:22px;line-height:1.35}}"
+    },
+    {
+      "name": "Evidence Panel",
+      "kind": "card",
+      "refersTo": "evidence-panel",
+      "description": "Stone supporting region from research summary, showing its existing missing-source state.",
+      "html": "<section class=\"ds-evidencePanel\"><div class=\"ds-sectionHeading\"><h2>Latest filing material</h2><p>The original material behind the research.</p></div><p class=\"ds-muted\">No original source links are available for this item.</p><p class=\"ds-finePrint\">Original material remains the authority for each record.</p></section>",
+      "css": ".ds-evidencePanel,.ds-sectionHeading,.ds-muted,.ds-finePrint{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-evidencePanel{padding: 28px; background: var(--surface-context,#f3f2ef); border-radius: 8px;}.ds-evidencePanel h2{font-size: 20px; line-height: 1.3; letter-spacing: -.02em; font-weight: 550; margin: 0 0 12px;}.ds-evidencePanel .ds-sectionHeading p{font-size: 14px; margin-bottom: 24px;}.ds-sectionHeading p{color: var(--ink-secondary,#4e5965); font-size: 14px; line-height: 1.6; margin: 0 0 24px;}.ds-evidencePanel .ds-source+.ds-source{border-top: 1px solid #d4d5d2; padding-top: 12px;}.ds-muted,.ds-finePrint{font-size: 14px; line-height: 1.6; color: var(--ink-secondary,#4e5965);}.ds-finePrint{font-size: 12px; line-height: 1.6; margin: 20px 0 0; max-width: 85ch;}@media(max-width:1199px){.ds-evidencePanel{padding:24px}}"
+    },
+    {
+      "name": "Original Source Link",
+      "kind": "custom",
+      "refersTo": "source-link",
+      "description": "Document-marked wrapping citation from SourceLinks. The fragment is a panel-only preview target.",
+      "html": "<div class=\"ds-source\"><svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6\"></path></svg><div><a href=\"#original-source\">Original source <svg aria-hidden=\"true\" viewBox=\"0 0 24 24\"><path d=\"M6 18 18 6M6 6h12v12\"></path></svg></a><small>Source record</small></div></div>",
+      "css": ".ds-source{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-source{display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 10px; min-width: 0; font-size: 14px;}.ds-source>svg{color: var(--ink-secondary,#4e5965); margin-top: 9px;}.ds-source>div{min-width: 0;}.ds-source a{display: inline-flex; align-items: center; gap: 8px; min-height: 44px; color: var(--ink,#101214); line-height: 1.5; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: #aab0b5;}.ds-source a:hover{color: var(--brand,#2f5bea); text-decoration-color: currentColor;}.ds-source small{display: block; color: var(--ink-secondary,#4e5965); font-size: 13px; line-height: 1.5; margin-top: 4px;}.ds-source p{font-size: 14px; line-height: 1.6; color: var(--ink-secondary,#4e5965); margin: 8px 0 0; overflow-wrap: anywhere; white-space: pre-wrap;}.ds-source span{line-height: 1.6; overflow-wrap: anywhere;}.ds-source svg,.ds-sourceReader svg{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;}.ds-source a:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}"
+    },
+    {
+      "name": "Topic Disclosure",
+      "kind": "custom",
+      "refersTo": "topic-disclosure",
+      "description": "Native Revenue-topic disclosure using the existing no-analysis fallback, rather than fabricated research.",
+      "html": "<details class=\"ds-topic\"><summary><h3>Revenue</h3><span class=\"ds-neutral\">Unavailable</span><span class=\"ds-disclosureMark\" aria-hidden=\"true\"></span></summary><div class=\"ds-topicBody\"><p>No analysis is available for this topic. Review the source records for the material currently collected.</p></div></details>",
+      "css": ".ds-topic,.ds-topicBody,.ds-neutral,.ds-disclosureMark{font-family:var(--font-inter,'Inter Variable'),Arial,sans-serif;}.ds-topic{border-bottom: 1px solid var(--line,#dfe4e8);}.ds-topic>summary{display: grid; grid-template-columns: minmax(100px,1fr) auto auto 10px; align-items: center; gap: 16px; min-height: 68px; padding: 16px 0; list-style: none;}.ds-topic>summary:hover{color: var(--brand,#2f5bea);}.ds-topic h3{font-size: 18px; font-weight: 550; letter-spacing: -.015em; line-height: 1.3; margin: 0;}.ds-disclosureMark{display: block; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-secondary,#4e5965); border-bottom: 1.5px solid var(--ink-secondary,#4e5965); transform: rotate(45deg);}.ds-topic[open]>summary .ds-disclosureMark{transform: rotate(225deg);}.ds-topicBody{padding: 4px 0 24px;}.ds-topicBody>p{font-size: 16px; line-height: 1.65; color: var(--ink,#101214); max-width: 72ch; margin: 0 0 20px; white-space: pre-wrap; overflow-wrap: anywhere;}.ds-neutral{display: inline-flex; align-items: center; width: fit-content; border-radius: 4px; padding: 4px 7px; font-size: 13px; font-weight: 450; line-height: 1.4;}.ds-neutral{color: var(--ink-secondary,#4e5965); background: var(--canvas-subtle,#f4f6f8);}.ds-topic{border-top:1px solid var(--line,#dfe4e8)}.ds-topic>summary{grid-template-columns:minmax(100px,1fr) auto 10px}.ds-topic[open]>summary .ds-disclosureMark{transform:rotate(225deg)}.ds-topic summary::-webkit-details-marker{display:none}.ds-topic summary:focus-visible{outline:2px solid var(--focus,#2f5bea);outline-offset:4px;}@media(max-width:767px){.ds-topic>summary{min-height:64px;gap:8px;grid-template-columns:minmax(80px,1fr) auto 8px}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Source-first research workspace",
+    "overview": "Wide compositions give reading, evidence and controls their own recognisable regions. Self-hosted Inter Variable, near-black ink and quiet neutral surfaces keep the product calm, exact and task-oriented. Headings carry confident medium emphasis; original material remains visually close to the research it supports.\n\nThe user-selected Quartr public reference informs restraint, horizontal balance, grouping and navigation. StonksInHand retains its own identity and source-led workflows. Real source exhibits, document readers and ledgers supply visual substance; decorative photography and copied Quartr assets do not belong to this implementation. Content is visible by default, with short motion limited to interaction feedback and the home exhibit.",
+    "keyCharacteristics": [
+      "Wide frame with bounded reading measures.",
+      "White documents, stone evidence and cool control regions.",
+      "Inter Variable headings at 550; body copy at 400.",
+      "Black principal actions and cobalt interaction feedback.",
+      "Quiet dividers, small rectangular corners and explicit source states."
+    ],
+    "rules": [
+      {
+        "name": "The Interaction Colour Rule",
+        "body": "Cobalt identifies focus, selection, caret and interactive emphasis. Principal filled actions use near-black ink; financial classifications use their labelled semantic colours.",
+        "section": "colors"
+      },
+      {
+        "name": "The Reading Hierarchy Rule",
+        "body": "Keep the company identity, view title, chapter heading, record title and metadata visually distinct. Let long titles wrap and keep substantial research copy at a bounded reading measure.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Region Rule",
+        "body": "Reading and evidence panels rest flat. Surface tone, spacing and dividers explain their relationship; the soft shadow is reserved for floating controls.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do align major regions to the shared frame and choose a narrower measure for reading.",
+      "Do keep metadata attached to its record and make the original-source action easy to locate.",
+      "Do use white for reading, stone for evidence/context and cool neutral for tools.",
+      "Do show pending, empty, unavailable and error states with honest, compact content.",
+      "Do retain visible keyboard focus, persistent accessible names and a reduced-motion path."
+    ],
+    "donts": [
+      "Don't add decorative photography, copied Quartr imagery or invented market figures to fill a composition.",
+      "Don't turn every record or paragraph into a separate elevated card.",
+      "Don't use cobalt or semantic green as a substitute for heading hierarchy or black primary actions.",
+      "Don't hide substantive content behind global entrance animation.",
+      "Don't let mobile controls or long titles exceed the viewport, or leave covered content keyboard-reachable."
+    ]
+  }
+}

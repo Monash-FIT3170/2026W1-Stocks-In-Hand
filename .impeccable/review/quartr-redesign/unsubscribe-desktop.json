@@ -1,0 +1,16 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "34px",
+      "text": "This link is incomplete",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1440,
+    "height": 1000,
+    "width": 1440
+  }
+}

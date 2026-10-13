@@ -1,0 +1,36 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "52px",
+      "text": "Data sources",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "ASX and issuer filings",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "Publisher news",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "Investor discussion",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "Market quotes",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 1430,
+    "height": 1000,
+    "width": 1440
+  }
+}

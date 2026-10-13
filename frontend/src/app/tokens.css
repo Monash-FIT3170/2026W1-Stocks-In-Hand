@@ -1,0 +1,115 @@
+:root {
+  --canvas: #fbfcfc;
+  --canvas-subtle: #f4f6f8;
+  --surface: #fff;
+  --surface-raised: #f8fafc;
+  --surface-context: #f3f2ef;
+  --surface-tint: #e9eeff;
+  --ink: #101214;
+  --ink-secondary: #4e5965;
+  --ink-tertiary: #626a73;
+  --line: #dfe4e8;
+  --line-strong: #818991;
+  --brand: #2f5bea;
+  --brand-hover: #2448c7;
+  --brand-soft: #e9eeff;
+  --positive: #13795b;
+  --positive-soft: #e5f5ef;
+  --warning: #8a5b00;
+  --warning-soft: #fff3d6;
+  --negative: #b4233b;
+  --negative-soft: #fdecef;
+  --focus: #2f5bea;
+  --overlay: rgb(16 18 20 / 48%);
+  --ease-out: cubic-bezier(.22, 1, .36, 1);
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
+  --shadow-soft: 0 16px 40px rgb(16 18 20 / 10%);
+  --frame: 1360px;
+  /* Compatibility for data-driven status classes during this migration. */
+  --bg: var(--canvas);
+  --panel: var(--canvas-subtle);
+  --soft: var(--canvas-subtle);
+  --text: var(--ink);
+  --muted: var(--ink-secondary);
+  --subtle: var(--ink-secondary);
+  --faint: var(--ink-tertiary);
+  --green: var(--brand);
+  --green2: var(--brand-hover);
+  --mint: var(--brand-soft);
+  --orange: var(--warning);
+  --red: var(--negative);
+  --shadow: var(--shadow-soft);
+}
+
+html {
+  scroll-padding-top: 96px;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-inter), Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+button, summary {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+input, textarea {
+  caret-color: var(--brand);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--ink-tertiary);
+  opacity: 1;
+}
+
+::selection {
+  background: var(--brand);
+  color: #fff;
+}
+
+:is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+
+svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+a {
+  text-underline-offset: 4px;
+}
+
+* {
+  scrollbar-color: #aab0b5 var(--canvas-subtle);
+  scrollbar-width: thin;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
