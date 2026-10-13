@@ -13,7 +13,6 @@ from uuid import UUID
 import boto3
 from app.messages import PublicDiscussionAnalysisMessage
 from app.services.summary_metadata import (
-    combine_summary_text,
     has_complete_summary_metadata,
     normalise_summary_metadata,
 )
@@ -184,21 +183,6 @@ def _artifact_state(store: RawDocumentStore, location: DocumentLocation) -> dict
     return state
 
 
-def _summary_values(output: AnalysisOutput) -> dict | None:
-    if output.summary is None:
-        return None
-    fields = normalise_summary_metadata(output.summary)
-    text = combine_summary_text(fields)
-    if not text:
-        return None
-    return {
-        "summary_text": text,
-        "model_used": output.summary_model,
-        "prompt_version": output.summary_prompt_version,
-        **fields,
-    }
-
-
 def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
     """Find completed ASX artifacts missing display or clarity summary fields."""
     with database_session() as db:
@@ -264,7 +248,7 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
         result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
         return result
 
-    from app.services import generation
+    from app.services import artifact_summary, generation
     from app.crud.artifact import store_artifact_analysis
 
     provider = generation.providers.configured_provider()
@@ -283,19 +267,12 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
             fields = normalise_summary_metadata(generated.value)
             if not has_complete_summary_metadata(fields):
                 raise RuntimeError("Bedrock response omitted structured summary fields")
-            summary_values = {
-                "summary_text": combine_summary_text(fields),
-                "model_used": generated.model,
-                "prompt_version": generated.prompt_version,
-                **fields,
-            }
             with database_session() as db:
                 store_artifact_analysis(
                     db,
                     artifact_id=artifact_id,
                     raw_text=summary_input["raw_text"],
-                    metadata=fields,
-                    summary=summary_values,
+                    summary=artifact_summary.from_generated(generated),
                 )
             result["updated"] = int(result["updated"]) + 1
         # Continue so one malformed model response cannot block the batch.
@@ -483,7 +460,7 @@ def _analyse_public_discussion_artifact(
                 "category": category,
                 "category_confidence": 1.0,
             },
-            summary=_summary_values(output),
+            summary=output.summary,
             sentiment=_sentiment_values(output),
         )
 
@@ -566,7 +543,7 @@ def _analyse_object(
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
             metadata=analysis_metadata,
-            summary=_summary_values(output),
+            summary=output.summary,
             sentiment=sentiment,
         )
 

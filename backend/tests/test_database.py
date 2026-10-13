@@ -48,6 +48,7 @@ from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
+from app.services.artifact_summary import Summary
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
 # Every application table at the current Alembic head. Kept as an exact set so a
@@ -1052,10 +1053,7 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
     analysis = {
         "raw_text": "CSL announced a test result.",
         "metadata": {"page_count": 1},
-        "summary": {
-            "summary_text": "CSL announced a test result.",
-            "model_used": "test-summary",
-        },
+        "summary": Summary(summary="CSL announced a test result.", model="test-summary"),
         "sentiment": {
             "sentiment_label": "neutral",
             "confidence_score": 0.9,

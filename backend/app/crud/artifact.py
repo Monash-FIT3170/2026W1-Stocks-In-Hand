@@ -8,12 +8,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.crud.artifact_sentiment import stage_artifact_sentiment
-from app.crud.artifact_summary import stage_artifact_summary
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
-from app.services.summary_metadata import normalise_summary_metadata
+from app.services import artifact_summary
+from app.services.artifact_summary import Summary
 
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
@@ -45,7 +45,7 @@ def _stage_artifact_analysis(
     artifact_id: UUID,
     raw_text: str,
     metadata: dict[str, Any] | None,
-    summary: dict[str, Any] | None,
+    summary: Summary | None,
     sentiment: dict[str, Any] | None,
 ) -> Artifact:
     artifact = (
@@ -58,22 +58,13 @@ def _stage_artifact_analysis(
         raise ValueError(f"Artifact {artifact_id} does not exist")
 
     artifact.raw_text = raw_text
-    summary_metadata = normalise_summary_metadata(summary)
     artifact.artifact_metadata = {
         **(artifact.artifact_metadata or {}),
         **(metadata or {}),
-        **summary_metadata,
     }
 
     if summary is not None:
-        stage_artifact_summary(
-            db,
-            artifact_id=artifact_id,
-            summary_text=str(summary["summary_text"]),
-            model_used=summary.get("model_used"),
-            prompt_version=summary.get("prompt_version"),
-            confidence_score=summary.get("confidence_score"),
-        )
+        artifact_summary.record(db, artifact, summary)
 
     if sentiment is not None:
         stage_artifact_sentiment(
@@ -94,18 +85,18 @@ def store_artifact_analysis(
     artifact_id: UUID,
     raw_text: str,
     metadata: dict[str, Any] | None = None,
-    summary: dict[str, Any] | None = None,
+    summary: Summary | None = None,
     sentiment: dict[str, Any] | None = None,
 ) -> Artifact:
-    """Atomically store extracted text and the single analysis result rows.
+    """Atomically store extracted text, the summary and the sentiment row.
 
     The artifact row is locked (`with_for_update`) for the duration of the
     transaction, which serializes concurrent `store_artifact_analysis` calls
-    for the same artifact. That lock does not cover the admin API's
-    unlocked `upsert_artifact_summary`/`upsert_artifact_sentiment` routes
-    (`app/api/routes/llm.py`), so a summary/sentiment insert can still
-    race a concurrent writer between our lookup and commit — retried once
-    below, the same way the standalone upsert functions retry.
+    for the same artifact. The summary is recorded through the artifact
+    summary module, whose upsert cannot conflict. The sentiment insert can
+    still race a writer that does not take the lock, such as
+    `upsert_artifact_sentiment`, between our lookup and commit, so it is
+    retried once below, the same way the standalone upsert retries.
     """
     artifact = _stage_artifact_analysis(
         db,

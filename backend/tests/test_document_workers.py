@@ -6,7 +6,6 @@ import json
 import logging
 import zipfile
 from contextlib import contextmanager
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -15,6 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
+from app.services.artifact_summary import Summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.messages import (
@@ -579,40 +579,6 @@ def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> No
         )
 
 
-def test_summary_values_preserve_display_clarity_and_prompt_fields() -> None:
-    output = SimpleNamespace(
-        summary={
-            "summary": "The company announced an update.",
-            "about": "The filing covers the update.",
-            "changed": "A new program was announced.",
-            "matters": "The program may affect investors.",
-            "confirmed_facts": ["The program was announced."],
-            "speculation": ["The program may affect investors."],
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-announcement-summary-v3",
-    )
-
-    result = analysis._summary_values(output)
-
-    assert result == {
-        "summary_text": (
-            "The company announced an update.\n\n"
-            "The filing covers the update.\n\n"
-            "A new program was announced.\n\n"
-            "The program may affect investors."
-        ),
-        "model_used": "bedrock:test-model",
-        "prompt_version": "llm-announcement-summary-v3",
-        "summary": "The company announced an update.",
-        "about": "The filing covers the update.",
-        "changed": "A new program was announced.",
-        "matters": "The program may affect investors.",
-        "confirmed_facts": ["The program was announced."],
-        "speculation": ["The program may affect investors."],
-    }
-
-
 def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -647,9 +613,9 @@ def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
 
     assert output.parsed.category == "USER_DISCUSSION"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary["about"] == "The post discusses BHP earnings."
-    assert output.summary_model == "scripted:test-model"
-    assert output.summary_prompt_version == "llm-public-discussion-summary-v2"
+    assert output.summary.about == "The post discusses BHP earnings."
+    assert output.summary.model == "scripted:test-model"
+    assert output.summary.prompt_version == "llm-public-discussion-summary-v2"
     analyse_sentiment.assert_called_once_with(
         "$BHP earnings outlook\n\nI think profit will rise next year."
     )
@@ -693,9 +659,9 @@ def test_news_analysis_uses_source_text_and_news_prompt(
 
     assert output.parsed.category == "NEWS_ARTICLE"
     assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary["changed"] == "Reported copper production increased."
-    assert output.summary_model == "scripted:test-model"
-    assert output.summary_prompt_version == "llm-news-summary-v2"
+    assert output.summary.changed == "Reported copper production increased."
+    assert output.summary.model == "scripted:test-model"
+    assert output.summary.prompt_version == "llm-news-summary-v2"
     analyse_sentiment.assert_called_once_with(
         "BHP production update\n\nBHP reported stronger copper production."
     )
@@ -718,14 +684,14 @@ def test_analysis_worker_persists_public_discussion_results(
             category_confidence=1.0,
             extracted_data={},
         ),
-        summary={
-            "summary": "Investors discuss BHP earnings.",
-            "about": "The post is about BHP.",
-            "changed": "No claimed change identified.",
-            "matters": "Earnings interest BHP investors.",
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-public-discussion-summary-v2",
+        summary=Summary(
+            summary="Investors discuss BHP earnings.",
+            about="The post is about BHP.",
+            changed="No claimed change identified.",
+            matters="Earnings interest BHP investors.",
+            model="bedrock:test-model",
+            prompt_version="llm-public-discussion-summary-v2",
+        ),
         sentiment={
             "sentiment_label": "neutral",
             "label": "neutral",
@@ -793,14 +759,14 @@ def test_analysis_worker_persists_news_results(
             category_confidence=1.0,
             extracted_data={},
         ),
-        summary={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The article covers BHP production.",
-            "changed": "Reported copper production increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-news-summary-v2",
+        summary=Summary(
+            summary="BHP reported stronger copper production.",
+            about="The article covers BHP production.",
+            changed="Reported copper production increased.",
+            matters="Higher output may affect revenue expectations.",
+            model="bedrock:test-model",
+            prompt_version="llm-news-summary-v2",
+        ),
         sentiment={
             "sentiment_label": "positive",
             "label": "bullish",
@@ -853,7 +819,7 @@ def test_analysis_worker_persists_news_results(
 
     assert calls["started"] is True
     assert calls["stored"]["metadata"]["category"] == "news_article"
-    assert calls["stored"]["summary"]["changed"] == (
+    assert calls["stored"]["summary"].changed == (
         "Reported copper production increased."
     )
     assert calls["completed"] is True

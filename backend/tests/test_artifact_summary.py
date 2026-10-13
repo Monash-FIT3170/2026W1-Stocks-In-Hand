@@ -17,7 +17,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
 from app.core.config import settings
+from app.crud.artifact import store_artifact_analysis
 from app.models.artifact import Artifact
+from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.services import artifact_summary
 from app.services.artifact_summary import EmptySummary, Summary
@@ -294,6 +296,36 @@ def test_a_registered_extension_round_trips_and_other_keys_are_dropped(
     assert artifact_summary.read(artifact).extensions == {"claim_evidence": evidence}
     assert artifact.artifact_metadata["claim_evidence"] == evidence
     assert "tone" not in artifact.artifact_metadata
+
+
+def test_storing_an_analysis_twice_keeps_one_summary_and_one_sentiment(
+    db_session: Session,
+) -> None:
+    artifact = _announcement(db_session, category="UNKNOWN")
+    analysis = {
+        "raw_text": "Stored filing text.",
+        "metadata": {"page_count": 2},
+        "summary": _summary(),
+        "sentiment": {
+            "sentiment_label": "positive",
+            "confidence_score": 0.9,
+            "model_used": "test-finbert",
+        },
+    }
+
+    for _ in range(2):
+        store_artifact_analysis(db_session, artifact_id=artifact.id, **analysis)
+
+    assert artifact.raw_text == "Stored filing text."
+    assert artifact.artifact_metadata == {"category": "UNKNOWN", "page_count": 2, **ANSWER}
+    assert artifact_summary.read(artifact) == _summary()
+    assert len(_rows(db_session, artifact.id)) == 1
+    assert (
+        db_session.query(ArtifactSentiment)
+        .filter(ArtifactSentiment.artifact_id == artifact.id)
+        .count()
+        == 1
+    )
 
 
 def test_an_answer_is_cleaned_before_it_is_kept() -> None:

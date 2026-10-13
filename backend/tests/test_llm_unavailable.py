@@ -67,8 +67,6 @@ def test_unavailable_provider_stores_sentiment_without_summary(
 
     assert output.sentiment == SENTIMENT
     assert output.summary is None
-    assert output.summary_model is None
-    assert output.summary_prompt_version is None
 
 
 def test_both_providers_report_unavailable(unavailable_provider: str) -> None:
