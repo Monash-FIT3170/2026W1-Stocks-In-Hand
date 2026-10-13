@@ -118,6 +118,9 @@ the Sydney-timezone day bounds the date filters use.
 `artifact_summary.py` and `artifact_sentiment.py`
 
 Handle the generated summary and sentiment records attached to an artifact.
+`artifact_summary.py` only reads summary rows: summaries are written only by
+the artifact summary module (`app/services/artifact_summary.py`), which keeps
+the row and the summary keys in `artifact_metadata` in step.
 
 `watchlist.py` and `watchlist_ticker.py`
 

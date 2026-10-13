@@ -4,13 +4,6 @@ from uuid import UUID
 from typing import Optional
 from decimal import Decimal
 
-class ArtifactSummaryCreate(BaseModel):
-    artifact_id: UUID
-    summary_text: str
-    model_used: Optional[str] = None
-    prompt_version: Optional[str] = None
-    confidence_score: Optional[Decimal] = None
-
 class ArtifactSummaryResponse(BaseModel):
     id: UUID
     artifact_id: UUID

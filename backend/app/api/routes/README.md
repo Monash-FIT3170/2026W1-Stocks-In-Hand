@@ -102,7 +102,8 @@ Source content routes:
 
 - `information_platform.py`: manage source platforms.
 - `artifact.py`: create and fetch artifacts.
-- `artifact_summary.py`: create and fetch summaries.
+- `artifact_summary.py`: fetch summary rows. Summaries are written only
+  through the artifact summary module (`app/services/artifact_summary.py`).
 - `artifact_sentiment.py`: create and fetch sentiment records.
 - `announcement.py`: the ASX announcement feed and trending list, derived from
   artifacts.
