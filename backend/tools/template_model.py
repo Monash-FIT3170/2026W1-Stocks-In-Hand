@@ -59,7 +59,7 @@ CloudFormationLoader.add_multi_constructor("!", _construct_intrinsic)
 
 
 def parse_template(text: str) -> dict:
-    return yaml.load(text, Loader=CloudFormationLoader)
+    return yaml.load(text, Loader=CloudFormationLoader)  # nosec B506 - CloudFormationLoader is a SafeLoader
 
 
 def ref_target(value: Any) -> str | None:

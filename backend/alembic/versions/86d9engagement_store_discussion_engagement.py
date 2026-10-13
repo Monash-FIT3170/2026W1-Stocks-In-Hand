@@ -45,7 +45,7 @@ SET artifact_metadata = jsonb_set(
 )
 WHERE source_type IN ('reddit', 'bluesky', 'mastodon', 'blog')
   AND (artifact_metadata IS NULL OR NOT artifact_metadata ? 'engagement')
-"""
+"""  # nosec B608 - built only from the fixed key names above, never from input
 
 
 def upgrade() -> None:
