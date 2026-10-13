@@ -9,6 +9,7 @@ kept only the joined text.
 import threading
 import uuid
 from collections.abc import Iterator
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import Engine, create_engine, delete, select
@@ -23,6 +24,7 @@ from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.services import artifact_summary
 from app.services.artifact_summary import EmptySummary, Summary
+from app.status import AnalysisStatus
 
 ANSWER = {
     "summary": "The company confirmed its dividend timetable.",
@@ -96,9 +98,17 @@ def _rows(db: Session, artifact_id: uuid.UUID) -> list[ArtifactSummary]:
     )
 
 
-def _stored(metadata: dict | None = None, summary_text: str | None = None) -> Artifact:
+def _stored(
+    metadata: dict | None = None,
+    summary_text: str | None = None,
+    source_type: str = "asx_announcement",
+) -> Artifact:
     """An unsaved artifact holding a summary the way older code stored it."""
-    artifact = Artifact(artifact_type="asx_announcement_other", artifact_metadata=metadata)
+    artifact = Artifact(
+        source_type=source_type,
+        artifact_type="asx_announcement_other",
+        artifact_metadata=metadata,
+    )
     if summary_text is not None:
         artifact.summaries.append(
             ArtifactSummary(summary_text=summary_text, model_used="bedrock:legacy")
@@ -270,18 +280,19 @@ def test_concurrent_first_records_leave_one_row_with_the_second_summary(
             db.commit()
 
 
+def _claim_evidence(values) -> list | None:
+    evidence = values.get("claim_evidence")
+    return evidence if isinstance(evidence, list) else None
+
+
 def test_a_registered_extension_round_trips_and_other_keys_are_dropped(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def claim_evidence(values):
-        evidence = values.get("claim_evidence")
-        return evidence if isinstance(evidence, list) else None
-
     monkeypatch.setattr(
         artifact_summary,
         "EXTENSIONS",
-        (artifact_summary.SummaryExtension("claim_evidence", claim_evidence),),
+        (artifact_summary.SummaryExtension("claim_evidence", _claim_evidence),),
     )
     artifact = _announcement(db_session)
     evidence = [{"text": "The payment date is 2 January 2040.", "passage": 1}]
@@ -398,3 +409,112 @@ def test_a_clarity_value_that_is_not_a_list_counts_as_missing() -> None:
 
 def test_an_artifact_without_a_summary_reads_as_none() -> None:
     assert artifact_summary.read(_stored({"category": "UNKNOWN"})) is None
+
+
+FOUR_LINES = {key: ANSWER[key] for key in artifact_summary.TEXT_LINES}
+
+
+@pytest.mark.parametrize(
+    ("answer", "source_type", "complete"),
+    [
+        (ANSWER, "asx_announcement", True),
+        (FOUR_LINES, "asx_announcement", False),
+        ({**FOUR_LINES, "confirmed_facts": []}, "asx_announcement", False),
+        ({**FOUR_LINES, "confirmed_facts": [], "speculation": []}, "asx_announcement", True),
+        (FOUR_LINES, "news", True),
+        (FOUR_LINES, "reddit", True),
+        ({**ANSWER, "changed": " "}, "asx_announcement", False),
+        ({**FOUR_LINES, "matters": None}, "news", False),
+    ],
+)
+def test_a_complete_summary_has_four_lines_and_any_clarity_lists_its_source_needs(
+    answer: dict,
+    source_type: str,
+    complete: bool,
+) -> None:
+    summary = artifact_summary.from_answer(answer, model=MODEL, prompt_version=PROMPT_VERSION)
+
+    assert artifact_summary.is_complete(summary, source_type=source_type) is complete
+
+
+def test_no_summary_is_never_complete() -> None:
+    assert not artifact_summary.is_complete(None, source_type="news")
+
+
+@pytest.mark.parametrize(
+    ("source_type", "needs_summary"),
+    [("asx_announcement", True), ("news", False)],
+)
+def test_a_legacy_summary_with_only_joined_text_lacks_the_clarity_lists(
+    source_type: str,
+    needs_summary: bool,
+) -> None:
+    artifact = _stored(None, "One.\n\nTwo.\n\nThree.\n\nFour.", source_type=source_type)
+
+    assert artifact_summary.needs_summary(artifact) is needs_summary
+
+
+def test_an_extension_required_for_a_source_type_must_be_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        artifact_summary,
+        "EXTENSIONS",
+        (
+            artifact_summary.SummaryExtension(
+                "claim_evidence",
+                _claim_evidence,
+                required_for=frozenset({"asx_announcement"}),
+            ),
+        ),
+    )
+
+    assert not artifact_summary.is_complete(_summary(), source_type="asx_announcement")
+    assert artifact_summary.is_complete(
+        _summary(claim_evidence=[{"text": "The payment date is 2 January 2040."}]),
+        source_type="asx_announcement",
+    )
+    assert artifact_summary.is_complete(_summary(), source_type="news")
+
+
+def test_incomplete_announcements_are_the_analysed_ones_with_an_incomplete_summary(
+    db_session: Session,
+) -> None:
+    _ids, before = artifact_summary.incomplete_announcements(db_session, limit=0)
+
+    def analysed(created_day: int, **values) -> Artifact:
+        artifact = _new_announcement()
+        artifact.analysis_status = AnalysisStatus.COMPLETED
+        artifact.created_at = datetime(2000, 1, created_day, tzinfo=timezone.utc)
+        for name, value in values.items():
+            setattr(artifact, name, value)
+        db_session.add(artifact)
+        db_session.flush()
+        return artifact
+
+    def lines_only(artifact: Artifact) -> None:
+        artifact_summary.record(
+            db_session,
+            artifact,
+            artifact_summary.from_answer(FOUR_LINES, model=MODEL, prompt_version=PROMPT_VERSION),
+        )
+
+    oldest = analysed(1)
+    lines_only(oldest)
+    legacy = analysed(2)
+    db_session.add(ArtifactSummary(artifact_id=legacy.id, summary_text="A legacy summary."))
+    complete = analysed(1)
+    artifact_summary.record(db_session, complete, _summary())
+    pending = analysed(1, analysis_status=AnalysisStatus.PENDING)
+    lines_only(pending)
+    news = analysed(1, source_type="news", artifact_type="news_article")
+    lines_only(news)
+    analysed(1)  # Analysed with no summary row, as when no LLM was switched on.
+    db_session.commit()
+
+    first, total = artifact_summary.incomplete_announcements(db_session, limit=1)
+    every, _total = artifact_summary.incomplete_announcements(db_session, limit=before + 2)
+
+    assert first == [oldest.id]
+    assert total == before + 2
+    assert every[:2] == [oldest.id, legacy.id]

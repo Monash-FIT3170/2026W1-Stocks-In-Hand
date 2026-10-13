@@ -8,7 +8,8 @@ sentiment keyword search still reads, and as the lines joined into the
 artifact's one ``artifact_summaries`` row. This module is the only code that
 writes either store. ``record`` replaces both inside the caller's
 transaction, and ``read`` gives them back as one ``Summary``, recovering
-older records that kept only the joined text.
+older records that kept only the joined text. ``is_complete`` is the one
+rule for whether a summary has everything its source type should have.
 """
 
 from __future__ import annotations
@@ -21,14 +22,18 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import ARRAY, ColumnElement, Text, case, cast, func, literal, update
 from sqlalchemy.dialects.postgresql import JSONB, array, insert
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.services.generation import SUMMARY_LIST_KEYS, SUMMARY_TEXT_KEYS, Generated
+from app.status import AnalysisStatus
 
 TEXT_LINES = SUMMARY_TEXT_KEYS
 CLARITY_LISTS = SUMMARY_LIST_KEYS
+# Source types summarised with AnnouncementSummary, the kind that sorts its
+# claims into the clarity lists.
+CLARITY_SOURCE_TYPES = frozenset({"asx_announcement"})
 
 _PARAGRAPH_BREAK = re.compile(r"\r?\n\r?\n")
 
@@ -191,6 +196,50 @@ def read(artifact: Artifact) -> Summary | None:
     if not lines and stored_text:
         lines = {"summary": stored_text}
     return replace(summary, **lines) if lines else None
+
+
+def is_complete(summary: Summary | None, *, source_type: str | None) -> bool:
+    """Whether a summary has everything a summary of this source type should.
+
+    That is all four lines, both clarity lists when the source type is in
+    ``CLARITY_SOURCE_TYPES``, and each extension required for the type.
+    """
+    if summary is None or len(summary.lines) < len(TEXT_LINES):
+        return False
+    if source_type in CLARITY_SOURCE_TYPES and not summary.is_classified:
+        return False
+    return all(
+        extension.key in summary.extensions
+        for extension in EXTENSIONS
+        if source_type in extension.required_for
+    )
+
+
+def needs_summary(artifact: Artifact) -> bool:
+    """Whether the artifact has no complete summary yet."""
+    return not is_complete(read(artifact), source_type=artifact.source_type)
+
+
+def incomplete_announcements(db: Session, *, limit: int) -> tuple[list[UUID], int]:
+    """Analysed announcements whose recorded summary is incomplete, oldest first.
+
+    Returns at most ``limit`` artifact ids and how many there are in all. An
+    announcement with no summary row is not counted.
+    """
+    announcements = (
+        db.query(Artifact)
+        .options(
+            load_only(Artifact.id, Artifact.source_type, Artifact.artifact_metadata),
+            WITH_SUMMARY,
+        )
+        .filter(Artifact.source_type == "asx_announcement")
+        .filter(Artifact.analysis_status == AnalysisStatus.COMPLETED)
+        .filter(Artifact.summaries.any())
+        .order_by(Artifact.created_at.asc(), Artifact.id.asc())
+        .all()
+    )
+    incomplete = [artifact.id for artifact in announcements if needs_summary(artifact)]
+    return incomplete[:limit], len(incomplete)
 
 
 # Loads the summary rows of a list of artifacts in one more query, so ``read``
