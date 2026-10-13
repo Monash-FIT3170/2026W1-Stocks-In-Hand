@@ -242,6 +242,39 @@ def incomplete_announcements(db: Session, *, limit: int) -> tuple[list[UUID], in
     return incomplete[:limit], len(incomplete)
 
 
+def brief(summary: Summary | None) -> str | None:
+    """The one line a brief shows: ``about``, else the summary line.
+
+    None when there is no summary, never placeholder or raw text.
+    """
+    if summary is None:
+        return None
+    line = summary.about or summary.summary
+    return " ".join(line.split()) if line else None
+
+
+def clarity(summary: Summary | None) -> dict[str, object]:
+    """Which claims are confirmed and which are speculation.
+
+    ``is_classified`` is false unless the summary was sorted into both lists,
+    so a reader does not present unsorted claims as confirmed.
+    """
+    return {
+        "is_classified": summary is not None and summary.is_classified,
+        "confirmed_facts": list(summary.confirmed_facts or ()) if summary else [],
+        "speculation": list(summary.speculation or ()) if summary else [],
+    }
+
+
+def alert_text(db: Session, artifact_id: UUID) -> str | None:
+    """The summary text an alert email quotes, or None when there is none."""
+    artifact = (
+        db.query(Artifact).options(WITH_SUMMARY).filter(Artifact.id == artifact_id).one_or_none()
+    )
+    summary = read(artifact) if artifact is not None else None
+    return summary.text if summary is not None else None
+
+
 # Loads the summary rows of a list of artifacts in one more query, so ``read``
 # does not query once per artifact.
 WITH_SUMMARY = selectinload(Artifact.summaries)

@@ -518,3 +518,70 @@ def test_incomplete_announcements_are_the_analysed_ones_with_an_incomplete_summa
     assert first == [oldest.id]
     assert total == before + 2
     assert every[:2] == [oldest.id, legacy.id]
+
+
+def test_the_text_joins_the_lines_it_has_with_blank_lines() -> None:
+    summary = Summary(summary="One.", changed="Three.", matters="Four.")
+
+    assert summary.text == "One.\n\nThree.\n\nFour."
+
+
+@pytest.mark.parametrize(
+    ("summary", "brief"),
+    [
+        (Summary(summary="The summary line.", about="  The   about line. "), "The about line."),
+        (Summary(summary="The  summary line.", changed="Changed."), "The summary line."),
+        (Summary(changed="Only what changed."), None),
+        (None, None),
+    ],
+)
+def test_the_brief_is_about_else_the_summary_line(
+    summary: Summary | None,
+    brief: str | None,
+) -> None:
+    assert artifact_summary.brief(summary) == brief
+
+
+def test_clarity_lists_are_cleaned_and_need_both_lists_to_be_classified() -> None:
+    classified = artifact_summary.read(
+        _stored(
+            {
+                "about": "A line.",
+                "confirmed_facts": [
+                    " Net profit was  $1 billion. ",
+                    "Net profit was $1 billion.",
+                    None,
+                ],
+                "speculation": ["Management expects costs to fall."],
+            }
+        )
+    )
+    malformed = artifact_summary.read(
+        _stored({"about": "A line.", "confirmed_facts": "A malformed legacy value."})
+    )
+
+    assert artifact_summary.clarity(classified) == {
+        "is_classified": True,
+        "confirmed_facts": ["Net profit was $1 billion."],
+        "speculation": ["Management expects costs to fall."],
+    }
+    assert artifact_summary.clarity(malformed) == {
+        "is_classified": False,
+        "confirmed_facts": [],
+        "speculation": [],
+    }
+    assert artifact_summary.clarity(None)["is_classified"] is False
+
+
+def test_alert_text_is_the_recorded_summary_text(db_session: Session) -> None:
+    recorded = _announcement(db_session)
+    artifact_summary.record(db_session, recorded, _summary())
+    legacy = _announcement(db_session)
+    db_session.add(ArtifactSummary(artifact_id=legacy.id, summary_text="A legacy summary."))
+    unsummarised = _announcement(db_session)
+    db_session.commit()
+
+    assert artifact_summary.alert_text(db_session, recorded.id) == _summary().text
+    assert artifact_summary.alert_text(db_session, legacy.id) == "A legacy summary."
+    assert artifact_summary.alert_text(db_session, unsummarised.id) is None
+    assert artifact_summary.alert_text(db_session, uuid.uuid4()) is None
