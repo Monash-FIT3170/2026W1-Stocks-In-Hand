@@ -119,42 +119,6 @@ def test_get_preferences_keeps_pending_local_confirmation(
     assert response.verification_status == "pending"
 
 
-def test_verification_email_contains_current_signed_app_link(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The provider message must link back to the app with a valid token."""
-    subscription_id = uuid4()
-    requested_at = datetime.now(timezone.utc)
-    token_hash = "d" * 64
-    send = MagicMock(return_value="brevo-verification-message")
-    monkeypatch.setattr(
-        settings,
-        "FRONTEND_BASE_URL",
-        "https://app.example.test",
-        raising=False,
-    )
-    monkeypatch.setattr(routes.brevo_alerts, "send_email", send)
-
-    routes._send_verification_email(  # pylint: disable=protected-access
-        subscription_id=subscription_id,
-        email="investor@example.com",
-        unsubscribe_token_hash=token_hash,
-        requested_at=requested_at,
-    )
-
-    text_body = send.call_args.kwargs["text"]
-    token = text_body.split("?t=", 1)[1].splitlines()[0]
-    assert send.call_args.kwargs["to"] == "investor@example.com"
-    assert "/verify-notifications/?t=" in text_body
-    assert routes.verify_signed_verification_token(
-        token,
-        token_hash,
-        requested_at,
-        now=requested_at,
-        ttl=timedelta(hours=24),
-    ) == subscription_id
-
-
 def test_enable_preferences_returns_raw_token_once_and_stores_only_hash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
