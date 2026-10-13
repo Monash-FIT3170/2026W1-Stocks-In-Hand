@@ -22,7 +22,7 @@ import app.models  # noqa: F401
 from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
-from app.services import news_summary
+from app.services import artifact_summary, news_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 
@@ -71,26 +71,26 @@ def test_summarising_an_already_summarised_story_updates_its_row(
     )
     db_session.commit()
 
-    llm = ScriptedProvider(
-        [
-            json.dumps(
-                {
-                    "summary": "BHP lifted copper output.",
-                    "about": "The story covers BHP production.",
-                    "changed": "Copper output rose.",
-                    "matters": "Output supports revenue.",
-                }
-            )
-        ]
-    )
+    answer = {
+        "summary": "BHP lifted copper output.",
+        "about": "The story covers BHP production.",
+        "changed": "Copper output rose.",
+        "matters": "Output supports revenue.",
+    }
+    llm = ScriptedProvider([json.dumps(answer)])
     monkeypatch.setattr(providers, "configured_provider", lambda: llm)
 
-    news_summary.summarise_news_artifact(db_session, artifact)
+    recorded = news_summary.summarise_news_artifact(db_session, artifact)
 
     rows = db_session.scalars(
         select(ArtifactSummary).where(ArtifactSummary.artifact_id == artifact.id)
     ).all()
-    assert len(rows) == 1
-    assert rows[0].summary_text.startswith("BHP lifted copper output.")
-    assert rows[0].prompt_version == "llm-news-summary-v2"
-    assert rows[0].model_used == "scripted:test-model"
+    assert [row.id for row in rows] == [recorded.summary_id]
+    assert artifact_summary.read(artifact) == artifact_summary.from_answer(
+        answer,
+        model="scripted:test-model",
+        prompt_version="llm-news-summary-v2",
+    )
+    assert artifact.artifact_metadata["source_name"] == "publisher.example"
+    [call] = llm.calls
+    assert "Source:\npublisher.example" in call.prompt

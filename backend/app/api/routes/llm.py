@@ -6,25 +6,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.crud import artifact as artifact_crud
-from app.crud import artifact_summary as artifact_summary_crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.services import generation
+from app.services import artifact_summary, generation
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 T = TypeVar("T")
-
-
-def _summary_text(title: str, summary: dict[str, object]) -> str:
-    parts = [
-        summary.get("summary"),
-        summary.get("about"),
-        summary.get("changed"),
-        summary.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    return "\n\n".join(cleaned) or title
 
 
 def _generate_artifact_summary(
@@ -59,23 +47,6 @@ def _available(
     if isinstance(result, generation.Unavailable):
         raise HTTPException(status_code=503, detail=result.reason)
     return result
-
-
-def _summary_metadata(metadata: dict, summary: dict[str, object]) -> dict:
-    """Merge generated summary fields into JSON metadata without mutating input."""
-    next_metadata = dict(metadata)
-
-    for key in generation.SUMMARY_TEXT_KEYS:
-        value = summary.get(key)
-        if isinstance(value, str) and value.strip():
-            next_metadata[key] = value.strip()
-
-    for key in generation.SUMMARY_LIST_KEYS:
-        if key in summary:
-            value = summary.get(key)
-            next_metadata[key] = list(value) if isinstance(value, list) else []
-
-    return next_metadata
 
 
 def _has_current_summary(metadata: dict) -> bool:
@@ -167,17 +138,15 @@ def summarise_ticker_artifacts(
         except Exception as exc:
             errors.append({"artifact_id": str(artifact.id), "error": str(exc)})
             continue
-        generated = _available(generated)
+        summary = artifact_summary.from_generated(_available(generated))
 
-        artifact.artifact_metadata = _summary_metadata(metadata, generated.value)
-
-        artifact_summary_crud.upsert_artifact_summary(
-            db,
-            artifact_id=artifact.id,
-            summary_text=_summary_text(artifact.title or "Untitled artifact", generated.value),
-            model_used=generated.model,
-            prompt_version=generated.prompt_version,
-        )
+        try:
+            artifact_summary.record(db, artifact, summary)
+        except artifact_summary.EmptySummary as exc:
+            errors.append({"artifact_id": str(artifact.id), "error": str(exc)})
+            continue
+        # Commit each artifact, which releases its row lock before the next.
+        db.commit()
         processed += 1
 
     return {
@@ -210,23 +179,20 @@ def summarise_artifact(
         raise HTTPException(status_code=502, detail="LLM summary request failed") from exc
     generated = _available(generated)
 
-    artifact.artifact_metadata = _summary_metadata(metadata, generated.value)
-
-    db_summary = artifact_summary_crud.upsert_artifact_summary(
-        db,
-        artifact_id=artifact.id,
-        summary_text=_summary_text(
-            artifact.title or "Untitled artifact",
-            generated.value,
-        ),
-        model_used=generated.model,
-        prompt_version=generated.prompt_version,
-    )
+    try:
+        recorded = artifact_summary.record(
+            db,
+            artifact,
+            artifact_summary.from_generated(generated),
+        )
+    except artifact_summary.EmptySummary as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    db.commit()
 
     return {
         "artifact_id": artifact.id,
-        "summary_id": db_summary.id,
-        "model_used": db_summary.model_used,
-        "prompt_version": db_summary.prompt_version,
+        "summary_id": recorded.summary_id,
+        "model_used": recorded.summary.model,
+        "prompt_version": recorded.summary.prompt_version,
         **generated.value,
     }

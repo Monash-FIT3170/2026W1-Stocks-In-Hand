@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
+from app.services import artifact_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
@@ -143,6 +144,50 @@ def test_artifact_summary_records_the_model_and_prompt_version(
     assert result["confirmed_facts"] == ANNOUNCEMENT_SUMMARY["confirmed_facts"]
     assert artifact.artifact_metadata["speculation"] == ANNOUNCEMENT_SUMMARY["speculation"]
     assert '"payment_date": "2040-01-02"' in provider.calls[0].prompt
+
+
+def test_summarising_an_announcement_again_replaces_its_clarity_lists(
+    db_session: Session,
+    scripted,
+) -> None:
+    artifact = _announcement(db_session)
+    revised = {
+        **ANNOUNCEMENT_SUMMARY,
+        "confirmed_facts": ["The record date is 1 December 2039."],
+        "speculation": [],
+    }
+    scripted(json.dumps(ANNOUNCEMENT_SUMMARY), json.dumps(revised))
+
+    llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+
+    summary = artifact_summary.read(artifact)
+    assert summary.confirmed_facts == ("The record date is 1 December 2039.",)
+    assert summary.speculation == ()
+    assert artifact.artifact_metadata["category"] == "DividendAnnouncement"
+    assert _summary_row(db_session, artifact).id == result["summary_id"]
+
+
+def test_an_answer_without_text_is_refused_with_502(
+    db_session: Session,
+    scripted,
+) -> None:
+    artifact = _announcement(db_session)
+    scripted(
+        json.dumps(
+            {
+                **{key: "" for key in artifact_summary.TEXT_LINES},
+                "confirmed_facts": [],
+                "speculation": [],
+            }
+        )
+    )
+
+    with pytest.raises(HTTPException) as error:
+        llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+
+    assert error.value.status_code == 502
+    assert artifact_summary.read(artifact) is None
 
 
 def test_a_news_artifact_is_summarised_with_the_news_prompt(

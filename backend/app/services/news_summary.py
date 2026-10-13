@@ -7,22 +7,14 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.crud.artifact_summary import upsert_artifact_summary
 from app.models.artifact import Artifact
-from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import generation
+from app.services import artifact_summary, generation
+from app.services.artifact_summary import RecordedSummary
 from app.services.llm_errors import LLMUnavailableError
 
-SUMMARY_METADATA_KEYS = ("summary", "about", "changed", "matters")
 NEWS_SOURCE_TYPE = "news"
 NEWS_ARTIFACT_TYPE = "news_article"
-
-
-def summary_text(title: str, summary: dict[str, str]) -> str:
-    parts = [summary.get(key) for key in SUMMARY_METADATA_KEYS]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    return "\n\n".join(cleaned) or title
 
 
 def has_news_summary_metadata(artifact: Artifact) -> bool:
@@ -31,7 +23,8 @@ def has_news_summary_metadata(artifact: Artifact) -> bool:
     return isinstance(about, str) and bool(about.strip())
 
 
-def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
+def summarise_news_artifact(db: Session, artifact: Artifact) -> RecordedSummary:
+    """Summarise one stored news story, record the summary and commit."""
     raw_text = (artifact.raw_text or "").strip()
     if not raw_text:
         raise ValueError("News artifact has no text to summarise")
@@ -46,24 +39,10 @@ def summarise_news_artifact(db: Session, artifact: Artifact) -> ArtifactSummary:
     )
     if isinstance(generated, generation.Unavailable):
         raise LLMUnavailableError(generated.reason)
-    summary = generated.value
 
-    next_metadata = dict(metadata)
-    for key in SUMMARY_METADATA_KEYS:
-        value = summary.get(key)
-        if isinstance(value, str) and value.strip():
-            next_metadata[key] = value
-    artifact.artifact_metadata = next_metadata
-
-    # Upsert: artifact_summaries allows one row per artifact, and the analysis
-    # worker may already have written it.
-    return upsert_artifact_summary(
-        db,
-        artifact_id=artifact.id,
-        summary_text=summary_text(title, summary),
-        model_used=generated.model,
-        prompt_version=generated.prompt_version,
-    )
+    recorded = artifact_summary.record(db, artifact, artifact_summary.from_generated(generated))
+    db.commit()
+    return recorded
 
 
 def _ticker_for_symbol(db: Session, symbol: str) -> Ticker:

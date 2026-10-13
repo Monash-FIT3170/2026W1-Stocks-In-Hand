@@ -478,31 +478,6 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
     assert "analysis pipeline" in error.value.detail
 
 
-def test_summary_metadata_clears_stale_speculation_without_mutating_input() -> None:
-    """A later summary can replace old clarity classifications with empty lists."""
-    from app.api.routes.llm import _summary_metadata
-
-    metadata = {
-        "category": "DividendAnnouncement",
-        "speculation": ["An outdated forecast."],
-    }
-    result = _summary_metadata(
-        metadata,
-        {
-            "summary": "A concise summary.",
-            "about": "",
-            "changed": "No material change identified.",
-            "matters": "The dates help investors plan.",
-            "confirmed_facts": ["The payment date was announced."],
-            "speculation": [],
-        },
-    )
-
-    assert result["confirmed_facts"] == ["The payment date was announced."]
-    assert result["speculation"] == []
-    assert metadata["speculation"] == ["An outdated forecast."]
-
-
 def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
     """Ticker-wide backfills should revisit summaries created before clarity v2."""
     from app.api.routes.llm import _has_current_summary
