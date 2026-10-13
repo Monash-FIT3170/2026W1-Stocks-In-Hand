@@ -17,6 +17,7 @@ on:
       - "infra/template.yaml"
       - "infra/samconfig.toml"
       - "infra/github-oidc.yaml"
+      - "infra/bootstrap.yaml"
       - "backend/app/messages.py"
       - "backend/app/sources.py"
       - "backend/tools/sync_tickers.py"
@@ -26,7 +27,9 @@ on:
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
       - "backend/tests/test_template_model.py"
+      - "backend/tests/test_release.py"
       - "backend/tools/template_model.py"
+      - "backend/tools/release.py"
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
       - ".github/workflows/deploy-staging.yml"
@@ -36,6 +39,7 @@ on:
       - "infra/template.yaml"
       - "infra/samconfig.toml"
       - "infra/github-oidc.yaml"
+      - "infra/bootstrap.yaml"
       - "backend/app/messages.py"
       - "backend/app/sources.py"
       - "backend/tools/sync_tickers.py"
@@ -45,7 +49,9 @@ on:
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
       - "backend/tests/test_template_model.py"
+      - "backend/tests/test_release.py"
       - "backend/tools/template_model.py"
+      - "backend/tools/release.py"
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
       - ".github/workflows/deploy-staging.yml"
@@ -100,13 +106,13 @@ jobs:
 
       - name: Install pytest and PyYAML
         shell: bash
-        # PyYAML parses the template for the deployment contract tests.
+        # PyYAML is the only dependency of the template model and the release module.
         run: pip install --disable-pip-version-check pytest==9.0.3 PyYAML==6.0.3
 
-      - name: Run queue wiring and deployment contract tests
+      - name: Run queue wiring, deployment contract and release tests
         shell: bash
         working-directory: backend
         run: >
           python -m pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
-          tests/test_template_model.py
+          tests/test_template_model.py tests/test_release.py
           -v
