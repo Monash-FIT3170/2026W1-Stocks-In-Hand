@@ -77,12 +77,6 @@ def _copies() -> list[TickerCopy]:
             ),
             scheduled,
         ),
-        TickerCopy(
-            DEPLOY_WORKFLOW,
-            "automatic deploy ScheduledTickers fallback",
-            re.compile(r"ScheduledTickers (?P<value>[A-Z0-9,]+)\)"),
-            scheduled,
-        ),
     ]
 
 

@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -171,85 +172,6 @@ def test_brevo_notification_infrastructure_contract() -> None:
     assert "NotificationLogGroup" in model.resources
 
 
-def test_staging_workflow_wires_brevo_notification_parameters() -> None:
-    """Every change set must carry the notification release controls."""
-    workflow = (
-        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "enable_notifications:" in workflow
-    notification_input = workflow.split("      enable_notifications:", 1)[1].split(
-        "      enable_bedrock:", 1
-    )[0]
-    assert 'default: "false"' in notification_input
-    assert (
-        '--image-repositories "NotificationFunction=$ECR_REGISTRY/'
-        'stocks-in-hand-api"' in workflow
-    )
-    assert '"NotificationsEnabled=$ENABLE_NOTIFICATIONS"' in workflow
-    assert '"AlertSenderEmail=${{ vars.ALERT_SENDER_EMAIL }}"' in workflow
-    assert "AUTO_DEPLOY_ENABLE_NOTIFICATIONS" in workflow
-    assert "Validate Brevo notification prerequisites" in workflow
-    preflight = workflow.split(
-        "      - name: Validate Brevo notification prerequisites", 1
-    )[1].split("      - name:", 1)[0]
-    assert "if: env.ENABLE_NOTIFICATIONS == 'true'" in preflight
-    assert 'ALERT_SENDER_EMAIL: ${{ vars.ALERT_SENDER_EMAIL }}' in preflight
-    assert '"$PARAMETER_PATH_PREFIX/brevo-api-key"' in preflight
-    assert "aws ssm get-parameter" in preflight
-    assert "Parameter.Type" in preflight
-    assert '"$PARAMETER_TYPE" != "SecureString"' in preflight
-
-
-def test_approved_main_merges_deploy_backend_and_frontend_automatically() -> None:
-    workflow = (
-        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "name: Deploy staging release" in workflow
-    assert "  push:\n    branches:\n      - main" in workflow
-    assert "environment: staging" in workflow
-    assert "group: stocks-in-hand-staging-deploy" in workflow
-    assert "cancel-in-progress: false" in workflow
-
-    configuration = workflow.split(
-        "      - name: Resolve deployment configuration", 1
-    )[1].split("      - name:", 1)[0]
-    assert "read_stack_parameter" in configuration
-    assert "AUTO_DEPLOY_AUTH_PROVIDER" in configuration
-    assert "AUTO_DEPLOY_ENABLE_SCHEDULE" in configuration
-    assert "AUTO_DEPLOY_ENABLE_BEDROCK" in configuration
-    assert (
-        'if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]'
-        in configuration
-    )
-
-    deployment = workflow.split(
-        "      - name: Create or execute the SAM change set", 1
-    )[1].split("      - name:", 1)[0]
-    assert "sam deploy" in deployment
-    assert "DEPLOY_MODE_ARGS+=(--no-execute-changeset)" in deployment
-    assert '"${DEPLOY_MODE_ARGS[@]}"' in deployment
-    assert (
-        '"ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA"'
-        in deployment
-    )
-
-    assert (
-        "Wait for the automatically deployed API to report healthy"
-        in workflow
-    )
-    assert "backend/scripts/wait_for_health.py" in workflow
-    assert (
-        "Prepare rollback after an automatic health-check failure"
-        in workflow
-    )
-    assert "Build the deployed frontend configuration" in workflow
-    assert "Preserve the automatic frontend release snapshot" in workflow
-    assert "Publish the automatic frontend release" in workflow
-    assert "aws cloudfront create-invalidation" in workflow
-
-
 def test_github_oidc_can_check_brevo_parameter_metadata() -> None:
     """The prepare role may inspect the Brevo parameter without decrypting it."""
     template = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
@@ -366,25 +288,14 @@ def test_public_discussion_schedule_is_bounded_and_disabled_by_default() -> None
     assert "lambdas/public_discussion_schedule.py" in dockerfile
 
 
-def test_release_workflows_keep_public_discussion_schedule_explicit() -> None:
-    deploy = (
-        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
-    ).read_text(encoding="utf-8")
-
-    assert "enable_public_discussion_schedule:" in deploy
-    assert "PublicDiscussionSchedulerFunction=" in deploy
-    assert "PublicDiscussionPerSourceLimit=" in deploy
-    assert "OutputKey=='FrontendUrl'" in deploy
-    assert '"FrontendBaseUrl=$FRONTEND_BASE_URL"' in deploy
-
-
-def _workflow(name: str) -> str:
-    return (WORKFLOWS / name).read_text(encoding="utf-8")
+def _workflow(name: str) -> dict:
+    return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
 
 
 def _steps(name: str) -> list[dict]:
-    workflow = yaml.safe_load(_workflow(name))
-    return [step for job in workflow["jobs"].values() for step in job.get("steps") or []]
+    return [
+        step for job in _workflow(name)["jobs"].values() for step in job.get("steps") or []
+    ]
 
 
 def test_release_workflows_never_build_sam_deploy_themselves() -> None:
@@ -399,7 +310,60 @@ def test_release_workflows_never_build_sam_deploy_themselves() -> None:
         )
     }
 
-    assert builders <= {"deploy-staging.yml"}
+    assert builders == set()
+
+
+def test_approved_main_merges_plan_build_deploy_and_check_health_in_order() -> None:
+    workflow = _workflow("deploy-staging.yml")
+    [job] = workflow["jobs"].values()
+    steps = job["steps"]
+
+    def position(found: Callable[[dict], bool]) -> list[int]:
+        return [index for index, step in enumerate(steps) if found(step)]
+
+    [plan] = position(lambda step: step.get("id") == "release")
+    builds = position(lambda step: step.get("uses", "").startswith("docker/build-push-action"))
+    [deploy] = position(lambda step: "tools.release apply" in step.get("run", ""))
+    [health] = position(lambda step: step.get("id") == "health")
+    [rollback] = position(
+        lambda step: "prepare-staging-backend-rollback.yml" in step.get("run", "")
+    )
+    [publish] = position(lambda step: "cloudfront create-invalidation" in step.get("run", ""))
+
+    # PyYAML reads the "on" key as True.
+    assert workflow[True]["push"]["branches"] == ["main"]
+    assert job["environment"] == "staging"
+    assert workflow["concurrency"] == {
+        "group": "stocks-in-hand-staging-deploy",
+        "cancel-in-progress": False,
+    }
+    assert "python -m tools.release plan" in steps[plan]["run"]
+    # A manual run only creates a change set for review.
+    assert steps[plan]["env"]["DEPLOY_MODE"] == (
+        "${{ github.event_name == 'workflow_dispatch' && '--no-execute' || '--execute' }}"
+    )
+    assert len(builds) == 3
+    assert plan < min(builds) and max(builds) < deploy
+    assert "scripts/wait_for_health.py" in steps[health]["run"]
+    assert deploy < health < rollback
+    assert "steps.release.outputs.previous_release_sha != ''" in steps[rollback]["if"]
+    assert steps[rollback]["env"]["PREVIOUS_RELEASE_SHA"] == (
+        "${{ steps.release.outputs.previous_release_sha }}"
+    )
+    # The frontend is published only once the deployed API is healthy.
+    assert health < publish
+
+
+def test_every_manual_deploy_input_reaches_the_release_plan() -> None:
+    workflow = _workflow("deploy-staging.yml")
+    [plan] = [step for step in _steps("deploy-staging.yml") if step.get("id") == "release"]
+    passed = {
+        name
+        for name in workflow[True]["workflow_dispatch"]["inputs"]
+        if any(f"inputs.{name} ||" in value for value in plan["env"].values())
+    }
+
+    assert passed == set(workflow[True]["workflow_dispatch"]["inputs"])
 
 
 def test_rollback_plans_through_the_release_module_then_applies() -> None:
@@ -413,47 +377,6 @@ def test_rollback_plans_through_the_release_module_then_applies() -> None:
     assert step["working-directory"] == "backend"
     assert "python -m tools.release plan --rollback --no-execute" in run
     assert run.index("tools.release plan") < run.index("python -m tools.release apply")
-
-
-def test_release_workflows_map_every_image_function_to_a_repository() -> None:
-    functions = template_model().image_functions()
-    text = _workflow("deploy-staging.yml")
-
-    assert "NotificationFunction" in functions
-    missing = [
-        function
-        for function in functions
-        if f'--image-repositories "{function}=' not in text
-    ]
-    assert missing == []
-
-
-def test_deploy_supplies_every_parameter_without_a_default() -> None:
-    deploy = _workflow("deploy-staging.yml")
-    required = [
-        name
-        for name, parameter in template_model().parameters.items()
-        if "Default" not in parameter
-    ]
-
-    assert required
-    for name in required:
-        assert f'"{name}=' in deploy, name
-
-
-def test_deploy_links_emails_to_the_custom_domain_when_configured() -> None:
-    deploy = _workflow("deploy-staging.yml")
-    values = deploy.split("      - name: Resolve immutable release values", 1)[1].split(
-        "      - name:", 1
-    )[0]
-
-    assert "SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}" in values
-    assert 'FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"' in values
-    assert template_model().parameters["SiteDomainName"]["Default"] == ""
-    assert (
-        values.index('FRONTEND_BASE_URL="https://$SITE_DOMAIN_NAME"')
-        < values.index("OutputKey=='FrontendUrl'")
-    )
 
 
 def test_feature_switches_default_to_off() -> None:
@@ -472,9 +395,6 @@ def test_feature_switches_default_to_off() -> None:
 
 def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
     model = template_model()
-    workflow = (
-        REPOSITORY_ROOT / ".github" / "workflows" / "deploy-staging.yml"
-    ).read_text(encoding="utf-8")
     oidc = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
         encoding="utf-8"
     )
@@ -496,18 +416,6 @@ def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
     assert scheduler.environment["MARKETAUX_PER_TICKER_LIMIT"] == {
         "Ref": "MarketauxPerTickerLimit"
     }
-
-    assert "enable_marketaux:" in workflow
-    assert "AUTO_DEPLOY_ENABLE_MARKETAUX" in workflow
-    assert '"MarketauxEnabled=$ENABLE_MARKETAUX"' in workflow
-    assert '"MarketauxPerTickerLimit=$MARKETAUX_PER_TICKER_LIMIT"' in workflow
-    preflight = workflow.split(
-        "      - name: Validate Marketaux prerequisites", 1
-    )[1].split("      - name:", 1)[0]
-    assert "if: env.ENABLE_MARKETAUX == 'true'" in preflight
-    assert '"$PARAMETER_PATH_PREFIX/marketaux-api-token"' in preflight
-    assert "aws ssm get-parameter" in preflight
-    assert '"$PARAMETER_TYPE" != "SecureString"' in preflight
 
     assert "Sid: ReadMarketauxParameterMetadata" in oidc
     assert "parameter/stocks-in-hand/staging/marketaux-api-token" in oidc
