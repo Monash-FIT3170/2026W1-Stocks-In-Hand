@@ -4,7 +4,8 @@ Contract tests check rules against this model instead of slicing the
 template text, which depends on resource order and can match a value from
 the next resource. The staging queue verification (``tools.verify_queue_wiring``)
 reads the same model, so the deployed stack is compared with what the
-template declares rather than with a hand-kept list.
+template declares rather than with a hand-kept list. The release module
+(``tools.release``) checks parameter values against its constraints and rules.
 
 Intrinsic functions keep CloudFormation's JSON form: ``!Ref X`` becomes
 ``{"Ref": "X"}``, ``!GetAtt X.Arn`` becomes ``{"Fn::GetAtt": ["X", "Arn"]}``
@@ -17,7 +18,8 @@ the tests that import this with just pytest and PyYAML installed.
 from __future__ import annotations
 
 import fnmatch
-from collections.abc import Iterator
+import re
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -100,8 +102,65 @@ def possible_strings(value: Any) -> list[str]:
     return strings
 
 
+def substitute(template: str, values: Mapping[str, str]) -> str:
+    """Fill the ``${Name}`` references of a ``!Sub`` string from ``values``."""
+
+    def value(reference: re.Match[str]) -> str:
+        name = reference.group(1)
+        if name not in values:
+            raise KeyError(f"No value for ${{{name}}} in {template!r}")
+        return values[name]
+
+    return re.sub(r"\$\{([^}!][^}]*)\}", value, template)
+
+
 def _as_list(value: Any) -> list:
     return value if isinstance(value, list) else [value]
+
+
+def _text(value: Any) -> str:
+    """A YAML scalar as CloudFormation reads it: ``10`` is "10", ``true`` is "true"."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _number(value: Any) -> float | None:
+    return None if value is None else float(value)
+
+
+@dataclass(frozen=True)
+class Parameter:
+    """One template parameter and the constraints CloudFormation checks a value against."""
+
+    name: str
+    type: str
+    default: str | None
+    allowed_values: tuple[str, ...]
+    allowed_pattern: str | None
+    min_value: float | None
+    max_value: float | None
+
+    def problems(self, value: str) -> list[str]:
+        """Why CloudFormation would refuse ``value`` for this parameter, if it would."""
+        problems = []
+        if self.allowed_values and value not in self.allowed_values:
+            problems.append(
+                f"{self.name} must be one of {', '.join(self.allowed_values)}, not {value!r}"
+            )
+        if self.allowed_pattern is not None and not re.fullmatch(self.allowed_pattern, value):
+            problems.append(f"{self.name} {value!r} does not match {self.allowed_pattern}")
+        if self.type == "Number":
+            try:
+                number = float(value)
+            except ValueError:
+                problems.append(f"{self.name} must be a number, not {value!r}")
+            else:
+                if self.min_value is not None and number < self.min_value:
+                    problems.append(f"{self.name} must be at least {self.min_value:g}, not {value}")
+                if self.max_value is not None and number > self.max_value:
+                    problems.append(f"{self.name} must be at most {self.max_value:g}, not {value}")
+        return problems
 
 
 @dataclass(frozen=True)
@@ -156,6 +215,11 @@ class Function:
     @property
     def timeout(self) -> int:
         return int(self.properties.get("Timeout", DEFAULT_FUNCTION_TIMEOUT))
+
+    @property
+    def image_parameter(self) -> str | None:
+        """The parameter behind ``ImageUri: !Ref X``, for a function deployed from an image."""
+        return ref_target(self.properties.get("ImageUri"))
 
     @property
     def environment(self) -> dict[str, Any]:
@@ -256,6 +320,113 @@ class TemplateModel:
     def outputs(self) -> dict[str, dict]:
         return self.document.get("Outputs") or {}
 
+    @property
+    def conditions(self) -> dict[str, Any]:
+        return self.document.get("Conditions") or {}
+
+    def parameter_definitions(self) -> dict[str, Parameter]:
+        """Every parameter with its default and constraints, in template order."""
+        return {
+            name: Parameter(
+                name=name,
+                type=definition.get("Type", "String"),
+                default=_text(definition["Default"]) if "Default" in definition else None,
+                allowed_values=tuple(
+                    _text(value) for value in definition.get("AllowedValues") or []
+                ),
+                allowed_pattern=definition.get("AllowedPattern"),
+                min_value=_number(definition.get("MinValue")),
+                max_value=_number(definition.get("MaxValue")),
+            )
+            for name, definition in self.parameters.items()
+        }
+
+    def rule_failures(self, values: Mapping[str, str]) -> list[str]:
+        """The AssertDescription of every rule assertion these parameter values fail.
+
+        CloudFormation checks the Rules section before it creates a change set.
+        Fn::Equals, Fn::Not, Fn::And, Fn::Or, Ref and Condition are understood.
+        Anything else raises ValueError, even in a rule that does not apply to
+        these values, so a new kind of rule cannot pass unchecked.
+        """
+        failures = []
+        for name, rule in (self.document.get("Rules") or {}).items():
+            condition = rule.get("RuleCondition")
+            applies = condition is None or self._holds(condition, values)
+            for assertion in rule.get("Assertions") or []:
+                if not self._holds(assertion["Assert"], values) and applies:
+                    failures.append(assertion.get("AssertDescription") or f"Rule {name} failed")
+        return failures
+
+    def _holds(self, expression: Any, values: Mapping[str, str]) -> bool:
+        if isinstance(expression, dict) and len(expression) == 1:
+            [(function, argument)] = expression.items()
+            if function == "Fn::Equals":
+                left, right = argument
+                return self._operand(left, values) == self._operand(right, values)
+            if function == "Fn::Not":
+                [negated] = argument
+                return not self._holds(negated, values)
+            # Every branch is evaluated, so an unsupported intrinsic always raises.
+            if function == "Fn::And":
+                return all([self._holds(branch, values) for branch in argument])
+            if function == "Fn::Or":
+                return any([self._holds(branch, values) for branch in argument])
+            if function == "Condition":
+                return self._holds(self.conditions[argument], values)
+        raise ValueError(f"Cannot evaluate {expression!r}")
+
+    @staticmethod
+    def _operand(value: Any, values: Mapping[str, str]) -> str:
+        parameter = ref_target(value)
+        if parameter is not None:
+            return values[parameter]
+        if isinstance(value, (str, int, float)):
+            return _text(value)
+        raise ValueError(f"Cannot evaluate {value!r}")
+
+    def gated_secrets(self) -> dict[str, str]:
+        """SSM parameter names a function reads only while a switch is on, and that switch.
+
+        A ``*_PARAMETER`` variable is gated when it is ``!If [condition, !Sub
+        name, ""]`` and the condition is ``!Equals [!Ref Switch, "true"]``. The
+        name keeps its references, for example ``${ParameterPathPrefix}/brevo-api-key``.
+        Any other ``!If`` raises ValueError rather than leaving a secret out.
+        """
+        secrets: dict[str, str] = {}
+        for function in self.functions().values():
+            for variable, value in function.environment.items():
+                if not (
+                    variable.endswith("_PARAMETER")
+                    and isinstance(value, dict)
+                    and set(value) == {"Fn::If"}
+                ):
+                    continue
+                condition, when_on, when_off = value["Fn::If"]
+                switch = self._switch(condition)
+                names = possible_strings(when_on)
+                if switch is None or when_off != "" or len(names) != 1:
+                    raise ValueError(
+                        f"{function.logical_id}.{variable} is not a secret behind one switch"
+                    )
+                [name] = names
+                if secrets.get(name, switch) != switch:
+                    raise ValueError(f"{name} is behind two different switches")
+                secrets[name] = switch
+        return secrets
+
+    def _switch(self, condition: str) -> str | None:
+        """The parameter X when the condition is ``!Equals [!Ref X, "true"]``."""
+        expression = self.conditions.get(condition)
+        if not (isinstance(expression, dict) and set(expression) == {"Fn::Equals"}):
+            return None
+        left, right = expression["Fn::Equals"]
+        if right == "true":
+            return ref_target(left)
+        if left == "true":
+            return ref_target(right)
+        return None
+
     def resource(self, logical_id: str) -> dict:
         try:
             return self.resources[logical_id]
@@ -288,6 +459,16 @@ class TemplateModel:
             for logical_id, function in self.functions().items()
             if function.properties.get("PackageType") == "Image"
         )
+
+    def image_parameters(self) -> dict[str, list[str]]:
+        """Each ``ImageUri`` parameter and the image functions deployed from it."""
+        functions = self.functions()
+        image_parameters: dict[str, list[str]] = {}
+        for logical_id in self.image_functions():
+            parameter = functions[logical_id].image_parameter
+            if parameter is not None:
+                image_parameters.setdefault(parameter, []).append(logical_id)
+        return image_parameters
 
     def queues(self) -> dict[str, Queue]:
         return {

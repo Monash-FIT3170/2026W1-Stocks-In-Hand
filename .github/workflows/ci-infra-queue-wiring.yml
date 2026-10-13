@@ -25,6 +25,7 @@ on:
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
+      - "backend/tests/test_template_model.py"
       - "backend/tools/template_model.py"
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
@@ -43,6 +44,7 @@ on:
       - "backend/lambdas/**"
       - "backend/tests/test_queue_wiring.py"
       - "backend/tests/test_deployment_contracts.py"
+      - "backend/tests/test_template_model.py"
       - "backend/tools/template_model.py"
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
@@ -106,4 +108,5 @@ jobs:
         working-directory: backend
         run: >
           python -m pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
+          tests/test_template_model.py
           -v
