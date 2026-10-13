@@ -16,7 +16,7 @@ from app.crud import information_platform as platform_crud
 from app.crud import ticker as ticker_crud
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
-from app.services import news_summary
+from app.services import artifact_summary, news_summary
 from app.services.title_normalization import normalise_title
 from app.sources import normalise_symbol
 
@@ -31,7 +31,7 @@ class MarketauxError(RuntimeError):
 
 def _queue_news_artifact_analysis(db: Session, artifact) -> bool:
     """Queue one news artifact for the analysis worker unless it is summarised."""
-    if news_summary.has_news_summary_metadata(artifact):
+    if not artifact_summary.needs_summary(artifact):
         return False
     from app.services import analysis_queue
 
@@ -241,10 +241,7 @@ def fetch_and_store_news(
             existing = artifact_crud.get_artifact_by_hash(db, content_hash)
             if existing:
                 result["skipped_duplicates"] += 1
-                if (
-                    summarise
-                    and not news_summary.has_news_summary_metadata(existing)
-                ):
+                if summarise and artifact_summary.needs_summary(existing):
                     try:
                         news_summary.summarise_news_artifact(db, existing)
                         result["summarised"] += 1

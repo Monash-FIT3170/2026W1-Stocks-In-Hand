@@ -547,26 +547,6 @@ def test_analysis_handler_dispatches_public_discussion_message(
     )
 
 
-def test_analysis_handler_dispatches_bounded_summary_field_repair(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repair = MagicMock(return_value={"updated": 4, "missing_after": 82})
-    monkeypatch.setattr(analysis, "_resummarise_missing_fields", repair)
-
-    result = analysis.handler(
-        {
-            "operation": "resummarise_missing_fields",
-            "apply": True,
-            "confirmation": "RESUMMARISE_MISSING_FIELDS",
-            "limit": 4,
-        },
-        None,
-    )
-
-    assert result == {"updated": 4, "missing_after": 82}
-    repair.assert_called_once_with(apply=True, limit=4)
-
-
 def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:
     with pytest.raises(ValueError, match="requires confirmation"):
         analysis.handler(

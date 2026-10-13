@@ -225,7 +225,7 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
         ticker_id=_bhp(db_session).id,
         title="Already summarised",
         raw_text="Text.",
-        artifact_metadata={"about": "Done.", "confirmed_facts": [], "speculation": []},
+        artifact_metadata=ANNOUNCEMENT_SUMMARY,
     )
     scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
 
@@ -233,6 +233,28 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
 
     assert (result["processed"], result["skipped"], result["errors"]) == (1, 1, [])
     assert _summary_row(db_session, pending).model_used == "scripted:test-model"
+
+
+def test_ticker_summaries_skip_news_that_has_all_four_lines(
+    db_session: Session,
+    scripted,
+) -> None:
+    """News has no clarity lists, so asking for them summarised it again every call."""
+    _artifact(
+        db_session,
+        source_type="news",
+        artifact_type="news_article",
+        ticker_id=_bhp(db_session).id,
+        title="BHP production story",
+        raw_text="BHP reported an increase in quarterly copper production.",
+        artifact_metadata={"source_name": "Example News", **NEWS_SUMMARY},
+    )
+    provider = scripted()
+
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+
+    assert (result["processed"], result["skipped"], result["errors"]) == (0, 1, [])
+    assert provider.calls == []
 
 
 def test_category_split_reports_the_model(db_session: Session, scripted) -> None:

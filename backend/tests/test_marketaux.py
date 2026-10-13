@@ -125,7 +125,12 @@ def test_duplicate_article_is_skipped() -> None:
     platform = MagicMock(id=uuid.uuid4())
     article = _article()
     existing = MagicMock()
-    existing.artifact_metadata = {"about": "Existing summary"}
+    existing.artifact_metadata = {
+        "summary": "BHP reported stronger copper production.",
+        "about": "The story covers BHP production.",
+        "changed": "Copper output rose.",
+        "matters": "Output supports revenue.",
+    }
 
     with patch.object(marketaux, "fetch_news", return_value=[article]), patch.object(
         marketaux.ticker_crud,

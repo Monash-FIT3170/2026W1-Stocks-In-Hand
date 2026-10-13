@@ -201,7 +201,7 @@ Admin only. Each answers 503 when no LLM provider is switched on.
 | Method | Path | Description |
 |---|---|---|
 | POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
-| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no current summary. Params: `limit` |
+| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no complete summary: all four lines, plus both clarity lists for an announcement. Params: `limit` |
 | POST | `/llm/summarise/artifact/{artifact_id}` | Summarises one artifact, replacing its summary |
 
 ### Scraping

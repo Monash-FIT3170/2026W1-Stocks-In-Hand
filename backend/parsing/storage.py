@@ -37,15 +37,6 @@ if TYPE_CHECKING:
     from parsing.classification import ClassificationResult
 
 
-def _artifact_has_summary_fields(artifact: Artifact) -> bool:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    return all(isinstance(metadata.get(key), str) and metadata[key].strip() for key in (
-        "about",
-        "changed",
-        "matters",
-    ))
-
-
 def _artifact_sentiment_text(artifact: Artifact, raw_text: str) -> str:
     # Same input as the analysis worker, never the LLM summary.
     return sentiment_service.sentiment_input(
@@ -213,7 +204,7 @@ def store(
                 print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
             db.add(existing)
             db.commit()
-            if not _artifact_has_summary_fields(existing):
+            if artifact_summary.needs_summary(existing):
                 existing_category = str(
                     next_metadata.get("category") or "UNKNOWN"
                 )

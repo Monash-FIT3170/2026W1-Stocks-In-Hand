@@ -10,6 +10,13 @@ from app.services import news_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 
+NEWS_SUMMARY = {
+    "summary": "BHP reported stronger copper production.",
+    "about": "The story covers BHP's quarterly copper production.",
+    "changed": "Reported copper output increased.",
+    "matters": "Higher output may affect revenue expectations.",
+}
+
 
 @pytest.fixture()
 def scripted(monkeypatch: pytest.MonkeyPatch):
@@ -36,22 +43,6 @@ def _artifact(**overrides):
     for key, value in values.items():
         setattr(artifact, key, value)
     return artifact
-
-
-@pytest.mark.parametrize(
-    ("metadata", "expected"),
-    [
-        ({}, False),
-        ({"about": ""}, False),
-        ({"about": "   "}, False),
-        ({"about": "The story covers BHP."}, True),
-        (None, False),
-    ],
-)
-def test_has_news_summary_metadata(metadata, expected) -> None:
-    artifact = _artifact(artifact_metadata=metadata)
-
-    assert news_summary.has_news_summary_metadata(artifact) is expected
 
 
 def test_summarise_news_artifact_uses_fallback_title(scripted) -> None:
@@ -88,7 +79,7 @@ def test_summarise_news_for_symbol_summarises_unsummarised_artifacts() -> None:
     db = MagicMock()
     ticker = MagicMock(symbol="BHP")
     unsummarised = _artifact(artifact_metadata={})
-    summarised = _artifact(artifact_metadata={"about": "Existing summary"})
+    summarised = _artifact(artifact_metadata=NEWS_SUMMARY)
 
     with patch.object(
         news_summary,
@@ -164,6 +155,7 @@ def test_news_artifacts_for_ticker_filters_to_news_rows() -> None:
     db = MagicMock()
     ticker = MagicMock(id=uuid.uuid4())
     query = db.query.return_value
+    query.options.return_value = query
     query.filter.return_value = query
     query.order_by.return_value = query
     query.limit.return_value = query

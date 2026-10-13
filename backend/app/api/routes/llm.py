@@ -49,14 +49,6 @@ def _available(
     return result
 
 
-def _has_current_summary(metadata: dict) -> bool:
-    """Return whether metadata includes both summary copy and clarity lists."""
-    return bool(metadata.get("about")) and all(
-        isinstance(metadata.get(key), list)
-        for key in generation.SUMMARY_LIST_KEYS
-    )
-
-
 @router.post("/categorise/recent")
 def categorise_recent_artifacts(
     ticker: str,
@@ -115,6 +107,7 @@ def summarise_ticker_artifacts(
 
     artifacts = (
         db.query(Artifact)
+        .options(artifact_summary.WITH_SUMMARY)
         .filter(Artifact.ticker_id == ticker.id)
         .filter(Artifact.source_type.in_(["asx_announcement", "news"]))
         .filter(Artifact.raw_text.isnot(None))
@@ -128,11 +121,11 @@ def summarise_ticker_artifacts(
     errors = []
 
     for artifact in artifacts:
-        metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        if _has_current_summary(metadata):
+        if not artifact_summary.needs_summary(artifact):
             skipped += 1
             continue
 
+        metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
         try:
             generated = _generate_artifact_summary(artifact, metadata)
         except Exception as exc:

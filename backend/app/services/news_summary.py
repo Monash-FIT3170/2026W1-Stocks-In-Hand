@@ -17,12 +17,6 @@ NEWS_SOURCE_TYPE = "news"
 NEWS_ARTIFACT_TYPE = "news_article"
 
 
-def has_news_summary_metadata(artifact: Artifact) -> bool:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    about = metadata.get("about")
-    return isinstance(about, str) and bool(about.strip())
-
-
 def summarise_news_artifact(db: Session, artifact: Artifact) -> RecordedSummary:
     """Summarise one stored news story, record the summary and commit."""
     raw_text = (artifact.raw_text or "").strip()
@@ -60,6 +54,7 @@ def _ticker_for_symbol(db: Session, symbol: str) -> Ticker:
 def _news_artifacts_for_ticker(db: Session, ticker: Ticker, limit: int) -> list[Artifact]:
     return (
         db.query(Artifact)
+        .options(artifact_summary.WITH_SUMMARY)
         .filter(Artifact.ticker_id == ticker.id)
         .filter(Artifact.source_type == NEWS_SOURCE_TYPE)
         .filter(Artifact.artifact_type == NEWS_ARTIFACT_TYPE)
@@ -87,7 +82,7 @@ def summarise_news_for_symbol(
     }
 
     for artifact in artifacts:
-        if has_news_summary_metadata(artifact):
+        if not artifact_summary.needs_summary(artifact):
             result["skipped"] += 1
             continue
 

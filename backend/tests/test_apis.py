@@ -478,20 +478,6 @@ def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
     assert "analysis pipeline" in error.value.detail
 
 
-def test_legacy_summary_is_not_skipped_during_clarity_backfill() -> None:
-    """Ticker-wide backfills should revisit summaries created before clarity v2."""
-    from app.api.routes.llm import _has_current_summary
-
-    assert not _has_current_summary({"about": "An existing legacy summary."})
-    assert _has_current_summary(
-        {
-            "about": "A current summary.",
-            "confirmed_facts": [],
-            "speculation": [],
-        }
-    )
-
-
 def test_ticker_overview_exposes_clean_clarity_classifications() -> None:
     """The overview contract should expose classified claims for the summary UI."""
     from datetime import datetime, timezone

@@ -29,24 +29,6 @@ def normalise_summary_metadata(summary: Mapping[str, Any] | None) -> dict[str, A
     return result
 
 
-def has_complete_summary_metadata(metadata: Mapping[str, Any] | None) -> bool:
-    """Return whether all display and clarity fields have valid values."""
-    if not isinstance(metadata, Mapping):
-        return False
-    return all(
-        isinstance(metadata.get(key), str) and bool(metadata[key].strip())
-        for key in SUMMARY_TEXT_KEYS
-    ) and all(isinstance(metadata.get(key), list) for key in SUMMARY_LIST_KEYS)
-
-
-def combine_summary_text(summary: Mapping[str, Any] | None) -> str:
-    """Build the persisted human-readable summary from its four text fields."""
-    fields = normalise_summary_metadata(summary)
-    return "\n\n".join(
-        str(fields[key]) for key in SUMMARY_TEXT_KEYS if key in fields
-    )
-
-
 def split_combined_summary_text(text: object) -> dict[str, str]:
     """Recover the four legacy text fields only when the split is lossless."""
     if not isinstance(text, str) or not text.strip():
