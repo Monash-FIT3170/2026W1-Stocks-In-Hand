@@ -25,7 +25,7 @@ PDF = b"%PDF-1.7\nannouncement"
 
 
 def _feed(name: str) -> dict:
-    return json.loads((FIXTURES / f"{name}-yourir-feed.json").read_text())
+    return json.loads((FIXTURES / f"{name}-yourir-feed.json").read_text(encoding="utf-8"))
 
 
 def _adapter(adapter_type, ticker: str, answers: dict) -> tuple:

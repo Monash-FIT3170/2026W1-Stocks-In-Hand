@@ -283,7 +283,7 @@ def test_wes_clicks_the_listed_link_to_download() -> None:
     _wes, listed = _listed("WES")
     item = listed[0]
     listing = (FIXTURES / "wes").glob("*.html")
-    page = Page(url=SOURCES["WES"].source_url, html=next(listing).read_text())
+    page = Page(url=SOURCES["WES"].source_url, html=next(listing).read_text(encoding="utf-8"))
     adapter, fetcher = _adapter(
         "WES",
         answers={
@@ -464,8 +464,8 @@ def test_articles_that_all_fail_make_the_source_unreachable() -> None:
 
 def _recorded_pages(adapter_name: str) -> dict:
     directory = FIXTURES / adapter_name
-    index = json.loads((directory / "index.json").read_text())
+    index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
     return {
-        key: Page(url=entry["url"], html=(directory / entry["file"]).read_text())
+        key: Page(url=entry["url"], html=(directory / entry["file"]).read_text(encoding="utf-8"))
         for key, entry in index.items()
     }

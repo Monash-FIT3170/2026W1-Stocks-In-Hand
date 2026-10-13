@@ -473,7 +473,7 @@ class RecordedSession:
         self.directory = directory
         self.answers: dict[str, object] = dict(answers or {})
         if directory is not None:
-            index = json.loads((directory / "index.json").read_text())
+            index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
             for key, entry in index.items():
                 self.answers.setdefault(key, entry)
         self.requests: list[dict[str, object]] = []
@@ -489,9 +489,9 @@ class RecordedSession:
         if isinstance(answer, dict) and "file" in answer and self.directory is not None:
             path = self.directory / answer["file"]
             if answer.get("kind") == "page":
-                return Page(url=answer["url"], html=path.read_text())
+                return Page(url=answer["url"], html=path.read_text(encoding="utf-8"))
             if answer.get("kind") == "json":
-                return json.loads(path.read_text())
+                return json.loads(path.read_text(encoding="utf-8"))
             return path.read_bytes()
         return answer
 
@@ -589,13 +589,15 @@ class RecordingSession(LiveSession):
         self.directory = directory
         directory.mkdir(parents=True, exist_ok=True)
         index_path = directory / "index.json"
-        self.index = json.loads(index_path.read_text()) if index_path.exists() else {}
+        self.index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
 
     def _save(self, key: str, kind: str, body: str, url: str | None = None) -> None:
         name = _file_name(key, ".json" if kind == "json" else ".html")
-        (self.directory / name).write_text(body)
+        (self.directory / name).write_text(body, encoding="utf-8")
         self.index[key] = {"kind": kind, "file": name, **({"url": url} if url else {})}
-        (self.directory / "index.json").write_text(json.dumps(self.index, indent=1, sort_keys=True))
+        (self.directory / "index.json").write_text(
+            json.dumps(self.index, indent=1, sort_keys=True), encoding="utf-8"
+        )
 
     async def get_json(self, url, *, params=None, headers=None) -> object:
         payload = await super().get_json(url, params=params, headers=headers)
