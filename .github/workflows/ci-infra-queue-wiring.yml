@@ -33,6 +33,7 @@ on:
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
       - ".github/workflows/deploy-staging.yml"
+      - ".github/workflows/execute-staging-change-set.yml"
       - ".github/workflows/prepare-staging-backend-rollback.yml"
       - ".github/workflows/verify-staging-queue-wiring.yml"
   pull_request:
@@ -56,6 +57,7 @@ on:
       - "backend/tools/verify_queue_wiring.py"
       - ".github/workflows/ci-infra-queue-wiring.yml"
       - ".github/workflows/deploy-staging.yml"
+      - ".github/workflows/execute-staging-change-set.yml"
       - ".github/workflows/prepare-staging-backend-rollback.yml"
       - ".github/workflows/verify-staging-queue-wiring.yml"
 

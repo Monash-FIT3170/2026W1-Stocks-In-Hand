@@ -63,25 +63,27 @@ jobs:
             echo "waiter=stack-update-complete" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install health check and release module dependencies
+        shell: bash
+        run: pip install --disable-pip-version-check httpx PyYAML==6.0.3
+
       - name: Capture the previous release for potential rollback
         id: previous_release
         if: steps.verify.outputs.waiter == 'stack-update-complete'
+        working-directory: backend
         shell: bash
         run: |
-          PREVIOUS_API_IMAGE="$(aws cloudformation describe-stacks \
+          python -m tools.release previous-release \
             --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Parameters[?ParameterKey=='ApiImageUri'].ParameterValue" \
-            --output text)"
-          if [ -z "$PREVIOUS_API_IMAGE" ] || [ "$PREVIOUS_API_IMAGE" = "None" ]; then
-            echo "ApiImageUri parameter is missing from the current stack" >&2
-            exit 1
-          fi
-          PREVIOUS_RELEASE_SHA="${PREVIOUS_API_IMAGE##*:}"
-          if ! [[ "$PREVIOUS_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not parse a 40-character SHA from $PREVIOUS_API_IMAGE" >&2
-            exit 1
-          fi
-          echo "release_sha=$PREVIOUS_RELEASE_SHA" >> "$GITHUB_OUTPUT"
+            --region "$AWS_REGION"
 
       - name: Execute the approved change set
         shell: bash
@@ -98,37 +100,20 @@ jobs:
           aws cloudformation wait "${{ steps.verify.outputs.waiter }}" \
             --stack-name "$STACK_NAME"
 
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install health check dependencies
-        shell: bash
-        run: pip install --disable-pip-version-check httpx
-
       - name: Resolve the API endpoint
-        id: api
+        working-directory: backend
         shell: bash
         run: |
-          API_ENDPOINT="$(aws cloudformation describe-stacks \
+          python -m tools.release outputs --github-env \
             --stack-name "$STACK_NAME" \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
-            --output text)"
-          if [ -z "$API_ENDPOINT" ] || [ "$API_ENDPOINT" = "None" ]; then
-            echo "ApiEndpoint stack output is missing" >&2
-            exit 1
-          fi
-          echo "api_endpoint=$API_ENDPOINT" >> "$GITHUB_OUTPUT"
+            --region "$AWS_REGION" \
+            ApiEndpoint=API_ENDPOINT
 
       - name: Wait for the deployed API to report healthy
         shell: bash
         run: |
           python backend/scripts/wait_for_health.py \
-            --url "${{ steps.api.outputs.api_endpoint }}/health"
+            --url "$API_ENDPOINT/health"
 
       - name: Record deployment outputs
         shell: bash
@@ -146,21 +131,22 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Prepare an automatic rollback after a failed health check
-        if: failure() && steps.previous_release.outputs.release_sha != ''
+        if: failure() && steps.previous_release.outputs.previous_release_sha != ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREVIOUS_RELEASE_SHA: ${{ steps.previous_release.outputs.previous_release_sha }}
         run: |
           if gh workflow run prepare-staging-backend-rollback.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref "$GITHUB_REF_NAME" \
-            -f release_sha="${{ steps.previous_release.outputs.release_sha }}" \
+            -f release_sha="$PREVIOUS_RELEASE_SHA" \
             -f compatibility_reference="auto-triggered: health check failed on $GITHUB_SHA"; then
             {
               echo "### Automatic rollback preparation triggered"
               echo ""
               echo "This deploy failed its post-deploy health check. A rollback"
-              echo "change set targeting \`${{ steps.previous_release.outputs.release_sha }}\`"
+              echo "change set targeting \`$PREVIOUS_RELEASE_SHA\`"
               echo "is being prepared and still requires Person 1 review and"
               echo "Person 2 execution before anything changes."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -176,7 +162,7 @@ jobs:
               echo ""
               echo "**Run it manually**, using these inputs:"
               echo ""
-              echo "- \`release_sha\`: \`${{ steps.previous_release.outputs.release_sha }}\`"
+              echo "- \`release_sha\`: \`$PREVIOUS_RELEASE_SHA\`"
               echo "- \`compatibility_reference\`: your own confirmation that the"
               echo "  previous release is compatible with the current database"
             } >> "$GITHUB_STEP_SUMMARY"

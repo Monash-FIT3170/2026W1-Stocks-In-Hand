@@ -23,6 +23,7 @@ unless it is set.
     python -m tools.release apply plan.json [--dry-run]
     python -m tools.release outputs --stack-name S --region R \\
         [--github-env | --shell] Key[=NAME]...
+    python -m tools.release previous-release --stack-name S --region R
 
 Every AWS call goes through the ``Aws`` port and only reads; the one change
 is the ``sam deploy`` that ``apply`` runs. Only the standard library and
@@ -690,6 +691,17 @@ def _outputs_command(args: argparse.Namespace, aws: Aws) -> None:
         sys.stdout.write(lines)
 
 
+def _previous_release_command(args: argparse.Namespace, aws: Aws) -> None:
+    stack = aws.stack(args.stack_name)
+    if stack is None:
+        raise ReleaseError([f"{args.stack_name} does not exist"])
+    sha = previous_release_sha(stack)
+    if sha is None:
+        raise ReleaseError(["The live ApiImageUri is not tagged with a full release SHA"])
+    print(sha)
+    _append_to("GITHUB_OUTPUT", f"previous_release_sha={sha}\n")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m tools.release", description=__doc__.splitlines()[0]
@@ -752,6 +764,12 @@ def _parser() -> argparse.ArgumentParser:
     target.add_argument("--github-env", action="store_true", help="append NAME=value to $GITHUB_ENV")
     target.add_argument("--shell", action="store_true", help="print export lines to eval")
     outputs.add_argument("keys", nargs="+", metavar="Key[=NAME]")
+
+    previous = commands.add_parser(
+        "previous-release", help="print the SHA the live stack runs, for a later rollback"
+    )
+    previous.add_argument("--stack-name", required=True)
+    previous.add_argument("--region", required=True)
     return parser
 
 
@@ -768,8 +786,10 @@ def main(
         elif args.command == "apply":
             plan = ReleasePlan.from_json(Path(args.plan).read_text(encoding="utf-8"))
             apply(plan, aws or AwsCli(plan.region), run or _stream, dry_run=args.dry_run)
-        else:
+        elif args.command == "outputs":
             _outputs_command(args, aws or AwsCli(args.region))
+        else:
+            _previous_release_command(args, aws or AwsCli(args.region))
     except ReleaseError as error:
         for problem in error.problems:
             print(f"::error::{problem}", file=sys.stderr)

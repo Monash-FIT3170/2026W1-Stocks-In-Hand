@@ -527,6 +527,39 @@ def test_execute_refuses_a_live_stack_without_a_full_release_sha(image: str) -> 
     ]
 
 
+@pytest.mark.parametrize(
+    ("stack", "problem"),
+    [
+        (None, f"{STACK} does not exist"),
+        (
+            live_stack(ApiImageUri=f"{REGISTRY}/stocks-in-hand-api:latest"),
+            "The live ApiImageUri is not tagged with a full release SHA",
+        ),
+    ],
+    ids=["no-stack", "no-sha"],
+)
+def test_the_previous_release_command_refuses_a_stack_without_one(
+    stack: LiveStack | None, problem: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    arguments = ["previous-release", "--stack-name", STACK, "--region", REGION]
+
+    assert main(arguments, aws=FakeAws(stack)) == 1
+    assert capsys.readouterr().err.splitlines() == [f"::error::{problem}"]
+
+
+def test_the_previous_release_command_writes_the_live_sha(
+    github_files: dict[str, Path], capsys: pytest.CaptureFixture[str]
+) -> None:
+    aws = FakeAws(live_stack())
+
+    assert main(["previous-release", "--stack-name", STACK, "--region", REGION], aws=aws) == 0
+    assert capsys.readouterr().out == f"{OLD_SHA}\n"
+    assert github_files["GITHUB_OUTPUT"].read_text(encoding="utf-8") == (
+        f"previous_release_sha={OLD_SHA}\n"
+    )
+    assert aws.calls == [("stack", STACK)]
+
+
 def test_a_parameter_no_longer_in_the_template_is_dropped_with_a_warning() -> None:
     planned = plan(FakeAws(live_stack(RetiredSwitch="true")))
 

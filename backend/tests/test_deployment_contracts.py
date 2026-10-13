@@ -313,6 +313,23 @@ def test_release_workflows_never_build_sam_deploy_themselves() -> None:
     assert builders == set()
 
 
+def test_workflows_read_stack_parameters_and_outputs_through_the_release_module() -> None:
+    queries = {
+        (path.name, step["name"])
+        for path in WORKFLOWS.glob("*.yml")
+        for step in _steps(path.name)
+        if "describe-stacks" in step.get("run", "")
+    }
+    # These check out an older release, or nothing, so tools.release may not be there.
+    frontend = {"publish-staging-frontend.yml", "rollback-staging-frontend.yml"}
+
+    assert {(name, step) for name, step in queries if name not in frontend} == {
+        # The stack status picks the waiter, and the whole output table is evidence.
+        ("execute-staging-change-set.yml", "Verify the approved change set"),
+        ("execute-staging-change-set.yml", "Record deployment outputs"),
+    }
+
+
 def test_approved_main_merges_plan_build_deploy_and_check_health_in_order() -> None:
     workflow = _workflow("deploy-staging.yml")
     [job] = workflow["jobs"].values()
