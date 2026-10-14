@@ -14,14 +14,17 @@ Companion checks:
 - `sam validate --lint` / `cfn-lint` (structural template validity) run in
   the same CI workflow as this file.
 - `verify-staging-queue-wiring.yml` reconciles the *deployed* stack with the
-  same model after a staging change set is executed.
+  same model after a staging change set is executed. `test_github_oidc.py`
+  checks that its deploy role may read the queue attributes.
 """
 
 import copy
+import re
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools import verify_queue_wiring
 from tools.template_model import (
@@ -33,7 +36,6 @@ from tools.template_model import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OIDC_TEMPLATE_PATH = REPOSITORY_ROOT / "infra" / "github-oidc.yaml"
 QUEUE_CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci-infra-queue-wiring.yml"
 STAGING_VERIFICATION_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "verify-staging-queue-wiring.yml"
@@ -417,19 +419,28 @@ def test_staging_workflow_runs_the_model_based_verification() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CI and the staging role
+# CI
 # ---------------------------------------------------------------------------
 
-def test_queue_ci_runs_when_verification_or_oidc_permissions_change() -> None:
-    workflow = QUEUE_CI_WORKFLOW.read_text(encoding="utf-8")
+def test_queue_ci_lints_every_template_and_runs_when_one_changes() -> None:
+    """A template the job does not lint, or a file it does not watch, goes unchecked.
 
-    assert "infra/github-oidc.yaml" in workflow
-    assert ".github/workflows/verify-staging-queue-wiring.yml" in workflow
+    The job runs when an infrastructure template, one of its test files or
+    the staging verification workflow those tests read changes.
+    """
+    workflow = yaml.safe_load(QUEUE_CI_WORKFLOW.read_text(encoding="utf-8"))
+    templates = {
+        path.relative_to(REPOSITORY_ROOT).as_posix()
+        for path in (REPOSITORY_ROOT / "infra").glob("*.yaml")
+    }
+    steps = [step for job in workflow["jobs"].values() for step in job["steps"]]
+    [lint] = [step["run"].split() for step in steps if step.get("run", "").startswith("cfn-lint")]
+    [tests] = [step["run"] for step in steps if "python -m pytest" in step.get("run", "")]
+    # PyYAML reads the "on" key as True.
+    push, pull_request = (workflow[True][event]["paths"] for event in ("push", "pull_request"))
 
-
-def test_staging_github_role_can_read_only_application_queue_attributes() -> None:
-    oidc_template = OIDC_TEMPLATE_PATH.read_text(encoding="utf-8")
-
-    assert "Sid: InspectStagingQueueAttributes" in oidc_template
-    assert "Action: sqs:GetQueueAttributes" in oidc_template
-    assert "sqs:${AWS::Region}:${AWS::AccountId}:stocks-in-hand-staging-*" in oidc_template
+    assert set(lint[1:]) == templates
+    assert push == pull_request
+    assert templates <= set(push)
+    assert {f"backend/{test}" for test in re.findall(r"tests/\w+\.py", tests)} <= set(push)
+    assert ".github/workflows/verify-staging-queue-wiring.yml" in push

@@ -229,7 +229,7 @@ cd ..
 
 ```bash
 sam validate --lint --template-file infra/template.yaml
-cfn-lint infra/template.yaml infra/bootstrap.yaml infra/github-oidc.yaml
+cfn-lint infra/template.yaml infra/github-oidc.yaml infra/bootstrap.yaml infra/domain.yaml
 
 cd backend
 python -m tools.release plan --no-execute --no-execution-role \
@@ -421,6 +421,15 @@ with `CreateOidcProvider=false` and pass its ARN as
 Redeploy this stack before the first enabled Brevo release. Existing GitHub
 roles created from older revisions do not have the narrowly scoped permission
 to check `/stocks-in-hand/staging/brevo-api-key` metadata.
+
+To redeploy, add `--no-execute-changeset` to the command above. Review the
+change set it names with `aws cloudformation describe-change-set`, and run
+`aws cloudformation execute-change-set` only once it changes what you expect.
+The first redeploy after
+[ADR 0001](../docs/adr/0001-remove-the-deployment-test-deploy-roles.md)
+removes the `stocks-in-hand-github-deployment-test` and
+`stocks-in-hand-cloudformation-deployment-test-execution` roles and their two
+outputs, if the stack still has them, and must change nothing else.
 
 Read the deployment role:
 

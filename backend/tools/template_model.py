@@ -5,7 +5,9 @@ template text, which depends on resource order and can match a value from
 the next resource. The staging queue verification (``tools.verify_queue_wiring``)
 reads the same model, so the deployed stack is compared with what the
 template declares rather than with a hand-kept list. The release module
-(``tools.release``) checks parameter values against its constraints and rules.
+(``tools.release``) checks parameter values against its constraints and rules,
+and the deploy role tests read infra/github-oidc.yaml through the same model
+to check what each role may do.
 
 Intrinsic functions keep CloudFormation's JSON form: ``!Ref X`` becomes
 ``{"Ref": "X"}``, ``!GetAtt X.Arn`` becomes ``{"Fn::GetAtt": ["X", "Arn"]}``
@@ -80,14 +82,30 @@ def getatt_target(value: Any, attribute: str) -> str | None:
     return None
 
 
-def branches(value: Any) -> Iterator[Any]:
-    """Every value ``value`` can take, looking through ``!If`` and skipping NoValue."""
+def _intrinsic(value: Any) -> str | None:
+    """The intrinsic function ``value`` calls, such as ``Fn::If`` or ``Ref``, or None."""
+    if isinstance(value, dict) and len(value) == 1:
+        [name] = value
+        if name in ("Ref", "Condition") or str(name).startswith("Fn::"):
+            return name
+    return None
+
+
+def _outcomes(value: Any) -> Iterator[Any]:
+    """Every value ``value`` can take, looking through ``!If`` and keeping NoValue."""
     if isinstance(value, dict) and set(value) == {"Fn::If"}:
         _condition, when_true, when_false = value["Fn::If"]
-        yield from branches(when_true)
-        yield from branches(when_false)
-    elif ref_target(value) != "AWS::NoValue":
+        yield from _outcomes(when_true)
+        yield from _outcomes(when_false)
+    else:
         yield value
+
+
+def branches(value: Any) -> Iterator[Any]:
+    """Every value ``value`` can take, looking through ``!If`` and skipping NoValue."""
+    for outcome in _outcomes(value):
+        if ref_target(outcome) != "AWS::NoValue":
+            yield outcome
 
 
 def possible_strings(value: Any) -> list[str]:
@@ -112,6 +130,24 @@ def substitute(template: str, values: Mapping[str, str]) -> str:
         return values[name]
 
     return re.sub(r"\$\{([^}!][^}]*)\}", value, template)
+
+
+def _filled(value: Any, values: Mapping[str, str]) -> str:
+    """A literal, ``!Sub``, ``!Ref`` or ``!GetAtt`` value as text, filled in from ``values``.
+
+    ``!Ref X`` and ``!GetAtt X.Attribute`` look up ``X`` and ``X.Attribute``,
+    as ``${X}`` and ``${X.Attribute}`` do in a ``!Sub``.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict) and set(value) == {"Fn::Sub"} and isinstance(value["Fn::Sub"], str):
+        return substitute(value["Fn::Sub"], values)
+    name = ref_target(value)
+    if name is None and isinstance(value, dict) and set(value) == {"Fn::GetAtt"}:
+        name = ".".join(value["Fn::GetAtt"])
+    if name is None:
+        raise ValueError(f"Cannot fill in {value!r}")
+    return substitute(f"${{{name}}}", values)
 
 
 def _as_list(value: Any) -> list:
@@ -165,15 +201,131 @@ class Parameter:
 
 @dataclass(frozen=True)
 class Statement:
-    """One IAM policy statement, with the condition it is granted under."""
+    """One IAM policy statement that allows something.
+
+    ``condition`` is the template condition it is granted under, if any, and
+    ``iam_condition`` its own IAM Condition block, such as
+    ``{"ArnEquals": {"cloudformation:RoleArn": ...}}``.
+    """
 
     sid: str | None
     actions: tuple[str, ...]
     resources: tuple[Any, ...]
     condition: str | None
+    iam_condition: Mapping[str, Any]
 
     def allows(self, action: str) -> bool:
-        return any(fnmatch.fnmatchcase(action, granted) for granted in self.actions)
+        """Whether this statement names ``action``, matching it as IAM does.
+
+        IAM ignores case in an action, so ``ecr:batchdeleteimage`` grants
+        ecr:BatchDeleteImage, and ``*`` and ``?`` are its wildcards.
+        """
+        return any(
+            fnmatch.fnmatchcase(action.lower(), granted.lower()) for granted in self.actions
+        )
+
+    def covers(self, action: str, arn: str, values: Mapping[str, str]) -> bool:
+        """Whether this statement allows ``action`` on the resource ``arn``.
+
+        Each resource is filled in from ``values`` first: ``${Name}``, ``!Ref
+        Name`` and ``!GetAtt Name.Attribute`` all look their name up there, so
+        ``values`` holds the pseudo parameters, such as ``AWS::AccountId``, as
+        well as parameter values. IAM's ``*`` and ``?`` wildcards then match
+        ``arn``. The IAM condition is not checked: read ``iam_condition``.
+
+        When the answer depends on a template condition, through a resource
+        under ``!If`` or a statement granted under one, ValueError says so
+        rather than guessing.
+        """
+        if not self.allows(action):
+            return False
+        answers = [
+            {
+                ref_target(outcome) != "AWS::NoValue"
+                and fnmatch.fnmatchcase(arn, _filled(outcome, values))
+                for outcome in _outcomes(resource)
+            }
+            for resource in self.resources
+        ]
+        if not any(True in answer for answer in answers):
+            return False
+        if self.condition is None and {True} in answers:
+            return True
+        raise ValueError(
+            f"Whether {self.sid or 'a statement'} allows {action} on {arn} depends on "
+            f"{self.condition or 'a template condition'}"
+        )
+
+
+def _readable(value: Any, what: str) -> Any:
+    """``value`` itself, or ValueError when it is an intrinsic function."""
+    function = _intrinsic(value)
+    if function is not None:
+        raise ValueError(f"{what} is {function}, which the model cannot read")
+    return value
+
+
+def _statement(statement: Any, condition: str | None) -> Statement:
+    """One policy statement, or ValueError when the model cannot say what it grants."""
+    if not isinstance(statement, dict) or _intrinsic(statement) is not None:
+        raise ValueError(f"A policy statement is not one the model can read: {statement!r}")
+    name = statement.get("Sid") or "A statement"
+    effect = statement.get("Effect", "Allow")
+    if effect == "Deny":
+        raise ValueError(f"{name} is a Deny, which the model does not weigh against the grants")
+    if effect != "Allow":
+        raise ValueError(f"{name} has Effect {effect!r}, which the model cannot read")
+    inverted = sorted({"NotAction", "NotResource"} & set(statement))
+    if inverted:
+        raise ValueError(f"{name} uses {' and '.join(inverted)}, which the model cannot read")
+    actions = tuple(_as_list(statement.get("Action", [])))
+    if not all(isinstance(action, str) for action in actions):
+        raise ValueError(f"{name} has an Action the model cannot read: {statement['Action']!r}")
+    return Statement(
+        sid=statement.get("Sid"),
+        actions=actions,
+        resources=tuple(_as_list(statement.get("Resource", []))),
+        condition=condition,
+        iam_condition=statement.get("Condition") or {},
+    )
+
+
+def _policy_statements(policies: Any, document_key: str | None) -> list[Statement]:
+    """The statements of a resource's inline policies, including ones granted under ``!If``.
+
+    An IAM role keeps each policy's document under ``document_key``
+    (PolicyDocument). A SAM function lists the documents themselves, with
+    ``document_key`` None, beside managed policy names and SAM policy
+    templates, which are skipped.
+
+    What would make the statements grant more or less than they say raises
+    ValueError instead of being read as granting nothing: a Deny statement,
+    which the model does not weigh against the grants, NotAction or
+    NotResource, an Effect other than Allow, an Action that is not a list of
+    names, and an intrinsic function where the policies, a document, its
+    Statement block or one statement should be. ``!If`` is read only around
+    a whole policy and in a Resource (see ``Statement.covers``).
+    """
+    found: list[Statement] = []
+    for policy in _as_list(_readable(policies or [], "Policies")):
+        condition = None
+        if isinstance(policy, dict) and set(policy) == {"Fn::If"}:
+            condition = policy["Fn::If"][0]
+        for branch in branches(policy):
+            document: Any
+            if document_key is None:
+                if not (isinstance(branch, dict) and "Statement" in branch):
+                    continue  # A managed policy name or a SAM policy template.
+                document = branch
+            else:
+                document = branch.get(document_key) if isinstance(branch, dict) else None
+                if not isinstance(document, dict) or _intrinsic(document) is not None:
+                    raise ValueError(
+                        f"A policy's {document_key} is not one the model can read: {document!r}"
+                    )
+            statements = _readable(document.get("Statement") or [], "A policy's Statement")
+            found.extend(_statement(statement, condition) for statement in _as_list(statements))
+    return found
 
 
 @dataclass(frozen=True)
@@ -245,26 +397,7 @@ class Function:
     @property
     def statements(self) -> list[Statement]:
         """Inline policy statements, including ones granted under ``!If``."""
-        found = []
-        for policy in self.properties.get("Policies") or []:
-            condition = None
-            if isinstance(policy, dict) and set(policy) == {"Fn::If"}:
-                condition = policy["Fn::If"][0]
-            for document in branches(policy):
-                if not isinstance(document, dict):
-                    continue
-                for statement in document.get("Statement") or []:
-                    if statement.get("Effect", "Allow") != "Allow":
-                        continue
-                    found.append(
-                        Statement(
-                            sid=statement.get("Sid"),
-                            actions=tuple(_as_list(statement.get("Action", []))),
-                            resources=tuple(_as_list(statement.get("Resource", []))),
-                            condition=condition,
-                        )
-                    )
-        return found
+        return _policy_statements(self.properties.get("Policies"), None)
 
     @property
     def send_message_targets(self) -> set[str]:
@@ -451,6 +584,24 @@ class TemplateModel:
 
     def function(self, logical_id: str) -> Function:
         return Function(logical_id, self.properties(logical_id))
+
+    def role_statements(self, logical_id: str) -> list[Statement]:
+        """The statements of an IAM role's inline policies, including ones under ``!If``.
+
+        A managed policy grants more than these say and a permissions boundary
+        can take grants away, so a role with ManagedPolicyArns or a
+        PermissionsBoundary raises ValueError rather than leave either out, as
+        does a policy the model cannot read. A separate policy resource that
+        names the role is not read.
+        """
+        properties = self.properties(logical_id)
+        if properties.get("ManagedPolicyArns"):
+            raise ValueError(f"{logical_id} has managed policies, which the model cannot read")
+        if properties.get("PermissionsBoundary"):
+            raise ValueError(
+                f"{logical_id} has a permissions boundary, which the model cannot read"
+            )
+        return _policy_statements(properties.get("Policies"), "PolicyDocument")
 
     def image_functions(self) -> list[str]:
         """Logical IDs of every Lambda deployed from a container image."""

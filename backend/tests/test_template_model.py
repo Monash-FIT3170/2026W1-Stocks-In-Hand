@@ -1,10 +1,12 @@
 """The template model reads infra/template.yaml as data."""
 
 import copy
+import textwrap
 
 import pytest
 
 from tools.template_model import (
+    Statement,
     TemplateModel,
     parse_template,
     possible_strings,
@@ -233,6 +235,301 @@ def test_a_secret_behind_a_compound_condition_is_refused() -> None:
 
     with pytest.raises(ValueError, match="SECRET_PARAMETER"):
         TemplateModel(document).gated_secrets()
+
+
+ROLES = parse_template(
+    """
+Parameters:
+  ZoneId:
+    Type: String
+    Default: "*"
+Conditions:
+  HasZone: !Not [!Equals [!Ref ZoneId, "*"]]
+Resources:
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+        - PolicyName: Deploy
+          PolicyDocument:
+            Statement:
+              - Sid: ChangeAppStack
+                Effect: Allow
+                Action: [cloudformation:CreateChangeSet, cloudformation:Describe*]
+                Resource: !Sub >-
+                  arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/app/*
+                Condition:
+                  ArnEquals:
+                    cloudformation:RoleArn: !GetAtt ExecutionRole.Arn
+              - Sid: PassExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt ExecutionRole.Arn
+              - Sid: ChangeRecords
+                Effect: Allow
+                Action: route53:ChangeResourceRecordSets
+                Resource: !If [HasZone, !Sub "arn:aws:route53:::hostedzone/${ZoneId}", "*"]
+        - !If
+          - HasZone
+          - PolicyName: ReadZone
+            PolicyDocument:
+              Statement:
+                - Sid: ReadZone
+                  Effect: Allow
+                  Action: route53:GetHostedZone
+                  Resource: !Sub arn:aws:route53:::hostedzone/${ZoneId}
+          - !Ref AWS::NoValue
+        - PolicyName: InspectTemplates
+          PolicyDocument:
+            Statement:
+              Sid: InspectTemplates
+              Effect: Allow
+              Action: cloudformation:GetTemplateSummary
+              Resource: "*"
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: app-execution
+"""
+)
+ROLE_VALUES = {
+    "AWS::Partition": "aws",
+    "AWS::Region": "ap-southeast-2",
+    "AWS::AccountId": "123456789012",
+    "ZoneId": "*",
+    "ExecutionRole.Arn": "arn:aws:iam::123456789012:role/app-execution",
+}
+STACK_ARN = "arn:aws:cloudformation:ap-southeast-2:123456789012:stack/app/1a2b3c"
+ZONE_ARN = "arn:aws:route53:::hostedzone/Z1"
+
+
+def _role_statement(sid: str, document: dict = ROLES) -> Statement:
+    [statement] = [
+        statement
+        for statement in TemplateModel(document).role_statements("DeployRole")
+        if statement.sid == sid
+    ]
+    return statement
+
+
+def test_role_statements_read_iam_role_policies_and_conditions() -> None:
+    statements = TemplateModel(ROLES).role_statements("DeployRole")
+
+    # InspectTemplates' Statement block is one statement rather than a list.
+    assert [statement.sid for statement in statements] == [
+        "ChangeAppStack",
+        "PassExecutionRole",
+        "ChangeRecords",
+        "ReadZone",
+        "InspectTemplates",
+    ]
+    assert [statement.condition for statement in statements] == [
+        None,
+        None,
+        None,
+        "HasZone",
+        None,
+    ]
+    assert statements[0].iam_condition == {
+        "ArnEquals": {"cloudformation:RoleArn": {"Fn::GetAtt": ["ExecutionRole", "Arn"]}}
+    }
+    assert statements[1].iam_condition == {}
+    assert TemplateModel(ROLES).role_statements("ExecutionRole") == []
+
+
+def test_statements_cover_an_arn_once_their_references_are_filled_in() -> None:
+    change = _role_statement("ChangeAppStack")
+    pass_role = _role_statement("PassExecutionRole")
+    no_region = {name: value for name, value in ROLE_VALUES.items() if name != "AWS::Region"}
+
+    assert change.covers("cloudformation:CreateChangeSet", STACK_ARN, ROLE_VALUES)
+    assert change.covers("cloudformation:DescribeStacks", STACK_ARN, ROLE_VALUES)
+    assert not change.covers("cloudformation:DeleteStack", STACK_ARN, ROLE_VALUES)
+    assert not change.covers(
+        "cloudformation:CreateChangeSet", STACK_ARN.replace("/app/", "/app-copy/"), ROLE_VALUES
+    )
+    assert pass_role.covers("iam:PassRole", ROLE_VALUES["ExecutionRole.Arn"], ROLE_VALUES)
+    assert not pass_role.covers(
+        "iam:PassRole", "arn:aws:iam::123456789012:role/app-other", ROLE_VALUES
+    )
+    with pytest.raises(KeyError, match="AWS::Region"):
+        change.covers("cloudformation:CreateChangeSet", STACK_ARN, no_region)
+
+
+def test_a_grant_that_depends_on_a_template_condition_is_refused() -> None:
+    records = _role_statement("ChangeRecords")
+    read_zone = _role_statement("ReadZone")
+    zoned = {**ROLE_VALUES, "ZoneId": "Z1"}
+
+    # Both branches cover the zone, whichever one HasZone picks.
+    assert records.covers("route53:ChangeResourceRecordSets", ZONE_ARN, zoned)
+    assert records.covers("route53:ChangeResourceRecordSets", ZONE_ARN, ROLE_VALUES)
+    # Only the "*" branch covers another zone.
+    with pytest.raises(ValueError, match="ChangeRecords"):
+        records.covers("route53:ChangeResourceRecordSets", ZONE_ARN.replace("Z1", "Z2"), zoned)
+    # ReadZone is granted only under HasZone.
+    with pytest.raises(ValueError, match="ReadZone"):
+        read_zone.covers("route53:GetHostedZone", ZONE_ARN, zoned)
+    assert not read_zone.covers("route53:GetHostedZone", ZONE_ARN.replace("Z1", "Z2"), zoned)
+
+
+def _role(properties: str) -> TemplateModel:
+    """A template whose one resource is DeployRole, an IAM role with these YAML properties."""
+    return TemplateModel(
+        parse_template(
+            "Resources:\n  DeployRole:\n    Type: AWS::IAM::Role\n    Properties:\n"
+            + textwrap.indent(textwrap.dedent(properties), "      ")
+        )
+    )
+
+
+def _deploy_policy(statements: str) -> str:
+    """Role properties with one policy whose Statement block is this YAML."""
+    return (
+        "Policies:\n  - PolicyName: Deploy\n    PolicyDocument:\n      Statement:\n"
+        + textwrap.indent(textwrap.dedent(statements), "        ")
+    )
+
+
+# Each of these would grant more, or less, than a reader of its statements sees.
+REFUSED_ROLES = {
+    "managed policy": (
+        "ManagedPolicyArns: [arn:aws:iam::aws:policy/AdministratorAccess]",
+        "managed policies",
+    ),
+    "permissions boundary": (
+        "PermissionsBoundary: arn:aws:iam::123456789012:policy/boundary",
+        "permissions boundary",
+    ),
+    "policy without a PolicyDocument": (
+        "Policies: [arn:aws:iam::aws:policy/AdministratorAccess]",
+        "PolicyDocument is not one the model can read",
+    ),
+    "Policies under !If": (
+        "Policies: !If [HasZone, [], !Ref AWS::NoValue]",
+        "Policies is Fn::If",
+    ),
+    "PolicyDocument under !If": (
+        """
+        Policies:
+          - PolicyName: Deploy
+            PolicyDocument: !If
+              - HasZone
+              - Statement: [{Effect: Allow, Action: sqs:SendMessage, Resource: "*"}]
+              - Statement: [{Effect: Allow, Action: sqs:ListQueues, Resource: "*"}]
+        """,
+        "PolicyDocument is not one the model can read",
+    ),
+    "Statement block under !If": (
+        """
+        Policies:
+          - PolicyName: Deploy
+            PolicyDocument:
+              Statement: !If
+                - HasZone
+                - [{Effect: Allow, Action: ecr:BatchDeleteImage, Resource: "*"}]
+                - []
+        """,
+        "Statement is Fn::If",
+    ),
+    "statement under !If": (
+        _deploy_policy(
+            """
+            - !If
+              - HasZone
+              - {Effect: Allow, Action: ecr:BatchDeleteImage, Resource: "*"}
+              - !Ref AWS::NoValue
+            """
+        ),
+        "statement is not one the model can read",
+    ),
+    "Deny": (
+        _deploy_policy("- {Sid: NoPush, Effect: Deny, Action: ecr:PutImage, Resource: '*'}"),
+        "NoPush is a Deny",
+    ),
+    "Effect under !If": (
+        _deploy_policy(
+            """
+            - Sid: MaybeDelete
+              Effect: !If [HasZone, Allow, Deny]
+              Action: ecr:BatchDeleteImage
+              Resource: "*"
+            """
+        ),
+        "MaybeDelete has Effect",
+    ),
+    "Action under !If": (
+        _deploy_policy(
+            """
+            - Sid: MaybeDelete
+              Effect: Allow
+              Action: !If [HasZone, ecr:BatchDeleteImage, ecr:DescribeImages]
+              Resource: "*"
+            """
+        ),
+        "MaybeDelete has an Action",
+    ),
+    "NotAction": (
+        _deploy_policy("- {Sid: AllButIam, Effect: Allow, NotAction: 'iam:*', Resource: '*'}"),
+        "AllButIam uses NotAction",
+    ),
+    "NotResource": (
+        _deploy_policy(
+            """
+            - Sid: PassOtherRoles
+              Effect: Allow
+              Action: iam:PassRole
+              NotResource: arn:aws:iam::123456789012:role/app-execution
+            """
+        ),
+        "PassOtherRoles uses NotResource",
+    ),
+}
+
+
+@pytest.mark.parametrize(("properties", "refusal"), REFUSED_ROLES.values(), ids=REFUSED_ROLES)
+def test_role_grants_the_model_cannot_read_are_refused(properties: str, refusal: str) -> None:
+    with pytest.raises(ValueError, match=refusal):
+        _role(properties).role_statements("DeployRole")
+
+
+def test_a_function_grant_the_model_cannot_read_is_refused() -> None:
+    document = copy.deepcopy(TEMPLATE)
+    [read_secrets] = document["Resources"]["Worker"]["Properties"]["Policies"][0]["Statement"]
+    read_secrets["Effect"] = "Deny"
+
+    with pytest.raises(ValueError, match="ReadSecrets is a Deny"):
+        TemplateModel(document).function("Worker").statements
+
+
+def test_a_resource_the_model_cannot_fill_in_is_refused() -> None:
+    joined = copy.deepcopy(ROLES)
+    deploy = joined["Resources"]["DeployRole"]["Properties"]["Policies"][0]
+    deploy["PolicyDocument"]["Statement"][1]["Resource"] = {
+        "Fn::Join": [":", ["arn:aws:iam:", {"Ref": "AWS::AccountId"}, "role/app-execution"]]
+    }
+
+    with pytest.raises(ValueError, match="Fn::Join"):
+        _role_statement("PassExecutionRole", joined).covers(
+            "iam:PassRole", ROLE_VALUES["ExecutionRole.Arn"], ROLE_VALUES
+        )
+
+
+def test_actions_match_whatever_their_case_as_in_iam() -> None:
+    """IAM ignores case in an action, so ``ECR:batchdeleteimage`` still deletes images."""
+    [statement] = _role(
+        _deploy_policy(
+            "- {Effect: Allow, Action: [ECR:batchdeleteimage, cloudformation:Describe*], "
+            "Resource: '*'}"
+        )
+    ).role_statements("DeployRole")
+
+    assert statement.allows("ecr:BatchDeleteImage")
+    assert statement.allows("CloudFormation:describestacks")
+    assert not statement.allows("ecr:PutImage")
+    assert statement.covers(
+        "ecr:BatchDeleteImage", "arn:aws:ecr:ap-southeast-2:123456789012:repository/app", {}
+    )
 
 
 def test_the_checked_in_template_parses() -> None:
