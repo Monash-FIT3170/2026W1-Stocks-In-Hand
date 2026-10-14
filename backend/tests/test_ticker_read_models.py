@@ -671,6 +671,50 @@ def test_the_bucket_comparison_lists_what_the_taxonomy_moves(db_session: Session
     assert "Profit rises" not in report
 
 
+def test_the_bucket_comparison_counts_only_what_the_view_counts(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    for day, label in ((3, "positive"), (2, "mixed")):
+        dividend = _artifact(
+            db_session,
+            ticker,
+            day=day,
+            title=f"Dividend declared {day}",
+            artifact_metadata={"category": "DividendAnnouncement"},
+        )
+        _analyse(db_session, dividend, label)
+    notice = _artifact(
+        db_session,
+        ticker,
+        day=1,
+        title="Notification of issue of securities",
+        artifact_type="security_notification",
+        artifact_metadata={"category": "SecurityNotification"},
+    )
+    _analyse(db_session, notice, "mixed")
+    news = _artifact(
+        db_session,
+        ticker,
+        day=4,
+        source_type="news",
+        artifact_type="news_article",
+        title="Profit rises",
+        artifact_metadata={"category": "news_article"},
+    )
+    _analyse(db_session, news, "mixed")
+
+    comparison = compare_sentiment_buckets.compare(
+        db_session, ticker.symbol, days=365, limit=250
+    )
+    view = ticker_sentiment.read_category_sentiment(db_session, ticker.symbol).categories
+
+    # The view skips a label that is not a sentiment label, so the tool does too.
+    assert comparison.analysed == 1
+    assert comparison.taxonomy["dividend"].count == view["dividend"].sources_count == 1
+    assert comparison.keyword["dividend"].count == 1
+    assert comparison.fallback["revenue"] == 0
+    assert comparison.moves == []
+
+
 def test_a_symbol_with_its_exchange_suffix_is_the_same_ticker(db_session: Session) -> None:
     ticker = _ticker(db_session)
 

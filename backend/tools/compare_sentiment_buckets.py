@@ -5,12 +5,13 @@ Run from ``backend/``, best with read-only database credentials::
     python -m tools.compare_sentiment_buckets [--ticker BHP] [--days 365] [--limit 250]
 
 For each catalogue ticker, or the one given, it reads the analysed
-artifacts the category sentiment view reads. For each bucket it prints how
-many count in it and their dominant label under the keyword rule the view
-used to follow and under the view's taxonomy rule, and how many of the
-taxonomy rule's were placed by its keyword fallback. Then it lists each
-artifact whose buckets differ. The session runs in a read-only transaction
-and is rolled back.
+artifacts the category sentiment view counts, leaving out any whose stored
+label is not a sentiment label, as the view does. For each bucket it prints
+how many count in it, which is the research summary's source count, and
+their dominant label, under the keyword rule the view used to follow and
+under the view's taxonomy rule, and how many of the taxonomy rule's were
+placed by its keyword fallback. Then it lists each artifact whose buckets
+differ. The session runs in a read-only transaction and is rolled back.
 """
 
 from __future__ import annotations
@@ -58,7 +59,13 @@ class Comparison:
 def compare(db: Session, symbol: str, *, days: int, limit: int) -> Comparison:
     """Both rules' buckets for one ticker. Raises ``TickerNotFound`` for an unknown one."""
     ticker = find_ticker(db, symbol)
-    rows = ticker_sentiment.analysed_rows(db, ticker.id, days=days, limit=limit)
+    rows = [
+        (artifact, sentiment)
+        for artifact, sentiment in ticker_sentiment.analysed_rows(
+            db, ticker.id, days=days, limit=limit
+        )
+        if ticker_sentiment.counted_label(sentiment) is not None
+    ]
     keyword_rows: dict[str, list[AnalysedRow]] = {key: [] for key in CATEGORY_SENTIMENT_KEYS}
     taxonomy_rows: dict[str, list[AnalysedRow]] = {key: [] for key in CATEGORY_SENTIMENT_KEYS}
     fallback = dict.fromkeys(CATEGORY_SENTIMENT_KEYS, 0)
@@ -107,13 +114,13 @@ def report(comparison: Comparison) -> str:
 
 
 def _buckets(rows: dict[str, list[AnalysedRow]]) -> dict[str, Bucket]:
-    return {
-        bucket: Bucket(
-            count=len(bucket_rows),
-            label=ticker_sentiment.aggregate_bucket(bucket, bucket_rows).sentiment_label,
-        )
-        for bucket, bucket_rows in rows.items()
-    }
+    return {bucket: _bucket(bucket, bucket_rows) for bucket, bucket_rows in rows.items()}
+
+
+def _bucket(name: str, rows: list[AnalysedRow]) -> Bucket:
+    """The bucket as the research summary shows it: its source count and label."""
+    result = ticker_sentiment.aggregate_bucket(name, rows)
+    return Bucket(count=result.sources_count, label=result.sentiment_label)
 
 
 def _cell(bucket: Bucket) -> str:

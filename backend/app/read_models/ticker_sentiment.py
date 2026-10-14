@@ -294,8 +294,8 @@ def aggregate_bucket(bucket: str, rows: Sequence[AnalysedRow]) -> CategorySentim
     """
     usable: list[tuple[Artifact, ArtifactSentiment, str, float]] = []
     for artifact, sentiment in rows:
-        label = str(sentiment.sentiment_label or "").lower()
-        if label not in SENTIMENT_LABELS:
+        label = counted_label(sentiment)
+        if label is None:
             continue
         confidence = float(sentiment.confidence_score or 0)
         usable.append((artifact, sentiment, label, min(max(confidence, 0.0), 1.0)))
@@ -366,6 +366,15 @@ def aggregate_bucket(bucket: str, rows: Sequence[AnalysedRow]) -> CategorySentim
         sources=sources,
         latest_analyzed_at=max(analyzed_dates) if analyzed_dates else None,
     )
+
+
+def counted_label(sentiment: ArtifactSentiment) -> str | None:
+    """The sentiment label a stored row counts under, in lower case.
+
+    None for a label that is not a sentiment label: no bucket counts that row.
+    """
+    label = str(sentiment.sentiment_label or "").lower()
+    return label if label in SENTIMENT_LABELS else None
 
 
 def _is_public_discussion(artifact: Artifact) -> bool:
