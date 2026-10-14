@@ -389,6 +389,18 @@ def _ledger(session: SessionFactory, watched: WatchedArtifact) -> dict[uuid.UUID
         }
 
 
+def _rollup(session: SessionFactory, watched: WatchedArtifact) -> AlertDelivery:
+    """The investor's rollup row for the watched artifact's scrape run."""
+    with session() as db:
+        return db.scalars(
+            select(AlertDelivery).where(
+                AlertDelivery.investor_id == watched.investor_id,
+                AlertDelivery.scrape_run_id == watched.scrape_run_id,
+                AlertDelivery.artifact_id.is_(None),
+            )
+        ).one()
+
+
 def _subscription(session: SessionFactory, watched: WatchedArtifact) -> AlertSubscription:
     with session() as db:
         return db.scalars(
@@ -428,6 +440,82 @@ def _events(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
         if record.getMessage().startswith("{")
     ]
     return [payload for payload in payloads if payload.get("stage") == "notify"]
+
+
+def _rollup_left_failed(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[WatchedArtifact, WatchedArtifact]:
+    """Two artifacts in one run, with a cap of one alert per investor per run.
+
+    The first artifact's alert is sent. The second is suppressed by the cap,
+    and its rollup was refused for now, so the rollup's row is failed and the
+    second artifact's record waits to be delivered again.
+    """
+    monkeypatch.setattr(settings, "ALERT_MAX_PER_INVESTOR_PER_RUN", 1, raising=False)
+    first = _watched_artifact(session)
+    second = _next_artifact(session, first)
+    _send_with(
+        monkeypatch,
+        RecordingEmailSender([Accepted("direct-1"), Unavailable("rate_limit")]),
+    )
+    assert _deliver(first) == NO_RETRY
+    assert _deliver(second) == second.retry
+    assert _ledger(session, first) == {
+        first.artifact_id: "sent",
+        second.artifact_id: "suppressed_cap",
+        None: "failed",
+    }
+    return first, second
+
+
+def _save_after_the_claim(  # pylint: disable=too-many-arguments
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    watched: WatchedArtifact,
+    model: type[AlertSubscription] | type[AlertRule],
+    change: dict[str, object],
+    *,
+    rollup: bool = False,
+) -> list[bool]:
+    """Save ``change`` to the investor's preferences once the worker's claim is committed.
+
+    The first session the worker opens after the investor's row for the
+    artifact, or for the run's rollup with ``rollup``, is claimed sees the
+    change, as a settings save racing the worker would. The list returned
+    holds True once the change is saved.
+    """
+    saved: list[bool] = []
+    row = (
+        (AlertDelivery.scrape_run_id == watched.scrape_run_id)
+        & AlertDelivery.artifact_id.is_(None)
+        if rollup
+        else AlertDelivery.artifact_id == watched.artifact_id
+    )
+
+    @contextmanager
+    def saving_after_the_claim() -> Iterator[Session]:
+        if not saved:
+            with session() as db:
+                status = db.scalar(
+                    select(AlertDelivery.status).where(
+                        AlertDelivery.investor_id == watched.investor_id,
+                        row,
+                    )
+                )
+                if status == "claimed":
+                    db.execute(
+                        update(model)
+                        .where(model.investor_id == watched.investor_id)
+                        .values(**change)
+                    )
+                    db.commit()
+                    saved.append(True)
+        with session() as db:
+            yield db
+
+    monkeypatch.setattr(notify, "database_session", saving_after_the_claim)
+    return saved
 
 
 def test_an_accepted_alert_is_recorded_as_sent(
@@ -780,22 +868,7 @@ def test_a_rollup_refused_for_now_is_sent_on_redelivery_without_another_alert(
     session: SessionFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "ALERT_MAX_PER_INVESTOR_PER_RUN", 1, raising=False)
-    first = _watched_artifact(session)
-    second = _next_artifact(session, first)
-    _send_with(
-        monkeypatch,
-        RecordingEmailSender([Accepted("direct-1"), Unavailable("rate_limit")]),
-    )
-
-    assert _deliver(first) == NO_RETRY
-    assert _deliver(second) == second.retry
-    assert _ledger(session, first) == {
-        first.artifact_id: "sent",
-        second.artifact_id: "suppressed_cap",
-        None: "failed",
-    }
-
+    first, second = _rollup_left_failed(session, monkeypatch)
     sender = RecordingEmailSender()
     _send_with(monkeypatch, sender)
 
@@ -807,6 +880,79 @@ def test_a_rollup_refused_for_now_is_sent_on_redelivery_without_another_alert(
         second.artifact_id: "suppressed_cap",
         None: "rollup_sent",
     }
+
+
+def test_a_rollup_redelivered_after_the_address_changed_is_rejected(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rollup checks the address is confirmed, as the investor's first alert did."""
+    _, second = _rollup_left_failed(session, monkeypatch)
+    with session() as db:
+        db.execute(
+            update(AlertSubscription)
+            .where(AlertSubscription.investor_id == second.investor_id)
+            .values(
+                email=f"changed-{uuid.uuid4().hex}@example.com",
+                verification_status="pending",
+                verified_at=None,
+            )
+        )
+        db.commit()
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+
+    assert _deliver(second) == NO_RETRY
+
+    assert sender.sent == []
+    rollup = _rollup(session, second)
+    assert (rollup.status, rollup.error_code) == ("rejected", "recipient_not_verified")
+
+
+def test_a_rollup_redelivered_at_the_daily_budget_is_suppressed_for_good(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, second = _rollup_left_failed(session, monkeypatch)
+    monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", _budget_used(session), raising=False)
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+
+    assert _deliver(second) == NO_RETRY
+    assert _deliver(second) == NO_RETRY
+
+    assert sender.sent == []
+    rollup = _rollup(session, second)
+    assert (rollup.status, rollup.error_code) == ("suppressed_budget", "daily_budget")
+    suppressed = [event for event in _events(caplog) if event["event"] == "suppressed"]
+    assert [
+        (event["investor_id"], event["kind"], event["reason"]) for event in suppressed
+    ] == [(str(second.investor_id), "rollup", "daily_budget")]
+
+
+def test_preferences_saved_after_the_rollup_claim_reject_the_rollup(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, second = _rollup_left_failed(session, monkeypatch)
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+    saved = _save_after_the_claim(
+        session,
+        monkeypatch,
+        second,
+        AlertRule,
+        {"min_confidence": Decimal("0.8000")},
+        rollup=True,
+    )
+
+    assert _deliver(second) == NO_RETRY
+
+    assert saved
+    assert sender.sent == []
+    rollup = _rollup(session, second)
+    assert (rollup.status, rollup.error_code) == ("rejected", "preferences_changed")
 
 
 def test_at_the_daily_budget_the_alert_is_suppressed_for_good(
@@ -872,31 +1018,7 @@ def test_preferences_saved_after_the_claim_reject_the_alert(
     watched = _watched_artifact(session)
     sender = RecordingEmailSender()
     _send_with(monkeypatch, sender)
-    saved: list[bool] = []
-
-    @contextmanager
-    def saving_after_the_claim() -> Iterator[Session]:
-        # The first session the worker opens once its claim is committed sees
-        # the investor's new preferences, as a settings save racing it would.
-        if not saved:
-            with session() as db:
-                status = db.scalar(
-                    select(AlertDelivery.status).where(
-                        AlertDelivery.investor_id == watched.investor_id
-                    )
-                )
-                if status == "claimed":
-                    db.execute(
-                        update(model)
-                        .where(model.investor_id == watched.investor_id)
-                        .values(**change)
-                    )
-                    db.commit()
-                    saved.append(True)
-        with session() as db:
-            yield db
-
-    monkeypatch.setattr(notify, "database_session", saving_after_the_claim)
+    saved = _save_after_the_claim(session, monkeypatch, watched, model, change)
 
     assert _deliver(watched) == NO_RETRY
 
