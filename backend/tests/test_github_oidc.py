@@ -13,6 +13,7 @@ import yaml
 from tools.release import CLOUDFORMATION_ROLE_NAME, IMAGE_REPOSITORIES
 from tools.template_model import (
     REPOSITORY_ROOT,
+    Statement,
     TemplateModel,
     branches,
     possible_strings,
@@ -51,6 +52,11 @@ def _role_arn(name: str) -> str:
     return f"arn:aws:iam::{ACCOUNT}:role/{name}"
 
 
+def _parameter_arn(name: str) -> str:
+    """The ARN of an SSM parameter or path, such as ``/stocks-in-hand/staging/database-url``."""
+    return f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}"
+
+
 def _values(**parameters: str) -> dict[str, str]:
     """What CloudFormation fills the OIDC stack's references with: its defaults unless given."""
     oidc = _oidc()
@@ -69,10 +75,27 @@ def _values(**parameters: str) -> dict[str, str]:
     }
 
 
+def _covering(role: str, action: str, arn: str, values: dict[str, str]) -> list[Statement]:
+    """The role's statements that allow ``action`` on ``arn``."""
+    return [
+        statement
+        for statement in _oidc().role_statements(role)
+        if statement.covers(action, arn, values)
+    ]
+
+
 def _can(role: str, action: str, arn: str, values: dict[str, str]) -> bool:
-    return any(
-        statement.covers(action, arn, values) for statement in _oidc().role_statements(role)
-    )
+    """Whether the role may call ``action`` on ``arn`` without an IAM condition to meet.
+
+    A condition such as aws:SourceIp could stop a workflow's call, so a need
+    is met only by a statement without one, unless its test names the condition.
+    """
+    return any(not statement.iam_condition for statement in _covering(role, action, arn, values))
+
+
+def _may(role: str, action: str, arn: str, values: dict[str, str]) -> bool:
+    """Whether any statement allows ``action`` on ``arn``, under an IAM condition or not."""
+    return bool(_covering(role, action, arn, values))
 
 
 def test_the_oidc_stack_defines_only_the_staging_deploy_roles() -> None:
@@ -146,12 +169,11 @@ def test_the_github_role_changes_only_the_staging_stack_through_the_execution_ro
     )
     creating = [
         statement
-        for statement in _oidc().role_statements(GITHUB_ROLE)
-        if any(statement.covers(action, stack, values) for action in changes)
+        for action in changes
+        for statement in _covering(GITHUB_ROLE, action, stack, values)
     ]
 
     for action in (
-        "cloudformation:CreateChangeSet",
         "cloudformation:DescribeChangeSet",
         "cloudformation:ListChangeSets",
         "cloudformation:ExecuteChangeSet",
@@ -161,18 +183,19 @@ def test_the_github_role_changes_only_the_staging_stack_through_the_execution_ro
     ):
         assert _can(GITHUB_ROLE, action, stack, values), action
     assert _can(GITHUB_ROLE, "cloudformation:GetTemplateSummary", "*", values)
-    assert not _can(GITHUB_ROLE, "cloudformation:DeleteStack", stack, values)
+    assert not _may(GITHUB_ROLE, "cloudformation:DeleteStack", stack, values)
     for action in (*changes, "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet"):
         for other in other_stacks:
-            assert not _can(GITHUB_ROLE, action, other, values), (action, other)
-    assert creating
+            assert not _may(GITHUB_ROLE, action, other, values), (action, other)
+    # sam deploy creates the change set, and may do so only through the execution role.
+    assert _may(GITHUB_ROLE, "cloudformation:CreateChangeSet", stack, values)
     for statement in creating:
         assert statement.iam_condition == {
             "ArnEquals": {"cloudformation:RoleArn": {"Fn::GetAtt": [EXECUTION_ROLE, "Arn"]}}
         }, statement.sid
     assert _can(GITHUB_ROLE, "iam:PassRole", values[f"{EXECUTION_ROLE}.Arn"], values)
     for role in ("stocks-in-hand-github-staging", "stocks-in-hand-staging-ApiFunctionRole-1A2B"):
-        assert not _can(GITHUB_ROLE, "iam:PassRole", _role_arn(role), values), role
+        assert not _may(GITHUB_ROLE, "iam:PassRole", _role_arn(role), values), role
 
 
 def test_the_github_role_can_push_every_release_image_but_never_delete_one() -> None:
@@ -193,7 +216,7 @@ def test_the_github_role_can_push_every_release_image_but_never_delete_one() -> 
         arn = f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{repository}"
         for action in actions:
             assert _can(GITHUB_ROLE, action, arn, values), (action, repository)
-        assert not _can(GITHUB_ROLE, "ecr:BatchDeleteImage", arn, values), repository
+        assert not _may(GITHUB_ROLE, "ecr:BatchDeleteImage", arn, values), repository
 
 
 def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -> None:
@@ -214,19 +237,17 @@ def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -
         if name
     }
     values = _values()
+    gated = {substitute(name, prefix) for name in app.gated_secrets()}
     readable = {
         name
         for name in names | {f"{PARAMETER_PATH_PREFIX}/a-new-secret"}
-        if _can(
-            GITHUB_ROLE,
-            "ssm:GetParameter",
-            f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}",
-            values,
-        )
+        if _may(GITHUB_ROLE, "ssm:GetParameter", _parameter_arn(name), values)
     }
 
     assert f"{PARAMETER_PATH_PREFIX}/database-url" in names
-    assert readable == {substitute(name, prefix) for name in app.gated_secrets()}
+    assert readable == gated
+    for name in gated:
+        assert _can(GITHUB_ROLE, "ssm:GetParameter", _parameter_arn(name), values), name
     assert not any(
         statement.allows("kms:Decrypt") for statement in _oidc().role_statements(GITHUB_ROLE)
     )
@@ -254,9 +275,9 @@ def test_the_github_role_can_read_only_the_application_queue_attributes() -> Non
             "sqs:PurgeQueue",
             "sqs:SetQueueAttributes",
         ):
-            assert not _can(GITHUB_ROLE, action, arn, values), (action, queue)
+            assert not _may(GITHUB_ROLE, action, arn, values), (action, queue)
     other = f"arn:aws:sqs:{REGION}:{ACCOUNT}:other-queue"
-    assert not _can(GITHUB_ROLE, "sqs:GetQueueAttributes", other, values)
+    assert not _may(GITHUB_ROLE, "sqs:GetQueueAttributes", other, values)
 
 
 def test_the_github_role_can_publish_the_frontend_but_not_touch_raw_documents() -> None:
@@ -280,10 +301,10 @@ def test_the_github_role_can_publish_the_frontend_but_not_touch_raw_documents() 
 
     for action in ("s3:ListBucket", "s3:GetBucketLocation"):
         assert _can(GITHUB_ROLE, action, frontend, values), action
-        assert not _can(GITHUB_ROLE, action, raw, values), action
+        assert not _may(GITHUB_ROLE, action, raw, values), action
     for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject"):
         assert _can(GITHUB_ROLE, action, f"{frontend}/index.html", values), action
-        assert not _can(GITHUB_ROLE, action, f"{raw}/raw/announcement.pdf", values), action
+        assert not _may(GITHUB_ROLE, action, f"{raw}/raw/announcement.pdf", values), action
     assert _can(GITHUB_ROLE, "cloudfront:CreateInvalidation", distribution, values)
 
 
