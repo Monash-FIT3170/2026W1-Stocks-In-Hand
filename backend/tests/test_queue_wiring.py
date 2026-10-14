@@ -148,6 +148,21 @@ def parameter_variables_name_registered_secrets(model: TemplateModel) -> list[st
     return problems
 
 
+def functions_read_only_the_secrets_they_name(model: TemplateModel) -> list[str]:
+    """A function may read a registered secret only if its environment names it.
+
+    The analysis worker reads untrusted PDFs, so it must not be able to read
+    the Brevo key or the Reddit credentials it never uses.
+    """
+    return [
+        f"{function.logical_id} may read {secret.parameter} but does not name {secret.variable}"
+        for function in model.functions().values()
+        for secret in SECRETS
+        if secret.variable not in function.environment
+        and function.can_read_parameter(f"${{ParameterPathPrefix}}/{secret.parameter}")
+    ]
+
+
 def registered_secrets_are_deployed(model: TemplateModel) -> list[str]:
     named = {name for function in model.functions().values() for name in function.environment}
     return [
@@ -276,6 +291,7 @@ RULES = [
     send_grants_have_queue_url_variables,
     parameter_variables_have_ssm_grants,
     parameter_variables_name_registered_secrets,
+    functions_read_only_the_secrets_they_name,
     registered_secrets_are_deployed,
     template_literals_match_declared_defaults,
     template_parameters_fit_declared_limits,
@@ -312,6 +328,20 @@ def _drop_statement(document: dict, function_id: str, sid: str) -> None:
                 for statement in policy_document["Statement"]
                 if statement.get("Sid") != sid
             ]
+
+
+def _grant_every_parameter(document: dict, function_id: str) -> None:
+    """Let a function read every parameter under the prefix, as the API may."""
+    _properties(document, function_id)["Policies"][0]["Statement"].append(
+        {
+            "Effect": "Allow",
+            "Action": "ssm:GetParameter",
+            "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}"
+                ":parameter${ParameterPathPrefix}/*"
+            },
+        }
+    )
 
 
 BREAKAGES = {
@@ -360,6 +390,10 @@ BREAKAGES = {
         lambda d: _environment(d, "ApiFunction").update(
             REDDIT_CLIENT_ID_PARAMETER={"Fn::Sub": "${ParameterPathPrefix}/reddit-id"}
         ),
+    ),
+    "wildcard parameter grant": (
+        functions_read_only_the_secrets_they_name,
+        lambda d: _grant_every_parameter(d, "AnalysisFunction"),
     ),
     "registered secret unused": (
         registered_secrets_are_deployed,

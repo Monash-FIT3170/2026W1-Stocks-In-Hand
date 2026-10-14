@@ -653,7 +653,7 @@ Resources:
               Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub >-
-                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/*
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
             - Sid: DecryptRuntimeParameters
               Effect: Allow
               Action: kms:Decrypt
@@ -824,8 +824,15 @@ Resources:
             - Sid: ReadRuntimeParameters
               Effect: Allow
               Action: ssm:GetParameter
-              Resource: !Sub >-
-                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/*
+              Resource:
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/database-url
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/reddit-client-id
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/reddit-client-secret
+                - !Sub >-
+                    arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParameterPathPrefix}/public-discussion-feed-urls
             - Sid: DecryptRuntimeParameters
               Effect: Allow
               Action: kms:Decrypt

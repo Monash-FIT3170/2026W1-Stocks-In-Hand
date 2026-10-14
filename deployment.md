@@ -125,16 +125,25 @@ AWS-managed SSM key:
 ```text
 /stocks-in-hand/staging/database-url
 /stocks-in-hand/staging/brevo-api-key
+/stocks-in-hand/staging/marketaux-api-token
 /stocks-in-hand/staging/reddit-client-id
 /stocks-in-hand/staging/reddit-client-secret
 /stocks-in-hand/staging/public-discussion-feed-urls
 ```
 
+A Lambda's environment names each parameter it needs in a `<SETTING>_PARAMETER`
+variable, and the backend reads the value the first time it uses a setting.
+`SECRETS` in `backend/app/core/config.py` lists the six, and
+`backend/tests/test_queue_wiring.py` checks the template against that list.
+Each worker's role may read only the parameters it names; the API may read
+every parameter under the path.
+
 The database URL must be the Supabase transaction-mode pooler URL used by
 short-lived Lambda connections. Use a direct or session-pooler connection for
-Alembic migrations. Brevo and public discussion parameters are optional. Reddit
-is disabled without both Reddit parameters. Blog collection is disabled when
-the comma-separated feed allowlist parameter is absent.
+Alembic migrations. Brevo and public discussion parameters are optional. The
+Marketaux token is read only while `MarketauxEnabled` is true, and must then
+exist. Reddit is disabled without both Reddit parameters. Blog collection is
+disabled when the comma-separated feed allowlist parameter is absent.
 
 Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
 is configured separately from the set available for manual administrator
@@ -205,7 +214,7 @@ analysed.
 - Discovery and download queues use 30-minute visibility timeouts. Analysis
   uses 72 minutes, which is six times its 12-minute Lambda timeout.
 - IAM permissions are scoped by worker role, queue, bucket prefix, and SSM
-  parameter path.
+  parameter. A worker can read only the secrets its environment names.
 
 ## Deployment sequence
 
