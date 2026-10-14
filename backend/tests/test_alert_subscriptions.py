@@ -608,6 +608,26 @@ def test_a_link_older_than_its_lifetime_answers_400(api: Api) -> None:
     assert api.preferences()["verification_status"] == "pending"
 
 
+def test_a_link_for_a_request_marked_failed_answers_400(api: Api) -> None:
+    """The email service said the email was not sent, but its link arrived anyway.
+
+    The link is for the newest request and still fresh, but that request is
+    no longer pending, so the investor has to ask for a new link.
+    """
+    _failed_verification(api)
+    subscription = _subscription(api)
+    token = verification_token(
+        subscription.id,
+        str(subscription.unsubscribe_token_hash),
+        subscription.verification_requested_at,
+    )
+
+    response = api.client.post("/notifications/verify", json={"token": token})
+
+    assert (response.status_code, response.json()) == (400, INVALID_LINK)
+    assert api.preferences()["verification_status"] == "failed"
+
+
 def test_an_internationalised_address_saved_twice_within_a_minute_gets_one_link(
     api: Api,
     monkeypatch: pytest.MonkeyPatch,
@@ -901,3 +921,32 @@ def test_a_resend_the_provider_refuses_answers_422(
     assert response.status_code == 422
     assert [email.to for email in sender.sent] == [api.investor.email]
     assert api.preferences()["verification_status"] == "failed"
+
+
+def test_a_resend_whose_subscription_is_deleted_while_its_email_goes_out_answers_409(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The email went out, but the subscription is gone, so there are no settings to return."""
+    _failed_verification(api)
+
+    def answer(_email: OutgoingEmail) -> SendOutcome:
+        with api.session() as db:
+            db.execute(
+                delete(AlertSubscription).where(
+                    AlertSubscription.investor_id == api.investor.id
+                )
+            )
+            db.commit()
+        return Accepted("recorded-1")
+
+    sender = RecordingEmailSender(answer)
+    _send_with(monkeypatch, sender)
+
+    response = api.client.post("/notifications/preferences/resend-verification")
+
+    assert (response.status_code, response.json()) == (
+        409,
+        {"detail": "Notification preferences changed concurrently"},
+    )
+    assert [email.to for email in sender.sent] == [api.investor.email]
