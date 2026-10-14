@@ -66,6 +66,14 @@ _Avoid_: tag, match (for the stored link)
 
 ### Analysis
 
+**Artifact analysis**:
+Analysing one artifact and recording the result: reading an announcement's document or the stored text, classifying an announcement, scoring its sentiment, summarising it, and recording all of it with its status. The analysis worker and the local loader both do it through one module.
+_Avoid_: processing, enrichment, pipeline (for this step alone)
+
+**Stored text**:
+The text a news or public discussion collector saved with an artifact. It is analysed as it is, with no document to read.
+_Avoid_: inline text, public discussion message (it covers news too)
+
 **Category**:
 The kind of company announcement an artifact is, such as a dividend announcement or half-year results, decided by fixed rules over its title, filename and text. An announcement the rules cannot place with confidence has no category.
 _Avoid_: artifact type (the stored field), report type, classification (for the category itself)
@@ -85,6 +93,10 @@ _Avoid_: summary metadata, summary text (for the whole summary), AI summary
 **Complete summary**:
 An artifact summary with all four text lines, and both clarity lists when the artifact is an announcement. An artifact without one still needs summarising.
 _Avoid_: current summary, full summary, summarised (for a partial summary)
+
+**Summary request**:
+A request on the analysis queue to write a new summary of one artifact from the text stored with it, leaving its sentiment and classification alone. The admin summary routes send one.
+_Avoid_: resummarise job, summary job
 
 **Artifact card**:
 How one artifact appears in a feed: a tag, its title, who published it with a link to the original, and the about, changed and matters lines of its summary. A line the summary lacks is empty, never placeholder text or the artifact's raw text.
@@ -106,6 +118,22 @@ _Avoid_: superuser, operator
 The one way the product sends email. It takes one email and answers accepted, recipient rejected, unavailable or misconfigured, and the caller decides what that outcome means for it. Brevo sends for real, the dry-run sender only logs, and a recording sender keeps each email for tests.
 _Avoid_: mailer, provider (for the interface)
 
+**Alert**:
+An email telling an investor that an analysed artifact about a ticker on one of their watchlists matched their alert rule.
+_Avoid_: notification (for the email; the notification message is the queue record an alert is made from)
+
+**Rollup**:
+The one email an investor gets for a scrape run instead of further alerts, once the run's per-investor cap is reached. It counts the matches the cap held back.
+_Avoid_: digest (a Reddit digest is something else), summary email
+
+**Alert delivery**:
+Decides, for each investor watching a ticker, whether an analysed artifact becomes an alert, joins the scrape run's rollup or is held back. It sends what it decided through the email sender and records the outcome in the delivery ledger.
+_Avoid_: notify (the Lambda that hands it SQS records), notification processing
+
+**Delivery ledger**:
+One row for each alert (per investor and artifact) and each rollup (per investor and scrape run). A row is claimed, and the claim committed, before its email is sent, so only one worker sends it at a time. The row then records sent, rejected, failed (a later claim may try again) or suppressed. Each outcome is also copied onto the investor's alert subscription, unless the subscription already shows a newer one.
+_Avoid_: D17 fields or mirror (for the subscription's copy), delivery log
+
 ### Deploying
 
 **Release**:
@@ -119,3 +147,7 @@ _Avoid_: parameter overrides, deploy config, change set (CloudFormation's previe
 **Gated secret**:
 An SSM SecureString a Lambda reads only while a true/false stack parameter, its switch, is on, such as the Brevo API key behind NotificationsEnabled. A release plan checks that it exists whenever its switch is on.
 _Avoid_: optional secret, feature secret
+
+**Deploy roles**:
+The two IAM roles a staging deploy runs as: the GitHub role a staging workflow job signs in as, and the CloudFormation execution role every change set is applied through.
+_Avoid_: OIDC roles, CI role, deployment role (for both)
