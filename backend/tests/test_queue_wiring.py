@@ -24,11 +24,12 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
-from app.core.config import SECRETS
+from app.core.config import SECRETS, declared_settings
 from tools import verify_queue_wiring
 from tools.template_model import (
     TemplateModel,
@@ -48,6 +49,13 @@ STAGING_VERIFICATION_WORKFLOW = (
 # the visibility timeout covers the consumer's timeout with room for retries.
 # AWS recommends at least six times the function timeout.
 VISIBILITY_TIMEOUT_MULTIPLE = 6
+# Template values that differ from the declared default on purpose.
+DELIBERATE_DIFFERENCES = {
+    # Queued analysis can wait, so it uses Bedrock's cheaper flex tier.
+    ("AnalysisFunction", "BEDROCK_SERVICE_TIER"),
+    # AWS serves the API over HTTPS only; a local run uses plain HTTP.
+    ("ApiFunction", "SESSION_COOKIE_SECURE"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +157,75 @@ def registered_secrets_are_deployed(model: TemplateModel) -> list[str]:
     ]
 
 
+def _literal(value: Any) -> str | None:
+    """A plain value as CloudFormation passes it, or None for an intrinsic function."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    return None
+
+
+def template_literals_match_declared_defaults(model: TemplateModel) -> list[str]:
+    """A setting's literal value is its declared default, unless the difference is deliberate.
+
+    The document size limits and MAX_PDF_PAGES drifted when the template and
+    the code each wrote a default out.
+    """
+    declared = declared_settings()
+    problems = []
+    for function in model.functions().values():
+        for name, value in function.environment.items():
+            literal = _literal(value)
+            if name not in declared or literal is None:
+                continue
+            try:
+                parsed = declared[name].parse(literal)
+            except ValueError as error:
+                problems.append(f"{function.logical_id}.{name} {error}")
+                continue
+            deliberate = (function.logical_id, name) in DELIBERATE_DIFFERENCES
+            if parsed != declared[name].default and not deliberate:
+                problems.append(
+                    f"{function.logical_id}.{name} is {literal}, "
+                    f"but the code defaults to {declared[name].default}"
+                )
+    return problems
+
+
+def _number(value: float) -> str:
+    return str(int(value)) if value.is_integer() else str(value)
+
+
+def template_parameters_fit_declared_limits(model: TemplateModel) -> list[str]:
+    """A parameter's default, allowed values and bounds are each accepted by its setting.
+
+    So a value the stack accepts is never refused when the settings are built.
+    """
+    declared = declared_settings()
+    parameters = model.parameter_definitions()
+    problems = []
+    for function in model.functions().values():
+        for name, value in function.environment.items():
+            parameter = parameters.get(ref_target(value) or "")
+            if name not in declared or parameter is None:
+                continue
+            values = {*parameter.allowed_values}
+            if parameter.default is not None:
+                values.add(parameter.default)
+            values.update(
+                _number(bound)
+                for bound in (parameter.min_value, parameter.max_value)
+                if bound is not None
+            )
+            for allowed in sorted(values):
+                try:
+                    declared[name].parse(allowed)
+                except ValueError as error:
+                    problems.append(f"{parameter.name} allows {allowed!r}, but {name} {error}")
+    return problems
+
+
 def queues_are_encrypted(model: TemplateModel) -> list[str]:
     return [
         f"{queue_id} is not encrypted"
@@ -189,6 +266,8 @@ RULES = [
     parameter_variables_have_ssm_grants,
     parameter_variables_name_registered_secrets,
     registered_secrets_are_deployed,
+    template_literals_match_declared_defaults,
+    template_parameters_fit_declared_limits,
     queues_are_encrypted,
     dead_letter_queues_outlive_their_sources,
     dead_letter_queue_alarms_page_the_alarm_topic,
@@ -276,6 +355,14 @@ BREAKAGES = {
             _environment(d, function_id).pop("BREVO_API_KEY_PARAMETER")
             for function_id in ("ApiFunction", "NotificationFunction")
         ],
+    ),
+    "template default drifts": (
+        template_literals_match_declared_defaults,
+        lambda d: _environment(d, "ApiFunction").update(BEDROCK_MAX_PROMPT_CHARS="20000"),
+    ),
+    "parameter allows a rejected value": (
+        template_parameters_fit_declared_limits,
+        lambda d: d["Parameters"]["AlertMaxPerInvestorPerRun"].update(Default="0"),
     ),
     "queue encryption removed": (
         queues_are_encrypted,

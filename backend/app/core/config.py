@@ -32,7 +32,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -172,6 +172,20 @@ def _with_secrets(
 # Reads one variable's text. It raises ValueError saying which limit the text
 # breaks, without the text.
 Parse = Callable[[str], Any]
+
+
+@dataclass(frozen=True)
+class Declaration:
+    """How one setting is declared: its variable, its default and how it is read.
+
+    The template rules in tests/test_queue_wiring.py check infra/template.yaml
+    against these.
+    """
+
+    name: str
+    default: Any
+    parse: Parse
+    aliases: tuple[str, ...] = ()
 
 
 def _setting(default: Any, parse: Parse, *, aliases: Sequence[str] = ()) -> Any:
@@ -343,14 +357,14 @@ class Settings:
         """
         resolved, problems = _with_secrets(environ, parameters)
         values: dict[str, Any] = {}
-        for setting in fields(cls):
-            raw = _raw(resolved, (setting.name, *setting.metadata["aliases"]))
+        for declaration in declared_settings().values():
+            raw = _raw(resolved, (declaration.name, *declaration.aliases))
             if raw is None:
                 continue
             try:
-                values[setting.name] = setting.metadata["parse"](raw)
+                values[declaration.name] = declaration.parse(raw)
             except ValueError as error:
-                problems.append(f"{setting.name} {error}")
+                problems.append(f"{declaration.name} {error}")
         built = cls(**values)
         problems.extend(built._sign_in_problems())
         if problems:
@@ -370,6 +384,23 @@ class Settings:
         if self.COGNITO_JWKS_CACHE_SECONDS <= 0:
             problems.append(f"COGNITO_JWKS_CACHE_SECONDS must be greater than zero {when}")
         return problems
+
+
+def declared_settings() -> dict[str, Declaration]:
+    """Every setting's declaration by variable name, in declaration order."""
+    return {
+        setting.name: Declaration(
+            name=setting.name,
+            default=(
+                setting.default
+                if setting.default_factory is MISSING
+                else setting.default_factory()
+            ),
+            parse=setting.metadata["parse"],
+            aliases=setting.metadata["aliases"],
+        )
+        for setting in fields(Settings)
+    }
 
 
 _lock = threading.Lock()
