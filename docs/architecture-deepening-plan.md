@@ -1229,7 +1229,7 @@ After the first deploy
 | Whether the admin summary routes still generate inside the API | 08 | Decided in #56: no. Both `/llm/summarise` routes queue a summary request on the analysis queue and answer 202, with no LLM check first. The ticker route queues at most 50. |
 | What `POST /news/fetch` does with the stories it stores | 08 | Decided in #56: it queues every story not yet analysed, so the worker scores and summarises it. It no longer summarises inline. |
 | Whether to keep `POST /news/summarise` and `POST /news/sentiment` | 08 | Decided in #56: delete both, with `news_summary.py` and `news_sentiment.py`. |
-| How the local loader analyses what it loads | 08 | Decided in #56: in its own process, through the artifact analysis module, the same way as the worker. |
+| How the local loader analyses what it loads | 08 | Decided in #56: ASX documents and news stories are analysed in its own process, through the artifact analysis module, the same way as the worker. Reddit posts are only stored and queued (`queue_stored_text`), so they are analysed only when `ANALYSIS_QUEUE_URL` is set and an analysis worker reads that queue. |
 | Whether older announcements get their category's artifact type | 08 | Decided in #56: yes. Migration `86d9artifacttypes` backfills them, and `tools/reclassify_artifacts.py` sets the type on announcement rows only. |
 | What to call the analysis message that also carries news | 08 | Decided in #56: rename `PublicDiscussionAnalysisMessage` to `StoredTextAnalysisMessage` now, keeping the wire name `public_discussion_analysis` that queued messages carry. |
 | Whether the analysis worker keeps publishing `NotificationMessage` | 08 | Decided in #56: yes, unchanged. |
