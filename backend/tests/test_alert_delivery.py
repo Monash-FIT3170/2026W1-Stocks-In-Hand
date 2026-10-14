@@ -637,6 +637,48 @@ def test_a_record_delivered_twice_sends_one_alert(
     assert _ledger(session, watched) == {watched.artifact_id: "sent"}
 
 
+@pytest.mark.parametrize(
+    ("alert_status", "rollup_status"),
+    [
+        pytest.param("claimed", None, id="alert claimed by another worker"),
+        pytest.param("rejected", None, id="alert rejected"),
+        pytest.param("suppressed_cap", "claimed", id="rollup claimed by another worker"),
+    ],
+)
+def test_a_record_whose_delivery_is_already_held_is_acknowledged(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    alert_status: str,
+    rollup_status: str | None,
+) -> None:
+    """A fresh claim another worker holds, or a refusal, needs nothing from the record."""
+    watched = _watched_artifact(session)
+    held: dict[uuid.UUID | None, str] = {watched.artifact_id: alert_status}
+    if rollup_status is not None:
+        held[None] = rollup_status
+    with session() as db:
+        # A claim made now is not stale, so no other attempt may take it over.
+        db.add_all(
+            [
+                AlertDelivery(
+                    investor_id=watched.investor_id,
+                    artifact_id=artifact_id,
+                    scrape_run_id=watched.scrape_run_id,
+                    status=status,
+                )
+                for artifact_id, status in held.items()
+            ]
+        )
+        db.commit()
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+
+    assert _deliver(watched) == NO_RETRY
+
+    assert sender.sent == []
+    assert _ledger(session, watched) == held
+
+
 def test_each_investor_watching_the_ticker_gets_one_alert(
     session: SessionFactory,
     monkeypatch: pytest.MonkeyPatch,
