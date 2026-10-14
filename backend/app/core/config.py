@@ -88,6 +88,7 @@ class Secret:
 
     @property
     def variable(self) -> str:
+        """The environment variable that names the secret's parameter."""
         return f"{self.setting}_PARAMETER"
 
 
@@ -189,13 +190,16 @@ class Declaration:
 
 
 def _setting(default: Any, parse: Parse, *, aliases: Sequence[str] = ()) -> Any:
+    # The field is assigned in the Settings class body, where the dataclass
+    # decorator collects it.
+    # pylint: disable=invalid-field-call
     metadata = {"parse": parse, "aliases": tuple(aliases)}
     if isinstance(default, list):
         return field(default_factory=lambda: list(default), metadata=metadata)
     return field(default=default, metadata=metadata)
 
 
-def text(
+def text(  # pylint: disable=too-many-arguments
     default: str = "",
     *,
     strip: bool = False,
@@ -300,12 +304,14 @@ def _raw(environ: Mapping[str, str], variables: Sequence[str]) -> str | None:
 
 
 @dataclass(repr=False, eq=False)
-class Settings:
+class Settings:  # pylint: disable=too-many-instance-attributes
     """Every setting with its default and limits. Read them through ``settings``.
 
     ``repr`` is the plain object one, so no log line can show a value.
     """
 
+    # Each field is named after its environment variable.
+    # pylint: disable=invalid-name
     DATABASE_URL: str = text("postgresql://user:password@localhost:5432/spike")
     AWS_REGION: str = text("ap-southeast-2")
     AUTH_PROVIDER: str = text(

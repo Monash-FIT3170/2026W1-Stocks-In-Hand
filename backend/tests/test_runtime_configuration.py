@@ -44,7 +44,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PARAMETER = "/stocks-in-hand/test/secret"
 # The code that runs in the API, the Lambdas and migrations. scripts/ and
 # tools/ are local tools.
-RUNTIME_CODE = ("app", "lambdas", "parsing", "scrapers", "alembic", "main.py", "lambda_api.py")
+RUNTIME_PACKAGES = ("app", "lambdas", "parsing", "scrapers", "alembic")
+RUNTIME_MODULES = ("main.py", "lambda_api.py")
 # Facts AWS sets about the process, which are not settings. "os.environ" is
 # the whole environment, which Chromium inherits in Lambda.
 AWS_RUNTIME_READS = {
@@ -318,9 +319,8 @@ def test_patching_settings_patches_the_built_settings_and_restores_them(
             pass
 
 
-def test_patching_before_the_first_read_builds_the_settings_first(
-    unbuilt_settings: None,
-) -> None:
+@pytest.mark.usefixtures("unbuilt_settings")
+def test_patching_before_the_first_read_builds_the_settings_first() -> None:
     with patch.object(settings, "ALERT_DAILY_BUDGET", 7):
         assert get_settings().ALERT_DAILY_BUDGET == 7
 
@@ -350,7 +350,9 @@ def test_a_secret_is_read_from_the_parameter_its_variable_names(secret: Secret) 
 def test_a_secret_that_is_set_is_not_read_from_its_parameter(secret: Secret, value: str) -> None:
     parameters = InMemoryParameterStore({PARAMETER: "https://value.example/ssm"})
 
-    read = _setting(secret, {secret.variable: PARAMETER, secret.setting: value}, parameters=parameters)
+    environ = {secret.variable: PARAMETER, secret.setting: value}
+
+    read = _setting(secret, environ, parameters=parameters)
 
     assert read == _setting(secret, {secret.setting: value})
     assert parameters.requested == []
@@ -419,10 +421,8 @@ def test_ssm_raises_any_other_error() -> None:
         SsmParameterStore(FakeSsm("AccessDeniedException")).get(PARAMETER)
 
 
-def test_the_first_read_resolves_secrets_from_ssm(
-    unbuilt_settings: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("unbuilt_settings")
+def test_the_first_read_resolves_secrets_from_ssm(monkeypatch: pytest.MonkeyPatch) -> None:
     ssm = InMemoryParameterStore({PARAMETER: "brevo-key-from-ssm"})
     monkeypatch.setattr(config, "SsmParameterStore", lambda: ssm)
     monkeypatch.delenv("BREVO_API_KEY", raising=False)
@@ -467,9 +467,8 @@ def _environment_reads(path: Path) -> set[str]:
 def test_only_the_configuration_reads_the_environment() -> None:
     """A setting read anywhere else would skip its declared default and limits."""
     paths = [
-        path
-        for entry in RUNTIME_CODE
-        for path in ([BACKEND / entry] if entry.endswith(".py") else (BACKEND / entry).rglob("*.py"))
+        *(BACKEND / module for module in RUNTIME_MODULES),
+        *(path for package in RUNTIME_PACKAGES for path in (BACKEND / package).rglob("*.py")),
     ]
     unexpected = {}
     for path in paths:

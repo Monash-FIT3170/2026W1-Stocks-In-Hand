@@ -5,8 +5,10 @@ model (``tools.template_model``) and check two kinds of thing:
 
 - Rules every queue and function must follow, such as "every consumed queue
   has a dead-letter queue" or "every *_QUEUE_URL variable has a SendMessage
-  grant". Each rule is also run against a template broken on purpose, so a
-  rule that can never fail is caught.
+  grant". The runtime configuration's rules check each function's
+  environment against ``app.core.config``: its variables, values and secrets.
+  Each rule is also run against a template broken on purpose, so a rule that
+  can never fail is caught.
 - The pipeline's intended shape: which function consumes and sends to which
   queue, and the S3 to SQS hand-off into the analysis queue.
 
