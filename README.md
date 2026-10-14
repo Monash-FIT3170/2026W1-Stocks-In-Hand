@@ -131,7 +131,9 @@ docker compose --env-file backend/.env -f docker-compose-dev.yml up -d --build b
 
 The normal Compose command keeps placeholder AWS credentials, so it cannot make
 an accidental paid Bedrock call. Confirm model access before testing one bounded
-summary request.
+request that the API answers itself, such as `POST /llm/categorise/recent` with
+a small `limit`. The summary routes only queue a request for the analysis
+worker, so on this stack they answer 503.
 
 ## Watchlist email alerts
 
