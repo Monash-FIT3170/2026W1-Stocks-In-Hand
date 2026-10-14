@@ -54,7 +54,7 @@ services:
 
   content-bootstrap:
     # One-shot, bounded development collector. It cannot block backend/frontend
-    # startup and the storage pipeline skips documents already in PostgreSQL.
+    # startup, and it does not analyse a document it has already analysed.
     env_file:
       - ./backend/.env
     build:

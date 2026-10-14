@@ -14,6 +14,9 @@ services:
     image: stocks-in-hand-backend:local
     environment:
       DISCOVERY_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-discovery
+      # Fetched news, collected public discussion and summary requests are
+      # queued for the analysis worker.
+      ANALYSIS_QUEUE_URL: http://localstack:4566/000000000000/stocks-in-hand-local-analysis
       RAW_DOCUMENT_BUCKET: stocks-in-hand-local-raw
       AWS_ENDPOINT_URL: http://localstack:4566
       AWS_ACCESS_KEY_ID: test

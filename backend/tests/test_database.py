@@ -765,7 +765,7 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
 
     ``Ticker -> Artifact -> ArtifactSentiment / ArtifactSummary`` is the whole
     analysis path that survived the schema refactor. ``crud.artifact.store_artifact_analysis``
-    (called from ``lambdas/analysis.py``) writes all three in one pass, and the
+    (called from ``lambdas/artifact_analysis_records.py``) writes all three in one pass, and the
     ticker overview and deep-dive endpoints read them back through the
     ``sentiments`` and ``summaries`` relationships, so both directions need to work.
     """

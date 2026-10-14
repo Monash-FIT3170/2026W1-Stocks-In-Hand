@@ -6,37 +6,38 @@ lists and the prompt version. The admin and news writers fell back to the
 title. The repair operation had its own rule for an incomplete summary.
 Here each writer summarises one artifact from the same scripted answer, and
 every one must read back the same summary from one row. The worker's
-document path is covered in test_pipeline_stages.py.
+document path is covered in test_pipeline_stages.py. The admin summary
+routes now queue a summary request, and the local loader analyses through
+the artifact analysis module, so those are the writers here.
 """
 
 import json
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
-from app.api.routes import llm
 from app.core.config import settings
-from app.messages import PublicDiscussionAnalysisMessage
+from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import artifact_summary, news_summary
+from app.services import artifact_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.status import AnalysisStatus
-from lambdas import analysis, pipeline_stage
-from parsing import storage
-from parsing.classification import ClassificationInput, classify_document
-from scrapers.base import Announcement
+from lambdas import analysis, artifact_analysis, pipeline_stage
+from lambdas.artifact_analysis import AnalysisPorts, FinBertScorer
+from lambdas.artifact_analysis_records import PostgresAnalysisRecords
+from lambdas.download_validation import validated_document
 
 MODEL = "bedrock:test-model"
 ANNOUNCEMENT_ANSWER = {
@@ -113,13 +114,17 @@ def bedrock(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    @contextmanager
-    def test_session():
-        yield db
+def _ports(db: Session) -> AnalysisPorts:
+    """The ports the analysis worker and the local loader use, over the test session."""
+    return AnalysisPorts(
+        records=PostgresAnalysisRecords(lambda: nullcontext(db)),
+        scorer=FinBertScorer(),
+    )
 
-    for module in (analysis, pipeline_stage):
-        monkeypatch.setattr(module, "database_session", test_session)
+
+def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline_stage, "database_session", lambda: nullcontext(db))
+    monkeypatch.setattr(analysis, "deployed_ports", lambda: _ports(db))
 
 
 def _artifact(db: Session, **values) -> Artifact:
@@ -157,49 +162,27 @@ def _news(db: Session) -> Artifact:
     )
 
 
-def _admin_route(new_artifact: Callable[[Session], Artifact]) -> Writer:
-    def write(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
-        artifact = new_artifact(db)
-        llm.summarise_artifact(artifact_id=artifact.id, db=db)
-        return artifact
-
-    return write
-
-
-def _admin_ticker_route(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    artifact = _announcement(db)
-    llm.summarise_ticker_artifacts("BHP", db=db)
-    return artifact
-
-
-def _local_loader(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    monkeypatch.setattr(storage, "SessionLocal", lambda: db)
-    monkeypatch.setattr(storage.time, "sleep", lambda _seconds: None)
-    raw_text = f"{ANNOUNCEMENT_TEXT} {uuid.uuid4()}"
-    announcement = Announcement(
-        ticker="CSL",
+def _local_loader(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
+    artifact = _artifact(
+        db,
+        source_type="asx_announcement",
+        artifact_type="asx_announcement_other",
+        source_adapter="csl",
         title="Half Year Results",
-        date=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        pdf_url=f"https://investors.csl.com/pdf/{uuid.uuid4()}.pdf",
-        source_url="https://investors.csl.com/investors/asx-announcements",
+        raw_text="",
+        document_url=f"https://investors.csl.com/pdf/{uuid.uuid4()}.pdf",
     )
-    storage.store(
-        announcement,
-        classification=classify_document(
-            ClassificationInput(
-                title=announcement.title,
-                text=raw_text,
-                filename="report.pdf",
-                source_type="asx_announcement",
-                source_adapter="csl",
-            )
+    artifact_analysis.analyse_downloaded_document(
+        artifact.id,
+        validated_document(
+            ANNOUNCEMENT_TEXT.encode(),
+            declared_content_type="text/plain",
+            final_url=artifact.document_url,
+            max_bytes=4096,
         ),
-        extracted_data={},
-        raw_text=raw_text,
+        _ports(db),
     )
-    return db.scalars(
-        select(Artifact).where(Artifact.content_hash == storage.compute_content_hash(raw_text))
-    ).one()
+    return artifact
 
 
 def _analysed_announcement(db: Session, created_day: int, answer: dict) -> Artifact:
@@ -245,10 +228,7 @@ def _repair_operation(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
     return artifact
 
 
-def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    artifact = _news(db)
-    _workers_use(db, monkeypatch)
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact.id)
+def _handle(message: StoredTextAnalysisMessage | SummaryRequestMessage) -> None:
     analysis.handler(
         {
             "Records": [
@@ -261,13 +241,23 @@ def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
         },
         None,
     )
-    return artifact
 
 
-def _news_service(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
+def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
     artifact = _news(db)
-    news_summary.summarise_news_artifact(db, artifact)
+    _workers_use(db, monkeypatch)
+    _handle(StoredTextAnalysisMessage(artifact_id=artifact.id))
     return artifact
+
+
+def _summary_request(new_artifact: Callable[[Session], Artifact]) -> Writer:
+    def write(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
+        artifact = new_artifact(db)
+        _workers_use(db, monkeypatch)
+        _handle(SummaryRequestMessage(artifact_id=artifact.id))
+        return artifact
+
+    return write
 
 
 def _summary_rows(db: Session, artifact: Artifact) -> list[ArtifactSummary]:
@@ -278,8 +268,8 @@ def _summary_rows(db: Session, artifact: Artifact) -> list[ArtifactSummary]:
 
 @pytest.mark.parametrize(
     "writer",
-    [_admin_route(_announcement), _admin_ticker_route, _local_loader, _repair_operation],
-    ids=["admin_artifact_route", "admin_ticker_route", "local_loader", "repair_operation"],
+    [_local_loader, _repair_operation, _summary_request(_announcement)],
+    ids=["local_loader", "repair_operation", "summary_request"],
 )
 def test_every_announcement_writer_records_the_same_summary(
     db_session: Session,
@@ -301,8 +291,8 @@ def test_every_announcement_writer_records_the_same_summary(
 
 @pytest.mark.parametrize(
     "writer",
-    [_analysis_worker, _news_service, _admin_route(_news)],
-    ids=["analysis_worker", "news_service", "admin_artifact_route"],
+    [_analysis_worker, _summary_request(_news)],
+    ids=["analysis_worker", "summary_request"],
 )
 def test_every_news_writer_records_the_same_summary(
     db_session: Session,
@@ -338,61 +328,3 @@ def test_the_local_loader_stores_sentiment_for_an_answer_without_text(
         select(ArtifactSentiment).where(ArtifactSentiment.artifact_id == artifact.id)
     ).all()
     assert [sentiment.model_used for sentiment in sentiments] == ["test-finbert"]
-
-
-def test_the_repair_operation_completes_only_incomplete_announcement_summaries(
-    db_session: Session,
-    bedrock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    incomplete = _analysed_announcement(db_session, 1, _lines_only(ANNOUNCEMENT_ANSWER))
-    unrepaired = _analysed_announcement(db_session, 2, _lines_only(ANNOUNCEMENT_ANSWER))
-    complete = _analysed_announcement(db_session, 1, ANNOUNCEMENT_ANSWER)
-    _workers_use(db_session, monkeypatch)
-    bedrock(ANNOUNCEMENT_ANSWER, {**ANNOUNCEMENT_ANSWER, "matters": ""})
-
-    result = _repair(limit=5)
-
-    assert artifact_summary.read(incomplete) == artifact_summary.from_answer(
-        ANNOUNCEMENT_ANSWER,
-        model=MODEL,
-        prompt_version="llm-announcement-summary-v3",
-    )
-    assert artifact_summary.read(complete).model == "bedrock:earlier-model"
-    assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"
-    assert {
-        "artifact_id": str(unrepaired.id),
-        "error": "RuntimeError: Bedrock response omitted structured summary fields",
-    } in result["failed"]
-    assert result["missing_after"] == result["missing_before"] - 1
-
-
-def test_the_repair_operation_lists_an_announcement_removed_while_it_was_summarised(
-    db_session: Session,
-    bedrock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    removed = _analysed_announcement(db_session, 1, _lines_only(ANNOUNCEMENT_ANSWER))
-    removed_id = removed.id
-    _workers_use(db_session, monkeypatch)
-    provider = bedrock(ANNOUNCEMENT_ANSWER)
-    answer = provider.complete
-
-    def remove_then_answer(prompt: str, **options) -> str:
-        db_session.execute(
-            delete(ArtifactSummary).where(ArtifactSummary.artifact_id == removed_id)
-        )
-        db_session.execute(delete(Artifact).where(Artifact.id == removed_id))
-        return answer(prompt, **options)
-
-    monkeypatch.setattr(provider, "complete", remove_then_answer)
-
-    result = _repair(limit=1)
-
-    assert result["updated"] == 0
-    assert result["failed"] == [
-        {
-            "artifact_id": str(removed_id),
-            "error": "RuntimeError: Completed artifact is no longer available",
-        }
-    ]

@@ -45,6 +45,7 @@ def _stage_artifact_analysis(
     artifact_id: UUID,
     raw_text: str,
     metadata: dict[str, Any] | None,
+    artifact_type: str | None,
     summary: Summary | None,
     sentiment: dict[str, Any] | None,
 ) -> Artifact:
@@ -62,6 +63,8 @@ def _stage_artifact_analysis(
         **(artifact.artifact_metadata or {}),
         **(metadata or {}),
     }
+    if artifact_type is not None:
+        artifact.artifact_type = artifact_type
 
     if summary is not None:
         artifact_summary.record(db, artifact, summary)
@@ -85,10 +88,14 @@ def store_artifact_analysis(
     artifact_id: UUID,
     raw_text: str,
     metadata: dict[str, Any] | None = None,
+    artifact_type: str | None = None,
     summary: Summary | None = None,
     sentiment: dict[str, Any] | None = None,
 ) -> Artifact:
     """Atomically store extracted text, the summary and the sentiment row.
+
+    ``artifact_type`` replaces the stored type when it is given, so an
+    analysed announcement is stored under its category's type.
 
     The artifact row is locked (`with_for_update`) for the duration of the
     transaction, which serializes concurrent `store_artifact_analysis` calls
@@ -103,6 +110,7 @@ def store_artifact_analysis(
         artifact_id=artifact_id,
         raw_text=raw_text,
         metadata=metadata,
+        artifact_type=artifact_type,
         summary=summary,
         sentiment=sentiment,
     )
@@ -115,6 +123,7 @@ def store_artifact_analysis(
             artifact_id=artifact_id,
             raw_text=raw_text,
             metadata=metadata,
+            artifact_type=artifact_type,
             summary=summary,
             sentiment=sentiment,
         )

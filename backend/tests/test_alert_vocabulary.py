@@ -8,7 +8,6 @@ by NotificationMessage, so they never fired.
 import re
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -20,30 +19,8 @@ from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.crud.alert_rule import KNOWN_SENTIMENT_LABELS
 from app.messages import NotificationMessage
 from app.schemas.notification import NotificationPreferencesUpdate
-from lambdas import analysis
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-
-
-@pytest.mark.parametrize("label", sorted(ALERT_SENTIMENT_LABELS))
-def test_producer_publishes_every_alertable_label(
-    monkeypatch: pytest.MonkeyPatch,
-    label: str,
-) -> None:
-    publish = MagicMock()
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-    monkeypatch.setattr(analysis, "_publish_notification", publish)
-
-    analysis._try_publish_notification(
-        artifact_id=uuid4(),
-        ticker="CSL",
-        scrape_run_id=uuid4(),
-        sentiment={"sentiment_label": label, "confidence_score": 0.9},
-        correlation="message-1",
-        attempt=1,
-    )
-
-    publish.assert_called_once()
 
 
 @pytest.mark.parametrize("label", sorted(ALERT_SENTIMENT_LABELS))

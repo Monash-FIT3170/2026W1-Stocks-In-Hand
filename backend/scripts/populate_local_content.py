@@ -1,4 +1,11 @@
-"""Populate a local database with bounded ASX, news, and Reddit content."""
+"""Populate a local database with bounded ASX, news, and Reddit content.
+
+ASX documents and news stories are analysed in this process through the
+artifact analysis module, exactly as the analysis worker would analyse
+them, so the local stack needs no queues. A document already analysed is
+not analysed again; it is only summarised again while its summary is
+incomplete, for example after an LLM key is added.
+"""
 
 from __future__ import annotations
 
@@ -6,12 +13,16 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.orm import Session
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -19,17 +30,28 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.core.config import settings
+from app.crud import artifact as artifact_crud
+from app.crud import information_platform as platform_crud
+from app.crud import ticker as ticker_crud
 from app.database.connection import SessionLocal
-from app.services import discussion_collector, marketaux
+from app.models.artifact import Artifact
+from app.models.information_platform import InformationPlatform
+from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
+from app.schemas.information_platform import InformationPlatformCreate
+from app.services import artifact_summary, discussion_collector, marketaux
 from app.services.discussion_sources.reddit import REDDIT
-from lambdas.download_validation import document_size_limit
-from parsing.pipeline import process_announcement
+from app.services.title_normalization import normalise_title
+from app.sources import source_for_ticker
+from lambdas import artifact_analysis
+from lambdas.artifact_analysis import AlreadyAnalysed, Analysed, AnalysisPorts
+from lambdas.download_validation import DownloadedDocument, document_size_limit
 from scrapers.adapter import DocumentRequest
 from scrapers.base import Announcement
 from scrapers.registry import adapter_for
 
 
 LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "db", "localhost", "postgres"}
+SessionScope = Callable[[], AbstractContextManager[Session]]
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -70,8 +92,11 @@ def require_local_database() -> None:
         )
 
 
-async def download_announcement(announcement: Announcement, directory: Path) -> Path:
-    """Fetch one document the way the download worker does and save it locally."""
+async def download_announcement(
+    announcement: Announcement,
+    directory: Path,
+) -> DownloadedDocument:
+    """Fetch one document the way the download worker does and save a copy."""
     downloaded = await adapter_for(announcement.ticker).fetch_document(
         DocumentRequest(
             document_url=announcement.pdf_url,
@@ -85,12 +110,68 @@ async def download_announcement(announcement: Announcement, directory: Path) -> 
         for character in announcement.title
     ).strip("_")[:120] or "announcement"
     directory.mkdir(parents=True, exist_ok=True)
-    destination = (
+    announcement.local_path = (
         directory
         / f"{announcement.date:%Y-%m-%d}_{clean_title}.{downloaded.extension}"
     )
-    destination.write_bytes(downloaded.content)
-    return destination
+    announcement.local_path.write_bytes(downloaded.content)
+    return downloaded
+
+
+def _asx_platform(db: Session) -> InformationPlatform:
+    platform = platform_crud.get_platform_by_name(db, "ASX")
+    if platform is not None:
+        return platform
+    return platform_crud.create_platform(
+        db,
+        InformationPlatformCreate(
+            name="ASX",
+            platform_type="asx_announcements",
+            scrape_enabled=True,
+        ),
+    )
+
+
+def _document_artifact(
+    db: Session,
+    announcement: Announcement,
+    document: DownloadedDocument,
+) -> tuple[UUID, bool]:
+    """The artifact for a downloaded document, created on first sight.
+
+    A document is known by its checksum. Returns the artifact's id and
+    whether a summary it already has is incomplete.
+    """
+    content_hash = f"document:{document.checksum}"
+    existing = artifact_crud.get_artifact_by_hash(db, content_hash)
+    if existing is not None:
+        return existing.id, artifact_summary.needs_summary(existing)
+    artifact = artifact_crud.create_artifact(
+        db,
+        ArtifactCreate(
+            source_type=SourceType.ASX_ANNOUNCEMENT,
+            # Analysis stores the category's own type.
+            artifact_type=ArtifactType.ASX_ANNOUNCEMENT_OTHER,
+            title=normalise_title(
+                announcement.title,
+                announcement.source_url or announcement.pdf_url,
+            ),
+            url=announcement.source_url or "",
+            document_url=announcement.pdf_url,
+            published_at=announcement.date,
+            content_hash=content_hash,
+            raw_text="",
+            ticker_id=ticker_crud.ensure_ticker(db, announcement.ticker).id,
+            platform_id=_asx_platform(db).id,
+            source_adapter=source_for_ticker(announcement.ticker).adapter,
+            artifact_metadata={
+                "pdf_url": announcement.pdf_url,
+                "source_url": announcement.source_url,
+                **announcement.metadata,
+            },
+        ),
+    )
+    return artifact.id, False
 
 
 async def collect_asx(
@@ -99,7 +180,11 @@ async def collect_asx(
     lookback_days: int,
     max_documents: int,
     output_dir: Path,
+    session_scope: SessionScope = SessionLocal,
+    ports: AnalysisPorts | None = None,
 ) -> dict:
+    """Download each ticker's recent announcements, keep a copy and analyse them."""
+    ports = ports or artifact_analysis.local_ports()
     result = {"found": 0, "processed": 0, "errors": []}
     for ticker in tickers:
         try:
@@ -116,11 +201,16 @@ async def collect_asx(
 
         for announcement in selected:
             try:
-                announcement.local_path = await download_announcement(
-                    announcement,
-                    output_dir / ticker,
+                downloaded = await download_announcement(announcement, output_dir / ticker)
+                with session_scope() as db:
+                    artifact_id, needs_summary = _document_artifact(
+                        db, announcement, downloaded
+                    )
+                outcome = artifact_analysis.analyse_downloaded_document(
+                    artifact_id, downloaded, ports
                 )
-                process_announcement(announcement)
+                if isinstance(outcome, AlreadyAnalysed) and needs_summary:
+                    artifact_analysis.summarise(artifact_id, ports)
                 result["processed"] += 1
             except Exception as exc:  # noqa: BLE001
                 result["errors"].append(
@@ -134,14 +224,34 @@ async def collect_asx(
     return result
 
 
-def collect_news(tickers: list[str], *, limit: int) -> dict:
+def _analyse_story(ports: AnalysisPorts) -> marketaux.AnalyseStory:
+    """Analyse a stored story in this process instead of queueing it."""
+
+    def analyse(_db: Session, story: Artifact) -> bool:
+        outcome = artifact_analysis.analyse_stored_text(story.id, ports)
+        if isinstance(outcome, AlreadyAnalysed) and artifact_summary.needs_summary(story):
+            artifact_analysis.summarise(story.id, ports)
+        return isinstance(outcome, Analysed)
+
+    return analyse
+
+
+def collect_news(
+    tickers: list[str],
+    *,
+    limit: int,
+    ports: AnalysisPorts | None = None,
+) -> dict:
     if not settings.MARKETAUX_API_TOKEN:
         return {"status": "skipped", "reason": "MARKETAUX_API_TOKEN is not configured"}
+    analyse = _analyse_story(ports or artifact_analysis.local_ports())
     results = []
     with SessionLocal() as db:
         for ticker in tickers:
             try:
-                results.append(marketaux.fetch_and_store_news(ticker, limit, db))
+                results.append(
+                    marketaux.fetch_and_store_news(ticker, limit, db, analyse=analyse)
+                )
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 results.append({"symbol": ticker, "error": str(exc)})

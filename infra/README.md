@@ -118,10 +118,12 @@ tickers per run and 25 articles per ticker. `ScheduleEnabled` must also be
 `true` for this automatic collection to run. The API can still fetch Marketaux
 news on demand when Marketaux is enabled and the weekly schedule is disabled.
 
-Scheduled Marketaux records are stored first, then sent to the analysis queue.
-The analysis worker uses the news-specific Bedrock prompt and stores the four
-display fields before the announcements page reads them. A repeated bounded run
-also queues duplicate articles that were stored before this wiring existed.
+Marketaux records, scheduled or fetched on demand, are stored first, then sent
+to the analysis queue. The analysis worker scores each one with FinBERT, uses the
+news-specific Bedrock prompt and stores the four display fields before the
+announcements page reads them. A repeated bounded run also queues duplicate
+articles that were stored but never analysed, such as the ones the API used to
+summarise inline.
 
 Reddit credentials and the blog feed allowlist are optional. Store them only
 when those sources are enabled:

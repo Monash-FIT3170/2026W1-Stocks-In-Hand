@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import io
 import math
-import os
 import zipfile
 from dataclasses import dataclass
 from functools import lru_cache
 from html.parser import HTMLParser
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
@@ -23,10 +22,6 @@ from parsing.classification import (
 )
 from parsing.classification.taxonomy import category_definition
 
-if TYPE_CHECKING:
-    from app.services.artifact_summary import Summary
-    from app.services.generation import Generated, Unavailable
-
 
 @dataclass(frozen=True)
 class ParsedDocument:
@@ -36,31 +31,6 @@ class ParsedDocument:
     category_confidence: float
     extracted_data: dict[str, Any]
     classification: ClassificationResult | None = None
-
-
-@dataclass(frozen=True)
-class AnalysisOutput:
-    parsed: ParsedDocument
-    summary: Summary | None
-    sentiment: dict[str, Any]
-
-
-def _analysis_output(
-    parsed: ParsedDocument,
-    generated: Generated[dict[str, Any]] | Unavailable,
-    sentiment: dict[str, Any],
-) -> AnalysisOutput:
-    """Sentiment always; the summary only when an LLM wrote one with text."""
-    from app.services import artifact_summary, generation
-
-    if isinstance(generated, generation.Unavailable):
-        return AnalysisOutput(parsed=parsed, summary=None, sentiment=sentiment)
-    summary = artifact_summary.from_generated(generated)
-    return AnalysisOutput(
-        parsed=parsed,
-        summary=summary if summary.lines else None,
-        sentiment=sentiment,
-    )
 
 
 @lru_cache(maxsize=1)
@@ -318,15 +288,14 @@ def extract_document(
     document_format: DocumentFormat,
     max_pages: int,
     max_ocr_pages: int,
+    max_ocr_pixels_per_page: int,
 ) -> ParsedDocument:
     if document_format == "pdf":
         return extract_pdf(
             content,
             max_pages=max_pages,
             max_ocr_pages=max_ocr_pages,
-            max_ocr_pixels_per_page=int(
-                os.getenv("MAX_OCR_PIXELS_PER_PAGE", "8000000")
-            ),
+            max_ocr_pixels_per_page=max_ocr_pixels_per_page,
         )
     if document_format == "txt":
         return extract_text(content)
@@ -371,124 +340,4 @@ def apply_rules(
         category_confidence=classification.score,
         extracted_data=extracted_data,
         classification=classification,
-    )
-
-
-def analyse_document(
-    content: bytes,
-    *,
-    title: str,
-    max_pages: int,
-    document_format: DocumentFormat = "pdf",
-    max_ocr_pages: int | None = None,
-    filename: str | None = None,
-    source_type: str | None = None,
-    source_adapter: str | None = None,
-) -> AnalysisOutput:
-    parsed = apply_rules(
-        extract_document(
-            content,
-            document_format=document_format,
-            max_pages=max_pages,
-            max_ocr_pages=max_ocr_pages
-            if max_ocr_pages is not None
-            else int(os.getenv("MAX_OCR_PAGES", "5")),
-        ),
-        title=title,
-        filename=filename,
-        source_type=source_type,
-        source_adapter=source_adapter,
-    )
-
-    # Sentiment is based on deterministic source text. An LLM response must not
-    # change the FinBERT input on message retries.
-    from app.services import sentiment as sentiment_service
-
-    sentiment = sentiment_service.analyse_text(
-        sentiment_service.sentiment_input(title, parsed.raw_text)
-    )
-
-    from app.services import generation
-
-    return _analysis_output(
-        parsed,
-        generation.generate(
-            generation.AnnouncementSummary(
-                title=title,
-                category=parsed.category,
-                extracted_data=parsed.extracted_data,
-                raw_text=parsed.raw_text,
-            )
-        ),
-        sentiment,
-    )
-
-
-def analyse_public_discussion_text(
-    *,
-    title: str,
-    raw_text: str,
-    source_type: str,
-) -> AnalysisOutput:
-    """Analyse stored discussion text without treating it as a company filing."""
-    parsed = _text_document(raw_text or title)
-    from app.services import sentiment as sentiment_service
-
-    sentiment = sentiment_service.analyse_text(
-        sentiment_service.sentiment_input(title, parsed.raw_text)
-    )
-
-    from app.services import generation
-
-    return _analysis_output(
-        ParsedDocument(
-            raw_text=parsed.raw_text,
-            page_count=1,
-            category="USER_DISCUSSION",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        generation.generate(
-            generation.DiscussionSummary(
-                title=title,
-                source_type=source_type,
-                raw_text=parsed.raw_text,
-            )
-        ),
-        sentiment,
-    )
-
-
-def analyse_news_text(
-    *,
-    title: str,
-    raw_text: str,
-    source_name: str | None = None,
-) -> AnalysisOutput:
-    """Analyse stored publisher text with the news-specific summary prompt."""
-    parsed = _text_document(raw_text or title)
-    from app.services import sentiment as sentiment_service
-
-    sentiment = sentiment_service.analyse_text(
-        sentiment_service.sentiment_input(title, parsed.raw_text)
-    )
-
-    from app.services import generation
-
-    return _analysis_output(
-        ParsedDocument(
-            raw_text=parsed.raw_text,
-            page_count=1,
-            category="NEWS_ARTICLE",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        generation.generate(
-            generation.NewsSummary(
-                title=title,
-                source_name=source_name,
-                raw_text=parsed.raw_text,
-            )
-        ),
-        sentiment,
     )

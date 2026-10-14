@@ -131,7 +131,9 @@ docker compose --env-file backend/.env -f docker-compose-dev.yml up -d --build b
 
 The normal Compose command keeps placeholder AWS credentials, so it cannot make
 an accidental paid Bedrock call. Confirm model access before testing one bounded
-summary request.
+request that the API answers itself, such as `POST /llm/categorise/recent` with
+a small `limit`. The summary routes only queue a request for the analysis
+worker, so on this stack they answer 503.
 
 ## Watchlist email alerts
 
@@ -196,13 +198,19 @@ signed email link, so they do not need to be added to Brevo first. See the
 | POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
 ### LLM routes
-Admin only. Each answers 503 when no LLM provider is switched on.
+Admin only. The category route asks the LLM while you wait and answers 503 when
+no LLM provider is switched on. The summary routes queue a summary request for
+the analysis worker and answer 202; the worker writes the summary shortly after.
+When no LLM is switched on, or the LLM's answer has no text, it logs
+`summary_unavailable` with the artifact and the reason, and the artifact keeps
+its summary. They answer 503 when `ANALYSIS_QUEUE_URL` is not set, so locally
+they need the LocalStack overlay described in "Local pipeline development".
 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
-| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no complete summary: all four lines, plus both clarity lists for an announcement. Params: `limit` |
-| POST | `/llm/summarise/artifact/{artifact_id}` | Summarises one artifact, replacing its summary |
+| POST | `/llm/summarise/ticker/{symbol}` | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` (1 to 50, default 50; each request is one LLM call) |
+| POST | `/llm/summarise/artifact/{artifact_id}` | Queues a new summary of one artifact, which replaces its summary |
 
 ### Scraping
 | Method | Path | Description |
@@ -239,14 +247,17 @@ docker compose down -v     # stop + wipe the database
 `docker-compose-dev.yml` includes a one-shot `content-bootstrap` service. After
 the backend is healthy it checks the official company sources for the supported
 tickers, processes at most three announcements per ticker from the last year,
-and exits. Existing documents and complete summaries are retained, so the job
-is safe to run again on later Docker starts.
+and exits. It analyses each document in its own process through the same
+artifact analysis module as the AWS analysis worker, so the document is read
+with the OCR fallback, classified, scored by FinBERT and summarised, and needs
+no queues. A document already analysed is not analysed again, so the job is
+safe to run again on later Docker starts.
 
 Local Docker uses the Groq fallback by default. Add `GROQ_API_KEY` to the
 untracked `backend/.env` to generate structured summaries. Without a key, the
-website still starts and collected announcements remain available, but summary
-generation is skipped. The bootstrap is development-only and is not used by
-the AWS deployment.
+website still starts and collected announcements are analysed without a
+summary; a later run with a key summarises them. The bootstrap is
+development-only and is not used by the AWS deployment.
 
 To start the application without running collection, name only the long-running
 services:

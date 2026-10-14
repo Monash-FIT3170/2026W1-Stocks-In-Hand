@@ -66,7 +66,8 @@ PYTHONPATH=backend python -m tools.evaluate_classification --classifier current
 ## Reclassifying stored artifacts
 
 The command reads only artifacts that already contain raw text and have an older
-classifier version. It updates classification metadata in bounded batches. It
+classifier version. It updates classification metadata in bounded batches, and
+gives an announcement its new category's artifact type, as analysis does. It
 does not run discovery, download, summary, sentiment or metric extraction.
 
 Preview one ticker:

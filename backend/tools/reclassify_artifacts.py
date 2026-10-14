@@ -10,6 +10,7 @@ from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
 from parsing.classification import ClassificationInput, classify_document
+from parsing.classification.taxonomy import artifact_type_for
 from parsing.classification_metadata import merge_classification_metadata
 
 
@@ -86,7 +87,12 @@ def reclassify_records(
     artifacts: Iterable[Any],
     options: ReclassificationOptions,
 ) -> ReclassificationSummary:
-    """Reclassify an already selected bounded set without other analysis work."""
+    """Reclassify an already selected bounded set without other analysis work.
+
+    An announcement whose classification is rewritten is stored under its
+    new category's artifact type, as analysis stores it. News and public
+    discussion keep the type their collector set.
+    """
     summary = ReclassificationSummary()
     for artifact in artifacts:
         if summary.scanned >= options.limit:
@@ -123,6 +129,10 @@ def reclassify_records(
                 summary.changed += 1
                 if not options.dry_run:
                     artifact.artifact_metadata = updated
+                    if getattr(artifact, "source_type", None) == "asx_announcement":
+                        artifact.artifact_type = artifact_type_for(
+                            result.compatibility_category
+                        )
             if result.status == "needs_review":
                 summary.ambiguous += 1
             elif result.status == "unknown":

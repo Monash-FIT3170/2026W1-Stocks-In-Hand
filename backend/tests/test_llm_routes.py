@@ -1,8 +1,9 @@
-"""The routes that generate on request, on Postgres with a scripted LLM.
+"""The routes that ask an LLM for something, on Postgres.
 
-The admin summary and category routes, and the investor Reddit digest, call
-the structured generation module directly. They record the model and prompt
-version it reports, and answer 503 when no LLM is switched on.
+The admin category route and the investor Reddit digest generate on
+request, with a scripted LLM, and answer 503 when no LLM is switched on.
+The admin summary routes generated inside the API Lambda's 30 seconds; now
+they queue a summary request for the analysis worker and answer 202.
 """
 
 import json
@@ -13,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,13 +25,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.models  # noqa: F401
 from app.api.routes import llm, reddit
 from app.core.config import settings
+from app.database.connection import get_db
+from app.messages import SummaryRequestMessage
 from app.models.artifact import Artifact
-from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import artifact_summary
+from app.services import analysis_queue
+from app.services.analysis_queue import AnalysisQueueUnavailable
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
+from app.status import AnalysisStatus
 
 ANNOUNCEMENT_SUMMARY = {
     "summary": "The company confirmed its dividend timetable.",
@@ -44,12 +49,6 @@ NEWS_SUMMARY = {
     "about": "The story covers BHP's quarterly copper output.",
     "changed": "Reported production increased.",
     "matters": "The increase may affect revenue expectations.",
-}
-# A well-formed answer the model left empty.
-EMPTY_SUMMARY = {
-    **{key: "" for key in artifact_summary.TEXT_LINES},
-    "confirmed_facts": [],
-    "speculation": [],
 }
 
 
@@ -84,6 +83,13 @@ def scripted(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
+@pytest.fixture()
+def queue(monkeypatch: pytest.MonkeyPatch) -> list[SummaryRequestMessage]:
+    """The requests the summary routes send, with the analysis queue configured."""
+    monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "https://sqs.example/analysis")
+    return []
+
+
 def _bhp(db: Session) -> Ticker:
     return db.scalars(select(Ticker).where(Ticker.symbol == "BHP")).one()
 
@@ -99,17 +105,35 @@ def _artifact(db: Session, **values) -> Artifact:
     return artifact
 
 
-def _announcement(db: Session) -> Artifact:
+def _announcement(db: Session, **values) -> Artifact:
     return _artifact(
         db,
-        source_type="asx_announcement",
-        artifact_type="dividend_announcement",
-        ticker_id=_bhp(db).id,
-        title="Dividend update",
-        raw_text="The company confirmed a dividend payment date.",
-        artifact_metadata={
-            "category": "DividendAnnouncement",
-            "extracted_data": {"payment_date": "2040-01-02"},
+        **{
+            "source_type": "asx_announcement",
+            "artifact_type": "dividend_announcement",
+            "ticker_id": _bhp(db).id,
+            "title": "Dividend update",
+            "raw_text": "The company confirmed a dividend payment date.",
+            "artifact_metadata": {
+                "category": "DividendAnnouncement",
+                "extracted_data": {"payment_date": "2040-01-02"},
+            },
+            **values,
+        },
+    )
+
+
+def _news(db: Session, **values) -> Artifact:
+    return _artifact(
+        db,
+        **{
+            "source_type": "news",
+            "artifact_type": "news_article",
+            "ticker_id": _bhp(db).id,
+            "title": "BHP production story",
+            "raw_text": "BHP reported an increase in quarterly copper production.",
+            "artifact_metadata": {"source_name": "Example News"},
+            **values,
         },
     )
 
@@ -126,158 +150,192 @@ def _reddit_post(db: Session, title: str, engagement: int) -> Artifact:
     )
 
 
-def _summary_row(db: Session, artifact: Artifact) -> ArtifactSummary:
-    return db.scalars(
-        select(ArtifactSummary).where(ArtifactSummary.artifact_id == artifact.id)
-    ).one()
+def _requested(sent: list[SummaryRequestMessage]) -> list[uuid.UUID]:
+    assert all(isinstance(message, SummaryRequestMessage) for message in sent)
+    return [message.artifact_id for message in sent]
 
 
-def test_artifact_summary_records_the_model_and_prompt_version(
-    db_session: Session,
-    scripted,
-) -> None:
-    artifact = _announcement(db_session)
-    provider = scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
-
-    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
-
-    row = _summary_row(db_session, artifact)
-    assert (row.model_used, row.prompt_version) == (
-        "scripted:test-model",
-        "llm-announcement-summary-v3",
-    )
-    assert result["prompt_version"] == "llm-announcement-summary-v3"
-    assert result["confirmed_facts"] == ANNOUNCEMENT_SUMMARY["confirmed_facts"]
-    assert artifact.artifact_metadata["speculation"] == ANNOUNCEMENT_SUMMARY["speculation"]
-    assert '"payment_date": "2040-01-02"' in provider.calls[0].prompt
-
-
-def test_summarising_an_announcement_again_replaces_its_clarity_lists(
-    db_session: Session,
-    scripted,
-) -> None:
-    artifact = _announcement(db_session)
-    revised = {
-        **ANNOUNCEMENT_SUMMARY,
-        "confirmed_facts": ["The record date is 1 December 2039."],
-        "speculation": [],
+def test_the_summary_routes_answer_202() -> None:
+    accepted = {
+        route.path: route.status_code
+        for route in llm.router.routes
+        if "/summarise/" in route.path
     }
-    scripted(json.dumps(ANNOUNCEMENT_SUMMARY), json.dumps(revised))
 
-    llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
-    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
-
-    summary = artifact_summary.read(artifact)
-    assert summary.confirmed_facts == ("The record date is 1 December 2039.",)
-    assert summary.speculation == ()
-    assert artifact.artifact_metadata["category"] == "DividendAnnouncement"
-    assert _summary_row(db_session, artifact).id == result["summary_id"]
+    assert accepted == {
+        "/llm/summarise/ticker/{symbol}": 202,
+        "/llm/summarise/artifact/{artifact_id}": 202,
+    }
 
 
-def test_an_answer_without_text_is_refused_with_502(
+def test_the_artifact_route_queues_one_summary_request(
     db_session: Session,
-    scripted,
+    queue: list[SummaryRequestMessage],
 ) -> None:
-    artifact = _announcement(db_session)
-    scripted(json.dumps(EMPTY_SUMMARY))
+    announcement = _announcement(db_session)
+
+    result = llm.summarise_artifact(announcement.id, db=db_session, send=queue.append)
+
+    assert result == {"artifact_id": announcement.id, "queued": True}
+    assert _requested(queue) == [announcement.id]
+
+
+@pytest.mark.parametrize(
+    ("artifact", "detail"),
+    [("missing", "Artifact not found"), ("textless", "Artifact has no text to summarise")],
+)
+def test_the_artifact_route_answers_404_with_nothing_to_summarise(
+    db_session: Session,
+    queue: list[SummaryRequestMessage],
+    artifact: str,
+    detail: str,
+) -> None:
+    artifact_id = (
+        uuid.uuid4() if artifact == "missing" else _announcement(db_session, raw_text=None).id
+    )
 
     with pytest.raises(HTTPException) as error:
-        llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+        llm.summarise_artifact(artifact_id, db=db_session, send=queue.append)
 
-    assert error.value.status_code == 502
-    assert artifact_summary.read(artifact) is None
+    assert (error.value.status_code, error.value.detail) == (404, detail)
+    assert queue == []
 
 
-def test_a_news_artifact_is_summarised_with_the_news_prompt(
+def test_the_ticker_route_queues_only_artifacts_without_a_complete_summary(
     db_session: Session,
-    scripted,
-) -> None:
-    artifact = _artifact(
-        db_session,
-        source_type="news",
-        artifact_type="news_article",
-        title="BHP production story",
-        raw_text="BHP reported an increase in quarterly copper production.",
-        artifact_metadata={"source_name": "Example News"},
-    )
-    provider = scripted(json.dumps(NEWS_SUMMARY))
-
-    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
-
-    assert result["about"] == NEWS_SUMMARY["about"]
-    assert _summary_row(db_session, artifact).prompt_version == "llm-news-summary-v2"
-    [call] = provider.calls
-    assert call.prompt.startswith("You are summarising a financial news story")
-    assert "Example News" in call.prompt
-
-
-def test_ticker_summaries_skip_artifacts_already_summarised(
-    db_session: Session,
-    scripted,
+    queue: list[SummaryRequestMessage],
 ) -> None:
     pending = _announcement(db_session)
-    _artifact(
-        db_session,
-        source_type="asx_announcement",
-        artifact_type="asx_announcement_other",
-        ticker_id=_bhp(db_session).id,
-        title="Already summarised",
-        raw_text="Text.",
-        artifact_metadata=ANNOUNCEMENT_SUMMARY,
-    )
-    scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
+    _announcement(db_session, artifact_metadata=ANNOUNCEMENT_SUMMARY)
+    # News has no clarity lists, so asking for them summarised it again every call.
+    _news(db_session, artifact_metadata={"source_name": "Example News", **NEWS_SUMMARY})
+    _news(db_session, analysis_status=AnalysisStatus.QUEUED)
 
-    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session, send=queue.append)
 
-    assert (result["processed"], result["skipped"], result["errors"]) == (1, 1, [])
-    assert _summary_row(db_session, pending).model_used == "scripted:test-model"
+    assert result == {
+        "ticker": "BHP",
+        "candidates": 4,
+        "queued": 1,
+        "skipped": 3,
+        "artifact_ids": [pending.id],
+        "errors": [],
+    }
+    assert _requested(queue) == [pending.id]
 
 
-def test_ticker_summaries_list_an_answer_without_text_and_go_on(
+def test_the_ticker_route_lists_a_request_the_queue_refused_and_sends_the_rest(
     db_session: Session,
-    scripted,
+    queue: list[SummaryRequestMessage],
 ) -> None:
-    announcements = [_announcement(db_session), _announcement(db_session)]
-    provider = scripted(json.dumps(EMPTY_SUMMARY), json.dumps(ANNOUNCEMENT_SUMMARY))
+    announcements = {_announcement(db_session).id, _announcement(db_session).id}
+    refused: list[uuid.UUID] = []
 
-    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+    def refuse_the_first(message: SummaryRequestMessage) -> None:
+        if not refused:
+            refused.append(message.artifact_id)
+            raise AnalysisQueueUnavailable("The analysis queue did not accept the request")
+        queue.append(message)
 
-    [unsummarised] = [a for a in announcements if artifact_summary.read(a) is None]
-    [summarised] = [a for a in announcements if a is not unsummarised]
-    assert (result["processed"], result["skipped"]) == (1, 0)
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session, send=refuse_the_first)
+
     assert result["errors"] == [
         {
-            "artifact_id": str(unsummarised.id),
-            "error": f"The summary of artifact {unsummarised.id} has no text",
+            "artifact_id": str(refused[0]),
+            "error": "The analysis queue did not accept the request",
         }
     ]
-    assert artifact_summary.is_complete(
-        artifact_summary.read(summarised),
-        source_type="asx_announcement",
-    )
-    assert len(provider.calls) == 2
+    assert result["queued"] == 1
+    assert {*result["artifact_ids"], *refused} == announcements
 
 
-def test_ticker_summaries_skip_news_that_has_all_four_lines(
+@pytest.mark.parametrize(("limit", "status"), [(0, 422), (51, 422), (50, 202)])
+def test_the_ticker_route_queues_at_most_50_requests(
     db_session: Session,
-    scripted,
+    queue: list[SummaryRequestMessage],
+    limit: int,
+    status: int,
 ) -> None:
-    """News has no clarity lists, so asking for them summarised it again every call."""
-    _artifact(
-        db_session,
-        source_type="news",
-        artifact_type="news_article",
-        ticker_id=_bhp(db_session).id,
-        title="BHP production story",
-        raw_text="BHP reported an increase in quarterly copper production.",
-        artifact_metadata={"source_name": "Example News", **NEWS_SUMMARY},
+    """Each request is one Bedrock call, and the analysis consumer has no concurrency cap."""
+    pending = _announcement(db_session)
+    api = FastAPI()
+    api.include_router(llm.router)
+    api.dependency_overrides[get_db] = lambda: db_session
+    api.dependency_overrides[analysis_queue.analysis_sender] = lambda: queue.append
+
+    response = TestClient(api).post(f"/llm/summarise/ticker/BHP?limit={limit}")
+
+    assert response.status_code == status
+    assert _requested(queue) == ([pending.id] if status == 202 else [])
+
+
+def test_the_ticker_route_answers_404_for_an_unknown_ticker(
+    db_session: Session,
+    queue: list[SummaryRequestMessage],
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        llm.summarise_ticker_artifacts("NOPE", db=db_session, send=queue.append)
+
+    assert (error.value.status_code, error.value.detail) == (404, "Ticker 'NOPE' not found")
+
+
+@pytest.mark.parametrize("route", ["summarise_artifact", "summarise_ticker"])
+def test_the_summary_routes_answer_503_without_an_analysis_queue(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+) -> None:
+    announcement = _announcement(db_session)
+    monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
+    sent: list[SummaryRequestMessage] = []
+    call = {
+        "summarise_artifact": lambda: llm.summarise_artifact(
+            announcement.id, db=db_session, send=sent.append
+        ),
+        "summarise_ticker": lambda: llm.summarise_ticker_artifacts(
+            "BHP", db=db_session, send=sent.append
+        ),
+    }[route]
+
+    with pytest.raises(HTTPException) as error:
+        call()
+
+    assert (error.value.status_code, error.value.detail) == (
+        503,
+        "ANALYSIS_QUEUE_URL is not configured",
     )
-    provider = scripted()
+    assert sent == []
 
-    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
 
-    assert (result["processed"], result["skipped"], result["errors"]) == (0, 1, [])
-    assert provider.calls == []
+def test_the_artifact_route_answers_503_when_the_queue_refuses_the_request(
+    db_session: Session,
+    queue: list[SummaryRequestMessage],
+) -> None:
+    announcement = _announcement(db_session)
+
+    def refuse(_message: SummaryRequestMessage) -> None:
+        raise AnalysisQueueUnavailable("The analysis queue did not accept the request")
+
+    with pytest.raises(HTTPException) as error:
+        llm.summarise_artifact(announcement.id, db=db_session, send=refuse)
+
+    assert error.value.status_code == 503
+
+
+def test_a_request_sqs_refuses_is_reported_as_an_unavailable_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import EndpointConnectionError
+
+    class UnreachableSqs:
+        def send_message(self, **_message) -> dict:
+            raise EndpointConnectionError(endpoint_url="https://sqs.example")
+
+    monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "https://sqs.example/analysis")
+    monkeypatch.setattr(analysis_queue, "_sqs_client", UnreachableSqs)
+
+    with pytest.raises(AnalysisQueueUnavailable):
+        analysis_queue.send_analysis_request(SummaryRequestMessage(artifact_id=uuid.uuid4()))
 
 
 def test_category_split_reports_the_model(db_session: Session, scripted) -> None:
@@ -328,21 +386,16 @@ def test_reddit_digest_summarises_the_most_engaging_posts(
     assert "1. [40 upvotes] BHP iron ore outlook" in provider.calls[0].prompt
 
 
-@pytest.mark.parametrize(
-    "route",
-    ["summarise_artifact", "summarise_ticker", "categorise", "reddit_digest"],
-)
+@pytest.mark.parametrize("route", ["categorise", "reddit_digest"])
 def test_routes_answer_503_when_no_llm_is_on(
     db_session: Session,
     scripted,
     route: str,
 ) -> None:
-    artifact = _announcement(db_session)
+    _announcement(db_session)
     _reddit_post(db_session, "BHP iron ore outlook", engagement=40)
     scripted(LLMUnavailableError("Amazon Bedrock is disabled"))
     call = {
-        "summarise_artifact": lambda: llm.summarise_artifact(artifact.id, db=db_session),
-        "summarise_ticker": lambda: llm.summarise_ticker_artifacts("BHP", db=db_session),
         "categorise": lambda: llm.categorise_recent_artifacts("BHP", db=db_session),
         "reddit_digest": lambda: reddit.reddit_ticker_sentiment(
             "BHP",

@@ -176,10 +176,11 @@ Public discussion collection defaults to Bluesky and Mastodon, ten items each,
 with one concurrent scheduler invocation. Reddit and blogs require their SSM
 settings before they are included.
 
-Scheduled Marketaux articles and public discussion posts use the analysis queue
-for summary generation. General ASX posts do not need a supported ticker match.
-After deploying this wiring, repeat one bounded Marketaux and provider canary to
-queue previously stored items that still have pending summaries.
+Marketaux articles, scheduled or fetched on demand, and public discussion posts
+use the analysis queue for sentiment and summary generation. General ASX posts do
+not need a supported ticker match. After deploying this wiring, repeat one bounded
+Marketaux and provider canary to queue previously stored items that were never
+analysed.
 
 ## Security and reliability
 
@@ -243,8 +244,10 @@ The analysis Lambda also supports an IAM-only structured-summary repair event.
 Invoke it without `apply` first to inspect the bounded candidate count. Apply
 mode requires the exact `RESUMMARISE_MISSING_FIELDS` confirmation string and
 processes at most 20 completed ASX artifacts per invocation. This operation
-regenerates missing display and clarity fields through the active Bedrock model;
-it is not exposed through the public API.
+regenerates missing display and clarity fields through the active Bedrock model,
+with the same summary step as every other summary
+(`lambdas/artifact_analysis.py`), and keeps an artifact's old summary when the
+new one is still incomplete. It is not exposed through the public API.
 
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.
