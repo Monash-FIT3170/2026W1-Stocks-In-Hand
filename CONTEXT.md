@@ -78,6 +78,18 @@ _Avoid_: model version, template
 One of the five themes a ticker's sentiment is broken down by: revenue, strategy, risk, dividend and organisational.
 _Avoid_: category (for a bucket), theme
 
+**Artifact summary**:
+What an artifact says in plain language: four text lines (summary, about, changed and matters) and, for an announcement, its claims sorted into confirmed facts and speculation. Each artifact has at most one, recorded with the model and prompt version that wrote it, and a new one replaces it whole.
+_Avoid_: summary metadata, summary text (for the whole summary), AI summary
+
+**Complete summary**:
+An artifact summary with all four text lines, and both clarity lists when the artifact is an announcement. An artifact without one still needs summarising.
+_Avoid_: current summary, full summary, summarised (for a partial summary)
+
+**Artifact card**:
+How one artifact appears in a feed: a tag, its title, who published it with a link to the original, and the about, changed and matters lines of its summary. A line the summary lacks is empty, never placeholder text or the artifact's raw text.
+_Avoid_: announcement card (for both feeds), feed item formatter, news card
+
 ### People and access
 
 **Investor**:
@@ -87,3 +99,23 @@ _Avoid_: user, customer, subscriber
 **Admin**:
 An investor allowed to manage accounts and run jobs that cost money, such as scrapes and LLM summaries.
 _Avoid_: superuser, operator
+
+### Alerts
+
+**Email sender**:
+The one way the product sends email. It takes one email and answers accepted, recipient rejected, unavailable or misconfigured, and the caller decides what that outcome means for it. Brevo sends for real, the dry-run sender only logs, and a recording sender keeps each email for tests.
+_Avoid_: mailer, provider (for the interface)
+
+### Deploying
+
+**Release**:
+The three backend images built from one commit, named by its full Git SHA, deployed to the staging stack together with a value for every stack parameter. A rollback deploys an earlier release's images and keeps every other live value.
+_Avoid_: deployment (for the versioned thing), build, version
+
+**Release plan**:
+The checked value of every stack parameter for one release, where each came from (set, live, default, derived or image), and the one `sam deploy` command that applies them. `python -m tools.release plan` writes it and `apply` runs it.
+_Avoid_: parameter overrides, deploy config, change set (CloudFormation's preview of a deploy, which applying a plan creates)
+
+**Gated secret**:
+An SSM SecureString a Lambda reads only while a true/false stack parameter, its switch, is on, such as the Brevo API key behind NotificationsEnabled. A release plan checks that it exists whenever its switch is on.
+_Avoid_: optional secret, feature secret
