@@ -47,10 +47,8 @@ def test_marketaux_schedule_is_bounded(monkeypatch) -> None:
     }
     assert [call.args[0] for call in collect.call_args_list] == tickers[:5]
     assert all(call.args[1] == 25 for call in collect.call_args_list)
-    assert all(
-        call.kwargs == {"summarise": False, "enqueue_analysis": True}
-        for call in collect.call_args_list
-    )
+    # Stories are queued for analysis, which every collection does.
+    assert all(call.kwargs == {} for call in collect.call_args_list)
 
 
 def test_marketaux_schedule_skips_collection_when_disabled(monkeypatch) -> None:

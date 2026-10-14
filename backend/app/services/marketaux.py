@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -14,9 +15,10 @@ from app.core.config import settings
 from app.crud import artifact as artifact_crud
 from app.crud import information_platform as platform_crud
 from app.crud import ticker as ticker_crud
+from app.models.artifact import Artifact
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.schemas.information_platform import InformationPlatformCreate
-from app.services import artifact_summary, news_summary
+from app.services import analysis_queue
 from app.services.title_normalization import normalise_title
 from app.sources import normalise_symbol
 
@@ -24,18 +26,12 @@ from app.sources import normalise_symbol
 PROVIDER_NAME = "Marketaux"
 PROVIDER_KEY = "marketaux"
 
+# Takes one stored story on for analysis, and says whether it did.
+AnalyseStory = Callable[[Session, Artifact], bool]
+
 
 class MarketauxError(RuntimeError):
     """Raised when Marketaux cannot provide a usable response."""
-
-
-def _queue_news_artifact_analysis(db: Session, artifact) -> bool:
-    """Queue one news artifact for the analysis worker unless it is summarised."""
-    if not artifact_summary.needs_summary(artifact):
-        return False
-    from app.services import analysis_queue
-
-    return analysis_queue.queue_stored_text(db, artifact)
 
 
 @dataclass(frozen=True)
@@ -210,15 +206,35 @@ def _get_or_create_platform(db: Session):
     )
 
 
+def _record_failure(
+    result: dict[str, Any],
+    article: NewsArticle,
+    stage: str,
+    exc: Exception,
+) -> None:
+    result["errors"] += 1
+    result["error_details"].append({
+        "url": article.url,
+        "stage": stage,
+        "message": str(exc),
+    })
+
+
 def fetch_and_store_news(
     symbol: str,
     limit: int,
     db: Session,
     *,
-    summarise: bool = True,
-    enqueue_analysis: bool = False,
+    analyse: AnalyseStory | None = None,
 ) -> dict[str, Any]:
-    """Fetch Marketaux articles and persist new ones as news artifacts."""
+    """Fetch Marketaux articles, store new ones as news artifacts, and hand each story on.
+
+    Every story, new or already stored, goes to ``analyse``, so a story
+    stored before it could be analysed is taken on now. By default it is
+    queued for the analysis worker, which skips a story already queued,
+    being analysed or analysed.
+    """
+    analyse = analyse or analysis_queue.queue_stored_text
     articles = fetch_news(symbol, limit)
     ticker = ticker_crud.ensure_ticker(db, symbol)
     # Commit now: the loop below rolls back the session when one article fails.
@@ -228,7 +244,6 @@ def fetch_and_store_news(
         "symbol": ticker.symbol,
         "found": len(articles),
         "created": 0,
-        "summarised": 0,
         "analysis_queued": 0,
         "skipped_duplicates": 0,
         "errors": 0,
@@ -238,95 +253,45 @@ def fetch_and_store_news(
     for article in articles:
         content_hash = article_content_hash(article)
         try:
-            existing = artifact_crud.get_artifact_by_hash(db, content_hash)
-            if existing:
+            artifact = artifact_crud.get_artifact_by_hash(db, content_hash)
+            if artifact is not None:
                 result["skipped_duplicates"] += 1
-                if summarise and artifact_summary.needs_summary(existing):
-                    try:
-                        news_summary.summarise_news_artifact(db, existing)
-                        result["summarised"] += 1
-                    except Exception as exc:  # noqa: BLE001
-                        db.rollback()
-                        result["errors"] += 1
-                        result["error_details"].append({
-                            "url": article.url,
-                            "stage": "summarise",
-                            "message": str(exc),
-                        })
-                elif enqueue_analysis:
-                    try:
-                        result["analysis_queued"] += int(
-                            _queue_news_artifact_analysis(db, existing)
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        db.rollback()
-                        result["errors"] += 1
-                        result["error_details"].append({
-                            "url": article.url,
-                            "stage": "queue_analysis",
-                            "message": str(exc),
-                        })
-                continue
-
-            artifact = artifact_crud.create_artifact(
-                db=db,
-                artifact=ArtifactCreate(
-                    source_type=SourceType.NEWS,
-                    artifact_type=ArtifactType.NEWS_ARTICLE,
-                    title=article.title,
-                    url=article.url,
-                    author=article.author,
-                    raw_text=article.raw_text,
-                    published_at=article.published_at or datetime.now(timezone.utc),
-                    content_hash=content_hash,
-                    ticker_id=ticker.id,
-                    platform_id=platform.id,
-                    artifact_metadata={
-                        "provider": PROVIDER_KEY,
-                        "provider_id": article.provider_id,
-                        "source_name": article.source_name,
-                        "text_used": article.text_used,
-                        "snippet": article.snippet,
-                        "description": article.description,
-                        "symbols": article.symbols,
-                        "entities": article.entities,
-                        "image_url": article.image_url,
-                    },
-                ),
-            )
-            result["created"] += 1
-            if summarise:
-                try:
-                    news_summary.summarise_news_artifact(db, artifact)
-                    result["summarised"] += 1
-                except Exception as exc:  # noqa: BLE001
-                    db.rollback()
-                    result["errors"] += 1
-                    result["error_details"].append({
-                        "url": article.url,
-                        "stage": "summarise",
-                        "message": str(exc),
-                    })
-            elif enqueue_analysis:
-                try:
-                    result["analysis_queued"] += int(
-                        _queue_news_artifact_analysis(db, artifact)
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    db.rollback()
-                    result["errors"] += 1
-                    result["error_details"].append({
-                        "url": article.url,
-                        "stage": "queue_analysis",
-                        "message": str(exc),
-                    })
+            else:
+                artifact = artifact_crud.create_artifact(
+                    db=db,
+                    artifact=ArtifactCreate(
+                        source_type=SourceType.NEWS,
+                        artifact_type=ArtifactType.NEWS_ARTICLE,
+                        title=article.title,
+                        url=article.url,
+                        author=article.author,
+                        raw_text=article.raw_text,
+                        published_at=article.published_at or datetime.now(timezone.utc),
+                        content_hash=content_hash,
+                        ticker_id=ticker.id,
+                        platform_id=platform.id,
+                        artifact_metadata={
+                            "provider": PROVIDER_KEY,
+                            "provider_id": article.provider_id,
+                            "source_name": article.source_name,
+                            "text_used": article.text_used,
+                            "snippet": article.snippet,
+                            "description": article.description,
+                            "symbols": article.symbols,
+                            "entities": article.entities,
+                            "image_url": article.image_url,
+                        },
+                    ),
+                )
+                result["created"] += 1
         except Exception as exc:  # noqa: BLE001
             db.rollback()
-            result["errors"] += 1
-            result["error_details"].append({
-                "url": article.url,
-                "stage": "store",
-                "message": str(exc),
-            })
+            _record_failure(result, article, "store", exc)
+            continue
+        try:
+            result["analysis_queued"] += int(analyse(db, artifact))
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            _record_failure(result, article, "queue_analysis", exc)
 
     return result

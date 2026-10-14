@@ -29,7 +29,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
-from app.services import artifact_summary, news_summary
+from app.services import artifact_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.status import AnalysisStatus
@@ -271,12 +271,6 @@ def _summary_request(new_artifact: Callable[[Session], Artifact]) -> Writer:
     return write
 
 
-def _news_service(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    artifact = _news(db)
-    news_summary.summarise_news_artifact(db, artifact)
-    return artifact
-
-
 def _summary_rows(db: Session, artifact: Artifact) -> list[ArtifactSummary]:
     return list(
         db.scalars(select(ArtifactSummary).where(ArtifactSummary.artifact_id == artifact.id))
@@ -308,8 +302,8 @@ def test_every_announcement_writer_records_the_same_summary(
 
 @pytest.mark.parametrize(
     "writer",
-    [_analysis_worker, _news_service, _summary_request(_news)],
-    ids=["analysis_worker", "news_service", "summary_request"],
+    [_analysis_worker, _summary_request(_news)],
+    ids=["analysis_worker", "summary_request"],
 )
 def test_every_news_writer_records_the_same_summary(
     db_session: Session,

@@ -31,7 +31,7 @@ from app.messages import NotificationMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.services import artifact_summary, news_sentiment, scrape_runs
+from app.services import artifact_summary, scrape_runs
 from app.services import sentiment as sentiment_service
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
@@ -933,6 +933,7 @@ def test_the_repair_refuses_a_provider_that_is_not_bedrock(db_session: Session) 
 
 def test_every_path_gives_finbert_the_title_and_text(
     db_session: Session,
+    store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The worker scored title + raw_text, the admin news route scored the
@@ -954,17 +955,27 @@ def test_every_path_gives_finbert_the_title_and_text(
         raw_text=raw_text,
         artifact_metadata={"summary": "A generated summary that must not be scored."},
     )
+    _run, _announcement, stored = _stored_document(db_session, store)
+    ports = _ports(
+        db_session,
+        NEWS_ANSWER,
+        ANNOUNCEMENT_ANSWER,
+        scorer=FinBertScorer(),
+        documents=store,
+    )
 
-    analyse_stored_text(story.id, _ports(db_session, NEWS_ANSWER, scorer=FinBertScorer()))
-    news_sentiment.analyse_news_artifact_sentiment(MagicMock(), story)
+    analyse_stored_text(story.id, ports)
+    analyse_stored_document(stored.location, ports)
     local_input = storage._artifact_sentiment_text(
         SimpleNamespace(title=title, raw_text=raw_text),
         raw_text,
     )
 
-    expected = f"{title}\n\n{raw_text}"
-    assert [call.args[0] for call in finbert.call_args_list] == [expected, expected]
-    assert local_input == expected
+    assert [call.args[0] for call in finbert.call_args_list] == [
+        f"{title}\n\n{raw_text}",
+        f"CSL half year results\n\n{HALF_YEAR_REPORT}",
+    ]
+    assert local_input == f"{title}\n\n{raw_text}"
     [sentiment] = _rows(db_session, ArtifactSentiment, story)
     assert (sentiment.sentiment_label, sentiment.stance, sentiment.model_used) == (
         "positive",

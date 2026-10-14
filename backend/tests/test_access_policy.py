@@ -181,8 +181,6 @@ def test_public_read_policy_holds_other_methods_to_an_admin() -> None:
     ("method", "path"),
     [
         ("POST", "/news/fetch/BHP"),
-        ("POST", "/news/summarise/BHP"),
-        ("POST", "/news/sentiment/BHP"),
         ("POST", "/artifacts/"),
         ("POST", "/artifact-sentiments/"),
         ("POST", "/information-platforms/"),

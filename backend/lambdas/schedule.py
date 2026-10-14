@@ -67,13 +67,7 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
         result["marketaux_tickers"] += 1
         try:
             with database_session() as db:
-                collected = marketaux.fetch_and_store_news(
-                    ticker,
-                    _marketaux_limit(),
-                    db,
-                    summarise=False,
-                    enqueue_analysis=True,
-                )
+                collected = marketaux.fetch_and_store_news(ticker, _marketaux_limit(), db)
         except Exception as exc:  # noqa: BLE001
             result["marketaux_errors"] += 1
             log_event(
