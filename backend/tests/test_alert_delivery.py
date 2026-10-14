@@ -110,8 +110,19 @@ def session(monkeypatch: pytest.MonkeyPatch) -> Iterator[SessionFactory]:
         engine.dispose()
 
 
-def _send_with(monkeypatch: pytest.MonkeyPatch, sender: EmailSender) -> None:
-    monkeypatch.setattr(email_sender, "configured_sender", lambda **_: sender)
+def _send_with(
+    monkeypatch: pytest.MonkeyPatch,
+    sender: EmailSender,
+) -> list[dict[str, object]]:
+    """Make ``sender`` the configured sender, and return how notify asked for it."""
+    asked: list[dict[str, object]] = []
+
+    def configured_sender(**kwargs: object) -> EmailSender:
+        asked.append(kwargs)
+        return sender
+
+    monkeypatch.setattr(email_sender, "configured_sender", configured_sender)
+    return asked
 
 
 def _watched_artifact(session: SessionFactory) -> WatchedArtifact:
@@ -232,10 +243,12 @@ def test_an_accepted_alert_is_recorded_as_sent(
 ) -> None:
     watched = _watched_artifact(session)
     sender = RecordingEmailSender()
-    _send_with(monkeypatch, sender)
+    asked = _send_with(monkeypatch, sender)
 
     assert _deliver(watched) == NO_RETRY
 
+    # A paced sender shares ALERT_PACER, so live alerts go out a second apart.
+    assert asked == [{"paced": True}]
     assert [email.to for email in sender.sent] == [watched.email]
     assert sender.sent[0].unsubscribe_url is not None
     delivery = _delivery(session, watched)
