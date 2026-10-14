@@ -103,14 +103,14 @@ def request_summary(
 ) -> dict[str, object]:
     """Queue a new summary of one artifact, which replaces its summary.
 
-    Raises ``LookupError`` when the artifact does not exist or has no text,
-    and ``AnalysisQueueUnavailable`` when the queue is not configured or
-    does not accept the request.
+    Raises ``LookupError`` when the artifact does not exist or has no text
+    to summarise, and ``AnalysisQueueUnavailable`` when the queue is not
+    configured or does not accept the request.
     """
     artifact = artifact_crud.get_artifact(db, artifact_id)
     if artifact is None:
         raise LookupError("Artifact not found")
-    if not artifact.raw_text:
+    if not artifact_summary.text_to_summarise(artifact.raw_text):
         raise LookupError("Artifact has no text to summarise")
     _require_queue()
     send(SummaryRequestMessage(artifact_id=artifact.id))
@@ -127,7 +127,8 @@ def request_ticker_summaries(
     """Queue a new summary of each of a ticker's artifacts without a complete one.
 
     Reads the ticker's ``limit`` newest announcements and news stories that
-    have text; the route keeps ``limit`` from 1 to ``MAX_TICKER_SUMMARIES``.
+    have text to summarise; the route keeps ``limit`` from 1 to
+    ``MAX_TICKER_SUMMARIES``.
     Skips those whose summary is complete, and those whose analysis is
     queued or running, which writes a summary anyway. A request the queue
     does not accept is listed in ``errors``, and the rest are still sent.
@@ -144,7 +145,7 @@ def request_ticker_summaries(
         .options(artifact_summary.WITH_SUMMARY)
         .filter(Artifact.ticker_id == ticker.id)
         .filter(Artifact.source_type.in_(["asx_announcement", "news"]))
-        .filter(Artifact.raw_text.isnot(None))
+        .filter(artifact_summary.HAS_TEXT_TO_SUMMARISE)
         .order_by(Artifact.published_at.desc())
         .limit(limit)
         .all()

@@ -50,6 +50,9 @@ NEWS_SUMMARY = {
     "changed": "Reported production increased.",
     "matters": "The increase may affect revenue expectations.",
 }
+EVERY_WHITESPACE = "".join(
+    character for character in map(chr, range(sys.maxunicode + 1)) if character.isspace()
+)
 
 
 @pytest.fixture()
@@ -199,6 +202,32 @@ def test_the_artifact_route_answers_404_with_nothing_to_summarise(
 
     assert (error.value.status_code, error.value.detail) == (404, detail)
     assert queue == []
+
+
+@pytest.mark.parametrize(
+    "raw_text",
+    ["", "   ", "\n\t\r\n", EVERY_WHITESPACE],
+    ids=["empty", "spaces", "line breaks", "every whitespace character"],
+)
+def test_the_summary_routes_never_queue_text_the_worker_refuses(
+    db_session: Session,
+    queue: list[SummaryRequestMessage],
+    raw_text: str,
+) -> None:
+    """The analysis worker summarises the text stripped, so blank text has nothing to summarise."""
+    blank = _news(db_session, raw_text=raw_text)
+    pending = _announcement(db_session)
+
+    with pytest.raises(HTTPException) as error:
+        llm.summarise_artifact(blank.id, db=db_session, send=queue.append)
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session, send=queue.append)
+
+    assert (error.value.status_code, error.value.detail) == (
+        404,
+        "Artifact has no text to summarise",
+    )
+    assert (result["candidates"], result["artifact_ids"]) == (1, [pending.id])
+    assert _requested(queue) == [pending.id]
 
 
 def test_the_ticker_route_queues_only_artifacts_without_a_complete_summary(

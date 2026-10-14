@@ -830,8 +830,12 @@ def test_an_answer_without_text_is_not_recorded(db_session: Session) -> None:
     assert _rows(db_session, ArtifactSummary, story) == []
 
 
-def test_an_artifact_without_text_cannot_be_summarised(db_session: Session) -> None:
-    story = _news(db_session, raw_text=None)
+@pytest.mark.parametrize("raw_text", [None, "", " \n\t\r\n "], ids=["none", "empty", "whitespace"])
+def test_an_artifact_without_text_cannot_be_summarised(
+    db_session: Session,
+    raw_text: str | None,
+) -> None:
+    story = _news(db_session, raw_text=raw_text)
 
     with pytest.raises(PermanentDocumentError) as error:
         summarise(story.id, _ports(db_session))

@@ -8,7 +8,8 @@ into the artifact's one ``artifact_summaries`` row. This module is the only
 code that writes either store. ``record`` replaces both inside the caller's
 transaction, and ``read`` gives them back as one ``Summary``, recovering
 older records that kept only the joined text. ``is_complete`` is the one
-rule for whether a summary has everything its source type should have.
+rule for whether a summary has everything its source type should have, and
+``text_to_summarise`` the one rule for what text a summary is written from.
 """
 
 from __future__ import annotations
@@ -35,6 +36,12 @@ CLARITY_LISTS = SUMMARY_LIST_KEYS
 CLARITY_SOURCE_TYPES = frozenset({"asx_announcement"})
 
 _PARAGRAPH_BREAK = re.compile(r"\r?\n\r?\n")
+# Every character str.strip() removes, so a query can strip text the same way.
+_WHITESPACE = (
+    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000"
+)
 
 
 class EmptySummary(ValueError):
@@ -219,6 +226,16 @@ def needs_summary(artifact: Artifact) -> bool:
     return not is_complete(read(artifact), source_type=artifact.source_type)
 
 
+def text_to_summarise(raw_text: str | None) -> str:
+    """The stored text a summary is written from: ``raw_text`` stripped.
+
+    Empty when there is no text or only whitespace, and an artifact with
+    none is never summarised. ``HAS_TEXT_TO_SUMMARISE`` is the same rule as
+    a query filter.
+    """
+    return (raw_text or "").strip()
+
+
 def incomplete_announcements(db: Session, *, limit: int) -> tuple[list[UUID], int]:
     """Analysed announcements whose recorded summary is incomplete, oldest first.
 
@@ -277,6 +294,11 @@ def alert_text(db: Session, artifact_id: UUID) -> str | None:
 # Loads the summary rows of a list of artifacts in one more query, so ``read``
 # does not query once per artifact.
 WITH_SUMMARY = selectinload(Artifact.summaries)
+
+# ``text_to_summarise`` as a query filter: artifacts whose text is not empty
+# once stripped. Postgres trims only spaces by default, and its regex ``\s``
+# depends on the locale, so the filter names every character to strip.
+HAS_TEXT_TO_SUMMARISE = func.btrim(Artifact.raw_text, _WHITESPACE) != ""
 
 
 def _line(value: object) -> str | None:
