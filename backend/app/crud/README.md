@@ -113,7 +113,8 @@ first, then extend this module — don't add a parallel status field elsewhere.
 `announcement.py`
 
 Derives the ASX announcement feed and trending list from artifacts, including
-the Sydney-timezone day bounds the date filters use.
+the Sydney-timezone day bounds the date filters use. Each feed item is the
+artifact's card (`app/services/artifact_card.py`).
 
 `artifact_summary.py` and `artifact_sentiment.py`
 
