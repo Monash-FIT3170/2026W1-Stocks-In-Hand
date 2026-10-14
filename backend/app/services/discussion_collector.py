@@ -134,7 +134,9 @@ def _store(
     saved = skipped = failed = mentions = queued = 0
     with session_scope() as db:
         platform = platform_for(db, source, target)
-        tickers = db.query(Ticker).all()
+        # Plain rows, not Ticker objects: storing a post commits, and a commit
+        # expires loaded objects, so matching would read every ticker again.
+        tickers = db.query(Ticker.id, Ticker.symbol, Ticker.company_name).all()
         for raw in fetched:
             try:
                 post = source.post(raw, target)

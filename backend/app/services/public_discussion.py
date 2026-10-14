@@ -1,7 +1,7 @@
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -59,6 +59,18 @@ class TickerMentionMatch:
     matched_text: str
 
 
+class TickerNames(Protocol):
+    """What matching reads of a ticker.
+
+    A ``Ticker`` has these, and so does a row of ``Ticker.id``,
+    ``Ticker.symbol`` and ``Ticker.company_name``.
+    """
+
+    id: Any
+    symbol: Any
+    company_name: Any
+
+
 def _phrase_pattern(value: str) -> re.Pattern[str]:
     escaped = re.escape(value.strip()).replace(r"\ ", r"\s+")
     return re.compile(
@@ -112,7 +124,7 @@ def find_ticker_mentions(
     title: str | None,
     raw_text: str | None,
     metadata: dict[str, Any] | None,
-    tickers: Iterable[Ticker],
+    tickers: Iterable[TickerNames],
 ) -> list[TickerMentionMatch]:
     """Return strong, explainable ticker matches for one public post."""
 
@@ -183,7 +195,7 @@ def find_ticker_mentions(
 
 def matches_for_artifact(
     artifact: Artifact,
-    tickers: Iterable[Ticker],
+    tickers: Iterable[TickerNames],
 ) -> list[TickerMentionMatch]:
     return find_ticker_mentions(
         title=artifact.title,
@@ -197,7 +209,7 @@ def link_artifact_to_tickers(
     db: Session,
     artifact: Artifact,
     *,
-    tickers: Sequence[Ticker] | None = None,
+    tickers: Sequence[TickerNames] | None = None,
     commit: bool = True,
 ) -> list[TickerMentionMatch]:
     candidate_tickers = list(tickers) if tickers is not None else db.query(Ticker).all()
