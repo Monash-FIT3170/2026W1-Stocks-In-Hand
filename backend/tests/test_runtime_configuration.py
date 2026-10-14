@@ -54,6 +54,14 @@ AWS_RUNTIME_READS = {
 }
 REQUIRED_SECRETS = [secret for secret in SECRETS if not secret.optional]
 OPTIONAL_SECRETS = [secret for secret in SECRETS if secret.optional]
+# The Lambda handlers that import the database layer only where they use it.
+WORKER_HANDLERS = (
+    "lambdas.discovery",
+    "lambdas.download",
+    "lambdas.analysis",
+    "lambdas.schedule",
+    "lambdas.public_discussion_schedule",
+)
 
 
 @pytest.fixture()
@@ -84,6 +92,35 @@ def test_a_bad_value_fails_at_the_first_read_not_at_import() -> None:
     assert result.stdout.strip() == (
         "Invalid runtime configuration: ALERT_DAILY_BUDGET must be a whole number"
     )
+
+
+def test_importing_a_worker_handler_builds_no_settings() -> None:
+    """A worker builds its settings, and reads SSM, only once it handles a record or event.
+
+    For discovery, download and analysis, run_stage then logs a bad setting
+    or an SSM error as a retryable failure with the record's correlation id,
+    instead of the Lambda failing its init. Importing the database layer
+    creates the engine, which builds the settings, so a top-level import of
+    it in a worker would break this.
+    """
+    script = (
+        "import importlib, sys\n"
+        "import app.core.config as config\n"
+        "for name in sys.argv[1:]:\n"
+        "    importlib.import_module(name)\n"
+        "    if config._built is not None or 'app.database.connection' in sys.modules:\n"
+        "        print(name)\n"
+        "        break\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, *WORKER_HANDLERS],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert (result.returncode, result.stdout.split()) == (0, []), result.stderr
 
 
 def test_an_empty_environment_gives_the_documented_defaults() -> None:
