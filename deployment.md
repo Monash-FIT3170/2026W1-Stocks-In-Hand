@@ -76,7 +76,7 @@ The deployment starts with these fixed limits:
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
 | Document size | 25 MiB |
-| PDF pages | 100 |
+| PDF pages | 500 |
 | OCR pages | 5 |
 | Sentiment input | 50,000 characters |
 | Raw-document retention | 30 days |
