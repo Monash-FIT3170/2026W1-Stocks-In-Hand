@@ -146,9 +146,12 @@ Marketaux token is read only while `MarketauxEnabled` is true, and must then
 exist. Reddit is disabled without both Reddit parameters. Blog collection is
 disabled when the comma-separated feed allowlist parameter is absent.
 
-Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
-is configured separately from the set available for manual administrator
-requests.
+Manual administrator scrapes accept every ticker in the catalogue
+(`backend/app/sources.py`, 13 today), because `SUPPORTED_TICKERS` defaults to
+it. The weekly schedule scrapes `ScheduledTickers`, which defaults to `ANZ`,
+`BHP`, `CBA`, `CSL`, and `WES` and may name any catalogue ticker; one outside
+the catalogue is dropped. The scheduled subset is configured separately from
+the set available for manual administrator requests.
 
 ### Brevo watchlist alerts
 
