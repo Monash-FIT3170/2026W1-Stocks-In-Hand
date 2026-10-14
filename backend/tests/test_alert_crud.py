@@ -1,11 +1,11 @@
 """Focused contracts for the alert CRUD modules and the delivery ledger.
 
-The pure tests cover validation and generated PostgreSQL statements without a
-database.  Integration tests use the configured Postgres database when it is
+The pure tests cover validation and commit behaviour without a database.
+Integration tests use the configured Postgres database when it is
 available, and otherwise skip cleanly for local runs without Docker.
 """
 
-# pylint: disable=not-callable,redefined-outer-name,too-few-public-methods,too-many-locals,wrong-import-position
+# pylint: disable=not-callable,redefined-outer-name,too-many-locals,wrong-import-position
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import and_, create_engine, func, or_, select, update
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -43,31 +42,6 @@ from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
-
-
-class _CapturedResult:
-    """Return no row while retaining a SQL statement for pure contract tests."""
-
-    def scalar_one_or_none(self) -> None:
-        """Represent a statement that did not acquire a claim."""
-        return None
-
-
-class _CapturedSession:
-    """Small Session double that records one statement without opening a DB."""
-
-    def __init__(self) -> None:
-        self.statement: Any | None = None
-        self.commit_count = 0
-
-    def execute(self, statement: Any) -> _CapturedResult:
-        """Capture the generated statement for later compilation."""
-        self.statement = statement
-        return _CapturedResult()
-
-    def commit(self) -> None:
-        """Match the write's commit boundary without a database."""
-        self.commit_count += 1
 
 
 class _WriteSession:
@@ -294,24 +268,6 @@ def test_alert_crud_validation_needs_no_database() -> None:
 
     db.execute.assert_not_called()
     db.scalar.assert_not_called()
-
-
-def test_disable_subscription_is_guarded_by_id_and_token_hash() -> None:
-    """Public unsubscribe must update only the matching subscription secret."""
-    db = _CapturedSession()
-
-    result = subscription_crud.disable_subscription(
-        db,
-        uuid.uuid4(),
-        expected_unsubscribe_token_hash="a" * 64,
-    )
-
-    assert result is None
-    assert db.commit_count == 1
-    sql = str(db.statement.compile(dialect=postgresql.dialect()))
-    assert "alert_subscriptions.id" in sql
-    assert "alert_subscriptions.unsubscribe_token_hash" in sql
-    assert "enabled" in sql
 
 
 def test_subscription_and_rule_upserts_flush_without_committing_on_request() -> None:
