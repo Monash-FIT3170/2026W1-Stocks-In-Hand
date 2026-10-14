@@ -68,7 +68,8 @@ def db_session() -> Iterator[Session]:
         pytest.skip(f"Database is not available: {exc}")
     connection = engine.connect()
     transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+    # The writers run on SessionLocal, which does not autoflush. Nor does this.
+    session = sessionmaker(bind=connection, autoflush=False)()
     try:
         yield session
     finally:

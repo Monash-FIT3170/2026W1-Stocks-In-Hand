@@ -55,7 +55,9 @@ def engine() -> Iterator[Engine]:
 def db_session(engine: Engine) -> Iterator[Session]:
     connection = engine.connect()
     transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+    # SessionLocal does not autoflush. Matching it means these tests pass only
+    # when record flushes the caller's pending changes itself.
+    session = sessionmaker(bind=connection, autoflush=False)()
     try:
         yield session
     finally:
