@@ -116,15 +116,14 @@ def summarise_ticker_artifacts(
         .all()
     )
 
+    # Decide the work before the first commit, which expires every loaded
+    # artifact and its summary rows, so a later check would query again.
+    pending = [artifact for artifact in artifacts if artifact_summary.needs_summary(artifact)]
     processed = 0
-    skipped = 0
+    skipped = len(artifacts) - len(pending)
     errors = []
 
-    for artifact in artifacts:
-        if not artifact_summary.needs_summary(artifact):
-            skipped += 1
-            continue
-
+    for artifact in pending:
         metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
         try:
             generated = _generate_artifact_summary(artifact, metadata)

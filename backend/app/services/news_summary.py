@@ -73,19 +73,18 @@ def summarise_news_for_symbol(
 ) -> dict[str, Any]:
     ticker = _ticker_for_symbol(db, symbol)
     artifacts = _news_artifacts_for_ticker(db, ticker, limit)
+    # Decide the work before the first commit, which expires every loaded
+    # artifact and its summary rows, so a later check would query again.
+    pending = [artifact for artifact in artifacts if artifact_summary.needs_summary(artifact)]
     result: dict[str, Any] = {
         "ticker": ticker.symbol,
         "candidates": len(artifacts),
         "summarised": 0,
-        "skipped": 0,
+        "skipped": len(artifacts) - len(pending),
         "errors": [],
     }
 
-    for artifact in artifacts:
-        if not artifact_summary.needs_summary(artifact):
-            result["skipped"] += 1
-            continue
-
+    for artifact in pending:
         try:
             summarise_news_artifact(db, artifact)
             result["summarised"] += 1
