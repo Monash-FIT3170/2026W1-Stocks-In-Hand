@@ -14,6 +14,7 @@ from parsing.classification.taxonomy import (
     TAXONOMY,
     artifact_type_for,
     category_definition,
+    category_for_compatibility,
 )
 
 # Stored in artifacts.artifact_metadata["category"] and artifacts.artifact_type.
@@ -85,3 +86,10 @@ def test_only_categories_with_metrics_have_an_extractor() -> None:
 def test_a_missing_or_unknown_category_has_no_definition() -> None:
     assert category_definition(None) is None
     assert category_definition("not_a_category") is None
+
+
+def test_each_definition_is_found_by_the_name_it_is_stored_under() -> None:
+    for definition in TAXONOMY:
+        assert category_for_compatibility(definition.compatibility_category) is definition
+    for name in (None, "UNKNOWN", "news_article", "user_discussion", ["DividendAnnouncement"]):
+        assert category_for_compatibility(name) is None

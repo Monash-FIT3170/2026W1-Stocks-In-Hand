@@ -45,6 +45,7 @@ from app.services import artifact_summary
 from app.services.artifact_summary import Summary
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
 from app.services.quotes import FixedQuotes, Quote, QuoteSource, live_quotes
+from tools import compare_sentiment_buckets
 
 ANNOUNCEMENT_ANSWER = {
     "summary": "ANZ confirmed its first-half profit.",
@@ -566,6 +567,68 @@ def test_the_window_counts_back_from_publication_else_collection(db_session: Ses
     assert [source.title for source in dividend.sources] == ["Dividend reinvestment plan"]
 
 
+def test_the_bucket_comparison_lists_what_the_taxonomy_moves(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    dividend = _artifact(
+        db_session,
+        ticker,
+        day=4,
+        title="Dividend declared after revenue growth",
+        artifact_metadata={"category": "DividendAnnouncement"},
+    )
+    notice = _artifact(
+        db_session,
+        ticker,
+        day=3,
+        title="Notification of issue of securities",
+        artifact_type="security_notification",
+        artifact_metadata={"category": "SecurityNotification"},
+    )
+    news = _artifact(
+        db_session,
+        ticker,
+        day=2,
+        source_type="news",
+        artifact_type="news_article",
+        title="Profit rises",
+        artifact_metadata={"category": "news_article"},
+    )
+    post = _post(db_session, ticker, title="Holding for the dividend")
+    for artifact, label, confidence in (
+        (dividend, "positive", 0.9),
+        (notice, "neutral", 0.8),
+        (news, "negative", 0.6),
+        (post, "positive", 0.7),
+    ):
+        _analyse(db_session, artifact, label, confidence)
+
+    comparison = compare_sentiment_buckets.compare(
+        db_session, ticker.symbol, days=365, limit=250
+    )
+
+    def counts(buckets: dict) -> dict:
+        return {name: bucket.count for name, bucket in buckets.items() if bucket.count}
+
+    assert comparison.analysed == 4
+    assert counts(comparison.keyword) == {
+        "revenue": 2,
+        "strategy": 2,
+        "dividend": 1,
+        "user_discussion": 1,
+    }
+    assert counts(comparison.taxonomy) == {"revenue": 1, "dividend": 1, "user_discussion": 1}
+    assert comparison.keyword["revenue"].label == "positive"
+    assert comparison.taxonomy["revenue"].label == "negative"
+    assert comparison.fallback["revenue"] == 1
+    report = compare_sentiment_buckets.report(comparison)
+    assert (
+        "Dividend declared after revenue growth: revenue, strategy, dividend -> dividend"
+        in report
+    )
+    assert "Notification of issue of securities: strategy -> no bucket" in report
+    assert "Profit rises" not in report
+
+
 def test_a_symbol_with_its_exchange_suffix_is_the_same_ticker(db_session: Session) -> None:
     ticker = _ticker(db_session)
 
@@ -634,9 +697,48 @@ def _stored(label: str, confidence: float | None) -> ArtifactSentiment:
 
 @pytest.mark.parametrize("source_type", sorted(PUBLIC_DISCUSSION_SOURCE_TYPES))
 def test_public_discussion_has_a_bucket_of_its_own(source_type: str) -> None:
-    post = _unsaved("Dividend talk", source_type=source_type, artifact_type="reddit_post")
+    post = _unsaved(
+        "Dividend talk",
+        source_type=source_type,
+        artifact_type="reddit_post",
+        category="user_discussion",
+    )
 
-    assert ticker_sentiment.buckets_for(post) == ("user_discussion",)
+    assert ticker_sentiment.keyword_buckets_for(post) == ("user_discussion",)
+    assert ticker_sentiment.taxonomy_buckets_for(post) == ("user_discussion",)
+
+
+@pytest.mark.parametrize(
+    ("category", "buckets"),
+    [
+        ("DividendAnnouncement", ("dividend",)),
+        ("HalfYearResults", ("revenue",)),
+        ("CorporateAction", ("strategy",)),
+        ("SecurityNotification", ()),
+        ("ExecutiveTranscript", ()),
+    ],
+)
+def test_the_taxonomy_files_a_classified_announcement_under_one_bucket(
+    category: str,
+    buckets: tuple[str, ...],
+) -> None:
+    announcement = _unsaved("Dividend, revenue and director update", category=category)
+
+    assert ticker_sentiment.taxonomy_buckets_for(announcement) == buckets
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"source_type": "news", "artifact_type": "news_article", "category": "news_article"},
+        {"category": "UNKNOWN"},
+        {},
+        {"category": "financial_results"},
+    ],
+    ids=["news", "unclassified", "no category", "a name no definition has"],
+)
+def test_the_taxonomy_cannot_place_news_or_unclassified_announcements(values: dict) -> None:
+    assert ticker_sentiment.taxonomy_buckets_for(_unsaved("Profit rises", **values)) is None
 
 
 def test_security_notifications_are_not_filed_under_risk() -> None:
@@ -646,7 +748,7 @@ def test_security_notifications_are_not_filed_under_risk() -> None:
         category="SecurityNotification",
     )
 
-    assert "risk" not in ticker_sentiment.buckets_for(notice)
+    assert "risk" not in ticker_sentiment.keyword_buckets_for(notice)
 
 
 @pytest.mark.parametrize(
@@ -661,13 +763,13 @@ def test_security_notifications_are_not_filed_under_risk() -> None:
     ],
 )
 def test_keywords_match_whole_words_and_their_inflections(title: str, bucket: str) -> None:
-    assert bucket in ticker_sentiment.buckets_for(_unsaved(title))
+    assert bucket in ticker_sentiment.keyword_buckets_for(_unsaved(title))
 
 
 def test_keywords_do_not_match_inside_other_words() -> None:
     preview = _unsaved("Investor day preview and asterisked notes")
 
-    assert ticker_sentiment.buckets_for(preview) == ("strategy",)
+    assert ticker_sentiment.keyword_buckets_for(preview) == ("strategy",)
 
 
 def test_missing_or_zero_confidence_adds_no_weight() -> None:

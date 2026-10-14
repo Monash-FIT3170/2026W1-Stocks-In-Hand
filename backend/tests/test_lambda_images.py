@@ -181,6 +181,31 @@ def test_import_scan_sees_function_level_and_relative_imports() -> None:
     assert "parsing/classification/engine.py" in _backend_imports("lambdas.analysis")
 
 
+def test_the_api_image_parsing_code_needs_only_the_standard_library() -> None:
+    """The API image installs nothing for the taxonomy it ships, so it may import nothing else.
+
+    CI installs every backend dependency, so only this check sees an import
+    the API image cannot satisfy.
+    """
+    scanned: set[str] = set()
+    outside: set[str] = set()
+    for source in _copied_paths("Dockerfile.api"):
+        root = BACKEND / source.rstrip("/")
+        if not source.startswith("parsing"):
+            continue
+        for path in sorted(root.rglob("*.py")) if root.is_dir() else [root]:
+            relative = path.relative_to(BACKEND)
+            package = ".".join(relative.parent.parts)
+            scanned.add(relative.as_posix())
+            for name in _imported_names(ast.parse(path.read_text(encoding="utf-8")), package):
+                top = name.partition(".")[0]
+                if top != "parsing" and top not in sys.stdlib_module_names:
+                    outside.add(f"{relative.as_posix()} imports {name}")
+
+    assert "parsing/classification/taxonomy.py" in scanned
+    assert not outside, sorted(outside)
+
+
 def _distribution(requirement: str) -> str:
     """The normalised distribution name of a requirement such as ``Foo_Bar[x]==1``."""
     name = re.split(r"[\s\[<>=!~;@]", requirement.strip(), maxsplit=1)[0]

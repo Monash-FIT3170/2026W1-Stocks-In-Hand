@@ -30,6 +30,7 @@ from app.sentiment_buckets import SENTIMENT_BUCKETS
 from app.services import artifact_summary
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
 from app.services.sentiment import SENTIMENT_LABELS
+from parsing.classification.taxonomy import category_for_compatibility
 
 CATEGORY_SENTIMENT_KEYS = (*SENTIMENT_BUCKETS, "user_discussion")
 DEFAULT_SENTIMENT_DAYS = 365
@@ -155,8 +156,8 @@ def read_category_sentiment(
     """
     ticker = find_ticker(db, symbol)
     grouped: dict[str, list[AnalysedRow]] = {key: [] for key in CATEGORY_SENTIMENT_KEYS}
-    for artifact, sentiment in _analysed_rows(db, ticker.id, days=days, limit=limit):
-        for bucket in buckets_for(artifact):
+    for artifact, sentiment in analysed_rows(db, ticker.id, days=days, limit=limit):
+        for bucket in keyword_buckets_for(artifact):
             grouped[bucket].append((artifact, sentiment))
 
     categories = {
@@ -187,14 +188,71 @@ def read_category_sentiment(
     )
 
 
-def buckets_for(artifact: Artifact) -> tuple[str, ...]:
-    """The groups an analysed artifact counts in.
+def analysed_rows(db: Session, ticker_id: UUID, *, days: int, limit: int) -> list[AnalysedRow]:
+    """The ticker's analysed artifacts in the window, newest first, with their summaries."""
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=max(days, 1))
+    return (
+        db.query(Artifact, ArtifactSentiment)
+        .options(artifact_summary.WITH_SUMMARY)
+        .join(
+            ArtifactSentiment,
+            ArtifactSentiment.artifact_id == Artifact.id,
+        )
+        .outerjoin(
+            ArtifactTickerMention,
+            ArtifactTickerMention.artifact_id == Artifact.id,
+        )
+        .filter(
+            or_(
+                Artifact.ticker_id == ticker_id,
+                ArtifactTickerMention.ticker_id == ticker_id,
+            )
+        )
+        .filter(
+            or_(
+                Artifact.published_at >= cutoff,
+                and_(
+                    Artifact.published_at.is_(None),
+                    Artifact.created_at >= cutoff,
+                ),
+            )
+        )
+        .order_by(
+            Artifact.published_at.desc().nullslast(),
+            ArtifactSentiment.created_at.desc(),
+        )
+        .distinct()
+        .limit(max(limit, 1))
+        .all()
+    )
+
+
+def taxonomy_buckets_for(artifact: Artifact) -> tuple[str, ...] | None:
+    """The groups the taxonomy puts an analysed artifact in, or None when it cannot place it.
+
+    A public discussion post counts only in ``user_discussion``. An artifact
+    stored under a taxonomy category counts in that category's sentiment
+    bucket, or in none when the category has no bucket. The taxonomy cannot
+    place anything else: news, an announcement the rules could not classify
+    (stored as ``UNKNOWN``) or one stored under no category.
+    """
+    if _is_public_discussion(artifact):
+        return ("user_discussion",)
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    definition = category_for_compatibility(metadata.get("category"))
+    if definition is None:
+        return None
+    return (definition.sentiment_bucket,) if definition.sentiment_bucket else ()
+
+
+def keyword_buckets_for(artifact: Artifact) -> tuple[str, ...]:
+    """The groups keywords put an analysed artifact in.
 
     A public discussion post counts only in ``user_discussion``. Anything
     else counts in every bucket a keyword in its category, type, title or
     summary lines names, or in ``strategy`` when none does.
     """
-    if str(artifact.source_type or "").lower() in PUBLIC_DISCUSSION_SOURCE_TYPES:
+    if _is_public_discussion(artifact):
         return ("user_discussion",)
 
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
@@ -292,43 +350,8 @@ def aggregate_bucket(bucket: str, rows: Sequence[AnalysedRow]) -> CategorySentim
     )
 
 
-def _analysed_rows(db: Session, ticker_id: UUID, *, days: int, limit: int) -> list[AnalysedRow]:
-    """The ticker's analysed artifacts in the window, newest first, with their summaries."""
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=max(days, 1))
-    return (
-        db.query(Artifact, ArtifactSentiment)
-        .options(artifact_summary.WITH_SUMMARY)
-        .join(
-            ArtifactSentiment,
-            ArtifactSentiment.artifact_id == Artifact.id,
-        )
-        .outerjoin(
-            ArtifactTickerMention,
-            ArtifactTickerMention.artifact_id == Artifact.id,
-        )
-        .filter(
-            or_(
-                Artifact.ticker_id == ticker_id,
-                ArtifactTickerMention.ticker_id == ticker_id,
-            )
-        )
-        .filter(
-            or_(
-                Artifact.published_at >= cutoff,
-                and_(
-                    Artifact.published_at.is_(None),
-                    Artifact.created_at >= cutoff,
-                ),
-            )
-        )
-        .order_by(
-            Artifact.published_at.desc().nullslast(),
-            ArtifactSentiment.created_at.desc(),
-        )
-        .distinct()
-        .limit(max(limit, 1))
-        .all()
-    )
+def _is_public_discussion(artifact: Artifact) -> bool:
+    return str(artifact.source_type or "").lower() in PUBLIC_DISCUSSION_SOURCE_TYPES
 
 
 def _summary_text(artifact: Artifact) -> str:
