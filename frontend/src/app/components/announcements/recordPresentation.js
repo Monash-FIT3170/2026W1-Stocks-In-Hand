@@ -19,9 +19,7 @@ export function originalUrl(value) {
 export function meaningfulText(value, title = "") {
   if (typeof value !== "string") return ""
   const text = value.trim()
-  if (!text || text.toLowerCase() === String(title).trim().toLowerCase()) return ""
-  const pending = ["Summary pending.", "No change summary available yet.", "No impact summary available yet.", "No investment impact summary available yet."]
-  return pending.includes(text) ? "" : text
+  return text.toLowerCase() === String(title).trim().toLowerCase() ? "" : text
 }
 
 export function sourceKind(type = "") {

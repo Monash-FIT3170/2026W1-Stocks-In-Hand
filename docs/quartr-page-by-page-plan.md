@@ -177,7 +177,7 @@ Compact filters can be disclosed, but current scope and reset remain visible. Tr
 
 Group by the original publication timestamp in Australia/Sydney. “Today” and “Yesterday” are only used when the timestamp actually matches those local dates. Invalid dates use an explicit undated group; do not group by a guessed date from the formatted display string.
 
-Preserve source URL safety/deduplication, exact placeholder suppression, supported-ticker gating, query parameters and show-more pagination. Keep generic ASX records market-wide rather than linking to an unsupported `/ticker/ASX` route.
+Preserve source URL safety/deduplication, the pending state for summary lines the API sends as null, supported-ticker gating, query parameters and show-more pagination. Keep generic ASX records market-wide rather than linking to an unsupported `/ticker/ASX` route.
 
 ## 6. Shared company identity and local navigation
 

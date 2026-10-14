@@ -3,8 +3,8 @@ import { displayDate, filterRecords, hasResearchText, modelName, percentage, rec
 
 describe("company evidence formatting", () => {
   it("separates pending data from real research without discarding ordinary prose", () => {
-    expect(hasResearchText("COH is tracked from the StonksInHand database. Add announcements and analysis data to enrich this brief.")).toBe(false)
-    expect(hasResearchText("Summary pending.")).toBe(false)
+    expect(hasResearchText(null)).toBe(false)
+    expect(hasResearchText("   ")).toBe(false)
     expect(hasResearchText("No material change identified.")).toBe(true)
     expect(hasResearchText("Revenue analysis remains pending regulatory review.")).toBe(true)
     expect(modelName("/var/task/models/finbert")).toBe("FinBERT")

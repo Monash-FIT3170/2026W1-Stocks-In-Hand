@@ -32,10 +32,7 @@ export function filterRecords(records, query, kind, order = "newest") {
 export function selectRecord(records, selectedId) { return records.find((item) => item.id === selectedId) || records[0] || null }
 
 export function hasResearchText(value) {
-  if (typeof value !== "string" || !value.trim()) return false
-  const text = value.trim()
-  if (/^[A-Z]+ is tracked from the StonksInHand database\. Add announcements and analysis data to enrich this brief\.$/.test(text)) return false
-  return !["Summary pending.", "No detail available yet.", "No change summary available yet.", "No investment impact summary available yet."].includes(text)
+  return typeof value === "string" && value.trim() !== ""
 }
 
 export function modelName(value) {
