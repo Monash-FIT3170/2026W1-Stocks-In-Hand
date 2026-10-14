@@ -75,6 +75,18 @@ def _can(role: str, action: str, arn: str, values: dict[str, str]) -> bool:
     )
 
 
+def test_the_oidc_stack_defines_only_the_staging_deploy_roles() -> None:
+    """docs/adr/0001-remove-the-deployment-test-deploy-roles.md says why there are no others.
+
+    A policy resource attached to a role would also grant more than
+    role_statements reads, so the stack holds nothing else.
+    """
+    oidc = _oidc()
+
+    assert set(oidc.resources) == {"GitHubOidcProvider", GITHUB_ROLE, EXECUTION_ROLE}
+    assert set(oidc.outputs) == {"GitHubDeploymentRoleArn", "CloudFormationExecutionRoleArn"}
+
+
 def test_only_staging_jobs_can_sign_in_as_the_github_role() -> None:
     """GitHub names a job's environment in its OIDC token, and the role trusts one environment."""
     oidc = _oidc()
