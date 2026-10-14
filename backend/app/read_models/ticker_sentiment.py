@@ -110,9 +110,12 @@ def latest_signals(db: Session, ticker_ids: Iterable[UUID]) -> dict[UUID, Latest
 
     The signal is the sentiment of the ticker's most recently published ASX
     announcement that has a sentiment label, dated by when it was collected
-    when it has no publication date. Analysing an older filing again does
-    not make it the latest, and news, public discussion and other labels do
-    not count. A ticker with no such filing is left out.
+    when it has no publication date. An older filing analysed after a newer
+    one does not become the latest, and news, public discussion and other
+    labels do not count. A ticker with no such filing is left out.
+
+    ``analyzed_at`` is when the filing was first analysed: analysing it
+    again updates its one sentiment row and keeps that row's time.
     """
     ids = list(ticker_ids)
     if not ids:

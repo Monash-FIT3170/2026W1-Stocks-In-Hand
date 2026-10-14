@@ -735,7 +735,7 @@ def test_an_unknown_ticker_is_not_found(db_session: Session) -> None:
 @pytest.mark.usefixtures("without_model_runtime")
 def test_the_latest_signal_is_each_tickers_latest_filing(db_session: Session) -> None:
     first, second, quiet = _ticker(db_session), _ticker(db_session), _ticker(db_session)
-    # Analysed again after the newer filing, but published before it.
+    # Analysed for the first time after the newer filing, but published before it.
     _analyse(db_session, _artifact(db_session, first, day=1), "negative", 0.6, analysed_day=9)
     latest = _artifact(db_session, first, day=2)
     _analyse(db_session, latest, "positive", 0.91, analysed_day=3)
