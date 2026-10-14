@@ -83,3 +83,13 @@ Declare a new value here when it is configuration, such as a URL, a key, a
 model name, a limit or a feature switch. Give it its limits in the
 declaration, so a bad value fails at the first read instead of where it is
 used, and read it through `settings`, never with `os.getenv`.
+
+Two tests hold this:
+
+- `tests/test_runtime_configuration.py` fails when other runtime code reads
+  the environment. Only facts AWS sets about the process, such as
+  `AWS_LAMBDA_FUNCTION_NAME`, are allowed.
+- `tests/test_queue_wiring.py` fails when a function in
+  `infra/template.yaml` sets a variable that is not declared here, a literal
+  that differs from its declared default, or a parameter whose allowed
+  values the setting would refuse.

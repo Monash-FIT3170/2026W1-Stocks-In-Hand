@@ -9,7 +9,9 @@ settings again before and after they run.
 
 from __future__ import annotations
 
+import ast
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -30,6 +32,7 @@ from app.core.config import (
     Secret,
     Settings,
     SsmParameterStore,
+    declared_settings,
     get_settings,
     reset_settings,
     settings,
@@ -37,7 +40,17 @@ from app.core.config import (
 from app.sources import SOURCES, scheduled_tickers
 
 BACKEND = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PARAMETER = "/stocks-in-hand/test/secret"
+# The code that runs in the API, the Lambdas and migrations. scripts/ and
+# tools/ are local tools.
+RUNTIME_CODE = ("app", "lambdas", "parsing", "scrapers", "alembic", "main.py", "lambda_api.py")
+# Facts AWS sets about the process, which are not settings. "os.environ" is
+# the whole environment, which Chromium inherits in Lambda.
+AWS_RUNTIME_READS = {
+    "app/database/connection.py": {"AWS_LAMBDA_FUNCTION_NAME"},
+    "scrapers/browser.py": {"AWS_LAMBDA_RUNTIME_API", "os.environ"},
+}
 REQUIRED_SECRETS = [secret for secret in SECRETS if not secret.optional]
 OPTIONAL_SECRETS = [secret for secret in SECRETS if secret.optional]
 
@@ -418,6 +431,63 @@ def test_the_first_read_resolves_secrets_from_ssm(
     assert settings.BREVO_API_KEY == "brevo-key-from-ssm"
     assert ssm.requested == [PARAMETER]
     assert "BREVO_API_KEY" not in os.environ
+
+
+def _environment_reads(path: Path) -> set[str]:
+    """The variables a module reads, with "os.environ" for the whole environment."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    reads = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            reads.update(
+                f"os.{alias.name}" for alias in node.names if alias.name in {"environ", "getenv"}
+            )
+        if not (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+            and node.attr in {"environ", "getenv"}
+        ):
+            continue
+        reader: ast.AST = node
+        if isinstance(parents[reader], ast.Attribute) and parents[reader].attr == "get":
+            reader = parents[reader]
+        parent = parents[reader]
+        if isinstance(parent, ast.Call) and parent.func is reader and parent.args:
+            name = parent.args[0]
+        elif isinstance(parent, ast.Subscript) and parent.value is reader:
+            name = parent.slice
+        else:
+            name = None
+        reads.add(name.value if isinstance(name, ast.Constant) else "os.environ")
+    return reads
+
+
+def test_only_the_configuration_reads_the_environment() -> None:
+    """A setting read anywhere else would skip its declared default and limits."""
+    paths = [
+        path
+        for entry in RUNTIME_CODE
+        for path in ([BACKEND / entry] if entry.endswith(".py") else (BACKEND / entry).rglob("*.py"))
+    ]
+    unexpected = {}
+    for path in paths:
+        module = path.relative_to(BACKEND).as_posix()
+        if module == "app/core/config.py":
+            continue
+        reads = _environment_reads(path) - AWS_RUNTIME_READS.get(module, set())
+        if reads:
+            unexpected[module] = reads
+
+    assert unexpected == {}
+
+
+def test_the_example_environment_names_only_declared_settings() -> None:
+    example = (REPOSITORY_ROOT / "backend" / ".env.example").read_text(encoding="utf-8")
+    named = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", example, flags=re.MULTILINE))
+
+    assert named - {*declared_settings(), *(secret.variable for secret in SECRETS)} == set()
 
 
 def test_no_repr_shows_a_value() -> None:

@@ -193,6 +193,17 @@ def template_literals_match_declared_defaults(model: TemplateModel) -> list[str]
     return problems
 
 
+def template_variables_are_declared(model: TemplateModel) -> list[str]:
+    """Every function variable is a declared setting or names a registered secret."""
+    known = {*declared_settings(), *(secret.variable for secret in SECRETS)}
+    return [
+        f"{function.logical_id}.{name} is not a declared setting"
+        for function in model.functions().values()
+        for name in function.environment
+        if name not in known
+    ]
+
+
 def _number(value: float) -> str:
     return str(int(value)) if value.is_integer() else str(value)
 
@@ -268,6 +279,7 @@ RULES = [
     registered_secrets_are_deployed,
     template_literals_match_declared_defaults,
     template_parameters_fit_declared_limits,
+    template_variables_are_declared,
     queues_are_encrypted,
     dead_letter_queues_outlive_their_sources,
     dead_letter_queue_alarms_page_the_alarm_topic,
@@ -363,6 +375,10 @@ BREAKAGES = {
     "parameter allows a rejected value": (
         template_parameters_fit_declared_limits,
         lambda d: d["Parameters"]["AlertMaxPerInvestorPerRun"].update(Default="0"),
+    ),
+    "undeclared template variable": (
+        template_variables_are_declared,
+        lambda d: _environment(d, "DiscoveryFunction").update(UNUSED_LIMIT="1"),
     ),
     "queue encryption removed": (
         queues_are_encrypted,
