@@ -16,6 +16,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from pathlib import PurePosixPath
+from typing import Any
+from urllib.parse import unquote_plus, urlparse
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -27,7 +30,13 @@ from app.services import artifact_summary
 from app.services.generation import Unavailable
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
 from app.status import AnalysisStatus, DownloadStatus
-from lambdas.artifact_analysis import AnalysisResult, ArtifactFacts, ArtifactKind
+from lambdas.artifact_analysis import (
+    AnalysisResult,
+    ArtifactFacts,
+    ArtifactKind,
+    RecordedDocument,
+)
+from lambdas.raw_documents import StoredDocument
 
 SessionScope = Callable[[], AbstractContextManager[Session]]
 
@@ -42,6 +51,15 @@ class PostgresAnalysisRecords:
         with self._session_scope() as db:
             artifact = artifact_crud.get_artifact(db, artifact_id)
             return _facts(artifact) if artifact is not None else None
+
+    def mark_stored(self, artifact_id: UUID, stored: StoredDocument) -> bool:
+        with self._session_scope() as db:
+            recorded = scrape_run_crud.mark_artifact_stored(
+                db,
+                artifact_id,
+                **stored.artifact_fields(),
+            )
+            return recorded is not None
 
     def start(self, artifact_id: UUID) -> None:
         with self._session_scope() as db:
@@ -97,6 +115,17 @@ def _kind(artifact: Artifact) -> ArtifactKind:
     return "other"
 
 
+def _filename(artifact: Artifact, metadata: dict[str, Any]) -> str | None:
+    filename = metadata.get("filename")
+    if isinstance(filename, str) and filename.strip():
+        return filename.strip()
+    for url in (artifact.document_url, artifact.url):
+        name = PurePosixPath(unquote_plus(urlparse(url).path)).name if url else ""
+        if name:
+            return name
+    return None
+
+
 def _facts(artifact: Artifact) -> ArtifactFacts:
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     source_name = metadata.get("source_name") or metadata.get("provider")
@@ -104,9 +133,21 @@ def _facts(artifact: Artifact) -> ArtifactFacts:
         artifact_id=artifact.id,
         kind=_kind(artifact),
         source_type=artifact.source_type,
+        source_adapter=artifact.source_adapter,
+        ticker=artifact.ticker.symbol if artifact.ticker is not None else None,
         run_id=artifact.scrape_run_id,
         title=artifact.title,
         raw_text=artifact.raw_text,
         source_name=source_name if isinstance(source_name, str) else None,
+        filename=_filename(artifact, metadata),
         completed=artifact.analysis_status == AnalysisStatus.COMPLETED,
+        document=(
+            RecordedDocument(
+                bucket=artifact.s3_bucket,
+                key=artifact.s3_key,
+                checksum=artifact.checksum_sha256,
+            )
+            if artifact.download_status == DownloadStatus.STORED
+            else None
+        ),
     )

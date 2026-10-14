@@ -7,7 +7,7 @@ FAILED state, and the API or scheduler could then enqueue a second Queue A
 message for a run SQS was still redelivering.
 
 These run the real handlers against Postgres with the network edges faked:
-the source adapter, SQS and S3.
+the source adapter, SQS and S3, and for analysis FinBERT and the LLM.
 """
 
 import hashlib
@@ -37,7 +37,6 @@ from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.scrape_run import ScrapeRun
 from app.services import artifact_summary, scrape_runs
-from app.services.artifact_summary import Summary
 from app.services.generation.providers import ScriptedProvider
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
@@ -51,10 +50,8 @@ from lambdas import (
 from lambdas.artifact_analysis import AnalysisPorts, FixedSentiment
 from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
-from lambdas.download_validation import validated_document
+from lambdas.download_validation import DownloadedDocument, validated_document
 from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
-from parsing.analysis import AnalysisOutput, ParsedDocument
-from parsing.classification import ClassificationInput, classify_document
 from scrapers import registry as scraper_registry
 from scrapers.adapter import SourceAdapter, SourceUnreachableError
 from scrapers.base import Announcement
@@ -89,17 +86,20 @@ def workers_use(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Session
     def test_session():
         yield db_session
 
-    for module in (discovery, download, analysis, pipeline_stage):
+    for module in (discovery, download, pipeline_stage):
         monkeypatch.setattr(module, "database_session", test_session)
     return db_session
 
 
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> RawDocumentStore:
-    """The raw document store both workers use, held in memory."""
+    """The raw document store, held in memory.
+
+    The download worker gets it from ``raw_document_store``, and the analysis
+    tests pass it in their ports.
+    """
     in_memory = RawDocumentStore(InMemoryBucket("raw-documents"))
-    for worker in (download, analysis):
-        monkeypatch.setattr(worker, "raw_document_store", lambda: in_memory)
+    monkeypatch.setattr(download, "raw_document_store", lambda: in_memory)
     return in_memory
 
 
@@ -626,17 +626,34 @@ def test_final_download_attempt_fails_artifact_and_finishes_run(
 
 # Analysis
 
+HALF_YEAR_REPORT = "Half year report for the six months ended 31 December 2025."
+ANNOUNCEMENT_SUMMARY = {
+    "summary": "CSL reported higher half year revenue.",
+    "about": "The report covers CSL's half year results.",
+    "changed": "Revenue increased.",
+    "matters": "Higher revenue may support earnings.",
+    "confirmed_facts": ["Revenue increased."],
+    "speculation": [],
+}
+
+
+def _half_year_report(artifact) -> DownloadedDocument:
+    return validated_document(
+        HALF_YEAR_REPORT.encode(),
+        declared_content_type="text/plain",
+        final_url=artifact.document_url,
+        max_bytes=1024,
+    )
+
 
 def _stored_document(db: Session, store: RawDocumentStore):
     """A run whose one document the download stage has stored."""
     run, artifact = _run_with_one_document(db)
-    document = validated_document(
-        b"%PDF-1.7\nhalf year results",
-        declared_content_type="application/pdf",
-        final_url=artifact.document_url,
-        max_bytes=1024,
+    stored = store.put(
+        ticker="CSL",
+        artifact_id=artifact.id,
+        document=_half_year_report(artifact),
     )
-    stored = store.put(ticker="CSL", artifact_id=artifact.id, document=document)
     scrape_run_crud.mark_artifact_download_started(db, artifact.id)
     scrape_run_crud.mark_artifact_stored(db, artifact.id, **stored.artifact_fields())
     return run, artifact, stored
@@ -658,35 +675,6 @@ def _s3_event(location, *, bucket: str | None = None) -> str:
     )
 
 
-def _analysis_output(summary: Summary | None = None) -> AnalysisOutput:
-    classification = classify_document(
-        ClassificationInput(
-            title="Half Year Results",
-            text="Half year report for the six months ended 31 December 2025.",
-            filename="report.pdf",
-            source_type="asx_announcement",
-            source_adapter="csl",
-        )
-    )
-    return AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text="Revenue increased.",
-            page_count=1,
-            category="HalfYearResults",
-            category_confidence=1.0,
-            extracted_data={},
-            classification=classification,
-        ),
-        summary=summary,
-        sentiment={
-            "sentiment_label": "positive",
-            "label": "positive",
-            "confidence_score": 0.9,
-            "model_used": "ProsusAI/finbert",
-        },
-    )
-
-
 def _analyse(body: str, attempt: int = 1) -> None:
     analysis.handler({"Records": [_record(body, attempt)]}, None)
 
@@ -694,13 +682,19 @@ def _analyse(body: str, attempt: int = 1) -> None:
 def _analysis_ports(
     db: Session,
     monkeypatch: pytest.MonkeyPatch,
-    *answers: dict,
+    *answers: dict | Exception,
+    documents: RawDocumentStore | None = None,
+    alerts=None,
 ) -> AnalysisPorts:
     """The ports the analysis handler builds, over the test session."""
     ports = AnalysisPorts(
         records=PostgresAnalysisRecords(lambda: nullcontext(db)),
         scorer=FixedSentiment("positive", confidence=0.9, model="ProsusAI/finbert"),
-        provider=ScriptedProvider([json.dumps(answer) for answer in answers]),
+        documents=documents,
+        provider=ScriptedProvider(
+            [json.dumps(answer) if isinstance(answer, dict) else answer for answer in answers]
+        ),
+        alerts=alerts,
     )
     monkeypatch.setattr(analysis, "deployed_ports", lambda: ports)
     return ports
@@ -718,24 +712,20 @@ def test_analysis_records_the_result_finishes_the_run_and_notifies(
     workers_use: Session,
     store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     run, artifact, stored = _stored_document(workers_use, store)
-    analysed: list[bytes] = []
+    notifications: list[NotificationMessage] = []
+    _analysis_ports(
+        workers_use,
+        monkeypatch,
+        ANNOUNCEMENT_SUMMARY,
+        documents=store,
+        alerts=notifications.append,
+    )
 
-    def analyse_document(content, **_kwargs):
-        analysed.append(content)
-        return _analysis_output()
-
-    sqs = FakeSqs()
-    monkeypatch.setattr(analysis, "analyse_document", analyse_document)
-    monkeypatch.setattr(analysis.boto3, "client", lambda _service: sqs)
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-    monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
-    analysis._notification_sqs_client.cache_clear()
-    try:
+    with caplog.at_level(logging.INFO):
         _analyse(_s3_event(stored.location))
-    finally:
-        analysis._notification_sqs_client.cache_clear()
 
     workers_use.refresh(artifact)
     workers_use.refresh(run)
@@ -744,12 +734,10 @@ def test_analysis_records_the_result_finishes_the_run_and_notifies(
         .filter(ArtifactSentiment.artifact_id == artifact.id)
         .one()
     )
-    [notification] = [
-        NotificationMessage.model_validate_json(body) for body in sqs.bodies
-    ]
-    assert analysed == [b"%PDF-1.7\nhalf year results"]
+    [notification] = notifications
+    [completed] = [event for event in _pipeline_events(caplog) if event["event"] == "completed"]
     assert artifact.analysis_status == AnalysisStatus.COMPLETED
-    assert artifact.raw_text == "Revenue increased."
+    assert artifact.raw_text == HALF_YEAR_REPORT
     assert (
         artifact.artifact_metadata["classification"]["primary_category"]
         == "half_year_results"
@@ -760,6 +748,24 @@ def test_analysis_records_the_result_finishes_the_run_and_notifies(
     assert notification.scrape_run_id == run.id
     assert notification.ticker == "CSL"
     assert notification.sentiment_label == "positive"
+    assert {
+        key: completed[key]
+        for key in (
+            "run_id",
+            "page_count",
+            "category",
+            "classification_status",
+            "primary_category",
+            "source_adapter",
+        )
+    } == {
+        "run_id": str(run.id),
+        "page_count": 1,
+        "category": "HalfYearResults",
+        "classification_status": "classified",
+        "primary_category": "half_year_results",
+        "source_adapter": "csl",
+    }
 
 
 def test_analysis_records_the_summary_with_the_result(
@@ -768,26 +774,16 @@ def test_analysis_records_the_summary_with_the_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _run, artifact, stored = _stored_document(workers_use, store)
-    summary = artifact_summary.from_answer(
-        {
-            "summary": "CSL reported higher half year revenue.",
-            "about": "The report covers CSL's half year results.",
-            "changed": "Revenue increased.",
-            "matters": "Higher revenue may support earnings.",
-            "confirmed_facts": ["Revenue increased."],
-            "speculation": [],
-        },
-        model="bedrock:test-model",
-        prompt_version="llm-announcement-summary-v3",
-    )
-    monkeypatch.setattr(
-        analysis, "analyse_document", lambda *_a, **_k: _analysis_output(summary)
-    )
+    _analysis_ports(workers_use, monkeypatch, ANNOUNCEMENT_SUMMARY, documents=store)
 
     _analyse(_s3_event(stored.location))
 
     workers_use.refresh(artifact)
-    assert artifact_summary.read(artifact) == summary
+    assert artifact_summary.read(artifact) == artifact_summary.from_answer(
+        ANNOUNCEMENT_SUMMARY,
+        model="scripted:test-model",
+        prompt_version="llm-announcement-summary-v3",
+    )
     assert artifact.artifact_metadata["page_count"] == 1
     assert (
         workers_use.query(ArtifactSummary)
@@ -797,23 +793,62 @@ def test_analysis_records_the_summary_with_the_result(
     )
 
 
+def test_a_failed_alert_is_logged_without_its_text_and_the_analysis_completes(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run, artifact, stored = _stored_document(workers_use, store)
+
+    def unavailable_queue(_message: NotificationMessage) -> None:
+        raise RuntimeError("private queue detail")
+
+    _analysis_ports(
+        workers_use,
+        monkeypatch,
+        ANNOUNCEMENT_SUMMARY,
+        documents=store,
+        alerts=unavailable_queue,
+    )
+
+    with caplog.at_level(logging.INFO):
+        _analyse(_s3_event(stored.location))
+
+    workers_use.refresh(artifact)
+    [failed] = [
+        event
+        for event in _pipeline_events(caplog)
+        if event["event"] == "notification_publish_failed"
+    ]
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert "private queue detail" not in caplog.text
+    assert {key: value for key, value in failed.items() if key != "duration_ms"} == {
+        "stage": "analysis",
+        "event": "notification_publish_failed",
+        "correlation_id": "message-1",
+        "attempt": 1,
+        "artifact_id": str(artifact.id),
+        "run_id": str(run.id),
+        "error_code": "RuntimeError",
+    }
+
+
 def test_analysis_of_a_completed_document_is_skipped(
     workers_use: Session,
     store: RawDocumentStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _run, artifact, stored = _stored_document(workers_use, store)
-    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+    # One answer: analysing the document again would ask for a second.
+    ports = _analysis_ports(workers_use, monkeypatch, ANNOUNCEMENT_SUMMARY, documents=store)
     _analyse(_s3_event(stored.location))
 
-    def analyse_again(*_args, **_kwargs):
-        raise AssertionError("completed document was analysed again")
-
-    monkeypatch.setattr(analysis, "analyse_document", analyse_again)
     _analyse(_s3_event(stored.location), attempt=2)
 
     workers_use.refresh(artifact)
     assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert len(ports.scorer.scored) == 1
 
 
 def test_s3_event_before_the_download_commit_is_reconciled_from_the_object(
@@ -823,15 +858,13 @@ def test_s3_event_before_the_download_commit_is_reconciled_from_the_object(
 ) -> None:
     run, artifact = _run_with_one_document(workers_use)
     scrape_run_crud.mark_artifact_download_started(workers_use, artifact.id)
-    document = validated_document(
-        b"%PDF-1.7\nhalf year results",
-        declared_content_type="application/pdf",
-        final_url=artifact.document_url,
-        max_bytes=1024,
-    )
     # The object is written, but the download stage has not recorded it yet.
-    stored = store.put(ticker="CSL", artifact_id=artifact.id, document=document)
-    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+    stored = store.put(
+        ticker="CSL",
+        artifact_id=artifact.id,
+        document=_half_year_report(artifact),
+    )
+    _analysis_ports(workers_use, monkeypatch, ANNOUNCEMENT_SUMMARY, documents=store)
 
     _analyse(_s3_event(stored.location))
 
@@ -850,18 +883,16 @@ def test_s3_event_for_an_object_that_is_not_the_artifact_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _run, artifact = _run_with_one_document(workers_use)
-    other_run, other = _run_with_one_document(workers_use)
-    document = validated_document(
-        b"%PDF-1.7\nsomeone else's results",
-        declared_content_type="application/pdf",
-        final_url=other.document_url,
-        max_bytes=1024,
+    _other_run, other = _run_with_one_document(workers_use)
+    stored = store.put(
+        ticker="CSL",
+        artifact_id=other.id,
+        document=_half_year_report(other),
     )
-    stored = store.put(ticker="CSL", artifact_id=other.id, document=document)
     # An object under this artifact's key whose metadata names another one.
     forged_key = stored.location.key.replace(str(other.id), str(artifact.id))
     store.bucket.objects[forged_key] = store.bucket.objects[stored.location.key]
-    monkeypatch.setattr(analysis, "analyse_document", lambda *_a, **_k: _analysis_output())
+    _analysis_ports(workers_use, monkeypatch, documents=store)
 
     _analyse(_s3_event(locate(store.name, forged_key)))
 
@@ -887,11 +918,12 @@ def test_analysis_failure_is_terminal_only_on_the_final_attempt(
     expected_failed: int,
 ) -> None:
     run, artifact, stored = _stored_document(workers_use, store)
-
-    def model_endpoint_reset(*_args, **_kwargs):
-        raise ConnectionError("model endpoint reset")
-
-    monkeypatch.setattr(analysis, "analyse_document", model_endpoint_reset)
+    _analysis_ports(
+        workers_use,
+        monkeypatch,
+        ConnectionError("model endpoint reset"),
+        documents=store,
+    )
 
     with pytest.raises(ConnectionError):
         _analyse(_s3_event(stored.location), attempt)
@@ -907,8 +939,10 @@ def test_analysis_failure_is_terminal_only_on_the_final_attempt(
 def test_analysis_event_from_another_bucket_is_not_recorded_against_the_artifact(
     workers_use: Session,
     store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _run, artifact, stored = _stored_document(workers_use, store)
+    _analysis_ports(workers_use, monkeypatch, documents=store)
 
     _analyse(_s3_event(stored.location, bucket="someone-elses-bucket"))
 

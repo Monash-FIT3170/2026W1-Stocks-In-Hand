@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import logging
 import zipfile
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -13,10 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
-from app.messages import (
-    NotificationMessage,
-    PublicDiscussionAnalysisMessage,
-)
+from app.messages import PublicDiscussionAnalysisMessage
 from lambdas import analysis, common
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -398,109 +394,6 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
             max_docx_uncompressed_bytes=1_000,
         )
     assert expanded.value.code == "document_too_large"
-
-def test_analysis_notification_matches_consumer_contract(monkeypatch):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    sqs = MagicMock()
-    client_factory = MagicMock(return_value=sqs)
-    monkeypatch.setenv(
-        "NOTIFICATION_QUEUE_URL",
-        "https://sqs.ap-southeast-2.amazonaws.com/123/notifications",
-    )
-    monkeypatch.setattr(analysis.boto3, "client", client_factory)
-    analysis._notification_sqs_client.cache_clear()
-
-    try:
-        for _ in range(2):
-            analysis._publish_notification(
-                artifact_id=artifact_id,
-                ticker="csl",
-                scrape_run_id=run_id,
-                sentiment={
-                    "sentiment_label": "positive",
-                    "confidence_score": 0.9,
-                },
-            )
-    finally:
-        analysis._notification_sqs_client.cache_clear()
-
-    client_factory.assert_called_once_with("sqs")
-    assert sqs.send_message.call_count == 2
-    published = sqs.send_message.call_args.kwargs
-    assert published["QueueUrl"].endswith("/notifications")
-    body = json.loads(published["MessageBody"])
-    assert set(body) == {
-        "schema_version",
-        "artifact_id",
-        "ticker",
-        "scrape_run_id",
-        "sentiment_label",
-        "confidence_score",
-    }
-    message = NotificationMessage.model_validate(body)
-    assert message.artifact_id == artifact_id
-    assert message.scrape_run_id == run_id
-    assert message.ticker == "CSL"
-    assert message.sentiment_label == "positive"
-
-
-@pytest.mark.parametrize(
-    ("enabled", "label"),
-    [("false", "positive"), ("true", "unknown"), ("true", None)],
-)
-def test_analysis_notification_prefilter_skips_publish(monkeypatch, enabled, label):
-    publish = MagicMock()
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
-    monkeypatch.setattr(analysis, "_publish_notification", publish)
-
-    analysis._try_publish_notification(
-        artifact_id=uuid4(),
-        ticker="CSL",
-        scrape_run_id=uuid4(),
-        sentiment={"sentiment_label": label, "confidence_score": 0.9},
-        correlation="message-1",
-        attempt=1,
-    )
-
-    publish.assert_not_called()
-
-
-def test_analysis_notification_publish_failure_never_raises(monkeypatch, caplog):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    private_detail = "private queue detail"
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-
-    def fail_publish(**_kwargs):
-        raise RuntimeError(private_detail)
-
-    monkeypatch.setattr(analysis, "_publish_notification", fail_publish)
-
-    with caplog.at_level(logging.ERROR):
-        analysis._try_publish_notification(
-            artifact_id=artifact_id,
-            ticker="CSL",
-            scrape_run_id=run_id,
-            sentiment={
-                "sentiment_label": "negative",
-                "confidence_score": 0.8,
-            },
-            correlation="message-1",
-            attempt=2,
-        )
-
-    assert private_detail not in caplog.text
-    event = json.loads(caplog.records[-1].message)
-    assert event == {
-        "stage": "analysis",
-        "event": "notification_publish_failed",
-        "correlation_id": "message-1",
-        "run_id": str(run_id),
-        "artifact_id": str(artifact_id),
-        "attempt": 2,
-        "error_code": "RuntimeError",
-    }
 
 
 def test_analysis_worker_parses_public_discussion_message() -> None:

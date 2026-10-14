@@ -21,7 +21,7 @@ from app.core.config import settings
 from app.crud import alert_delivery as alert_delivery_crud
 from app.schemas.notification import UnsubscribeRequest
 from app.services.alert_templates import render_alert_email
-from lambdas import analysis, notify
+from lambdas import notify
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -305,22 +305,3 @@ def test_unsubscribe_valid_and_invalid_tokens_share_the_public_response(
 
     assert valid.message == invalid.message
     disable.assert_called_once()
-
-
-def test_producer_absorbs_notification_publish_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A notification queue outage must never fail stored analysis work."""
-    publish = Mock(side_effect=RuntimeError("queue unavailable"))
-    monkeypatch.setattr(analysis, "_publish_notification", publish)
-
-    analysis._try_publish_notification(
-        artifact_id=uuid4(),
-        ticker="BHP",
-        scrape_run_id=uuid4(),
-        sentiment={"sentiment_label": "negative", "confidence_score": 0.82},
-        correlation="phase-nine",
-        attempt=1,
-    )
-
-    publish.assert_called_once()

@@ -22,29 +22,48 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
+from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.core.config import settings
+from app.crud import scrape_run as scrape_run_crud
+from app.messages import NotificationMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
-from app.services import artifact_summary, news_sentiment
+from app.services import artifact_summary, news_sentiment, scrape_runs
 from app.services import sentiment as sentiment_service
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
-from app.status import AnalysisStatus
+from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
+from lambdas import artifact_analysis
 from lambdas.artifact_analysis import (
+    AlertSender,
     AlreadyAnalysed,
     Analysed,
     AnalysisPorts,
     FinBertScorer,
     FixedSentiment,
     SentimentScorer,
+    analyse_stored_document,
     analyse_stored_text,
+    deployed_ports,
+    sqs_alert_sender,
 )
 from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from lambdas.common import PermanentDocumentError
+from lambdas.download_validation import validated_document
+from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
 from parsing import storage
 
 BACKEND = Path(__file__).resolve().parents[1]
+HALF_YEAR_REPORT = "Half year report for the six months ended 31 December 2025."
+ANNOUNCEMENT_ANSWER = {
+    "summary": "CSL reported higher half year revenue.",
+    "about": "The report covers CSL's half year results.",
+    "changed": "Revenue increased.",
+    "matters": "Higher revenue may support earnings.",
+    "confirmed_facts": ["Revenue increased."],
+    "speculation": ["Earnings may rise next year."],
+}
 NEWS_ANSWER = {
     "summary": "BHP reported higher copper production.",
     "about": "The story covers BHP's quarterly copper output.",
@@ -81,18 +100,27 @@ def db_session() -> Iterator[Session]:
         engine.dispose()
 
 
+@pytest.fixture()
+def store() -> RawDocumentStore:
+    return RawDocumentStore(InMemoryBucket("raw-documents"))
+
+
 def _ports(
     db: Session,
     *answers: dict | str | Exception,
     scorer: SentimentScorer | None = None,
+    documents: RawDocumentStore | None = None,
+    alerts: AlertSender | None = None,
 ) -> AnalysisPorts:
     """Ports over the test session: each answer is scripted in order."""
     return AnalysisPorts(
         records=PostgresAnalysisRecords(lambda: nullcontext(db)),
         scorer=scorer or FixedSentiment("positive", confidence=0.9, model="test-finbert"),
+        documents=documents,
         provider=ScriptedProvider(
             [json.dumps(answer) if isinstance(answer, dict) else answer for answer in answers]
         ),
+        alerts=alerts,
     )
 
 
@@ -130,6 +158,58 @@ def _post(db: Session, **values) -> Artifact:
     )
 
 
+def _pipeline_announcement(db: Session, *, title: str = "CSL half year results"):
+    """A scrape run that discovered one announcement, not yet downloaded."""
+    requested = scrape_runs.request_scrape_run(
+        db,
+        ticker="CSL",
+        idempotency_key=f"analysis:{uuid.uuid4()}",
+        send=lambda _message: None,
+    )
+    run = scrape_run_crud.get_scrape_run(db, requested.scrape_run_id)
+    document_url = f"https://investors.csl.com/pdf/{uuid.uuid4()}.pdf"
+    artifact, _created = scrape_run_crud.get_or_create_artifact(
+        db,
+        scrape_run_id=run.id,
+        canonical_url=document_url,
+        document_url=document_url,
+        source_adapter="csl",
+        source_id=f"analysis-{uuid.uuid4()}",
+        title=title,
+    )
+    scrape_run_crud.mark_run_discovery_started(db, run.id)
+    scrape_run_crud.mark_run_discovery_completed(db, run.id, items_found=1)
+    scrape_run_crud.mark_artifact_download_started(db, artifact.id)
+    return run, artifact
+
+
+def _put(store: RawDocumentStore, artifact: Artifact, text: str = HALF_YEAR_REPORT):
+    return store.put(
+        ticker="CSL",
+        artifact_id=artifact.id,
+        document=validated_document(
+            text.encode(),
+            declared_content_type="text/plain",
+            final_url=artifact.document_url,
+            max_bytes=4096,
+        ),
+    )
+
+
+def _stored_document(
+    db: Session,
+    store: RawDocumentStore,
+    *,
+    title: str = "CSL half year results",
+    text: str = HALF_YEAR_REPORT,
+):
+    """A scrape run whose one announcement the download stage has stored."""
+    run, artifact = _pipeline_announcement(db, title=title)
+    stored = _put(store, artifact, text)
+    scrape_run_crud.mark_artifact_stored(db, artifact.id, **stored.artifact_fields())
+    return run, artifact, stored
+
+
 def _rows(db: Session, model, artifact: Artifact) -> list:
     return list(db.scalars(select(model).where(model.artifact_id == artifact.id)))
 
@@ -147,7 +227,10 @@ def test_a_news_story_is_summarised_with_the_news_prompt_and_recorded(
         artifact_id=story.id,
         run_id=None,
         source_type="news",
+        source_adapter=None,
         category="news_article",
+        page_count=1,
+        classification=None,
         summarised=True,
     )
     [call] = ports.provider.calls
@@ -306,6 +389,258 @@ def test_an_artifact_that_does_not_exist_is_not_found(db_session: Session) -> No
         analyse_stored_text(uuid.uuid4(), _ports(db_session))
 
     assert error.value.code == "artifact_not_found"
+
+
+def test_a_stored_announcement_is_read_classified_summarised_and_recorded(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    run, artifact, stored = _stored_document(db_session, store)
+    alerts: list[NotificationMessage] = []
+    ports = _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store, alerts=alerts.append)
+
+    outcome = analyse_stored_document(stored.location, ports)
+
+    db_session.refresh(artifact)
+    db_session.refresh(run)
+    assert isinstance(outcome, Analysed)
+    assert (outcome.category, outcome.page_count, outcome.summarised) == (
+        "HalfYearResults",
+        1,
+        True,
+    )
+    assert outcome.classification.primary_category == "half_year_results"
+    [call] = ports.provider.calls
+    assert call.prompt.startswith("You are summarising an official ASX announcement")
+    assert "Detected category:\nHalfYearResults" in call.prompt
+    assert ports.scorer.scored == [f"CSL half year results\n\n{HALF_YEAR_REPORT}"]
+    assert artifact.raw_text == HALF_YEAR_REPORT
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert artifact.artifact_metadata["classification"]["primary_category"] == (
+        "half_year_results"
+    )
+    assert {
+        key: artifact.artifact_metadata[key]
+        for key in ("category", "extracted_data", "page_count", "document_format")
+    } == {
+        "category": "HalfYearResults",
+        "extracted_data": {},
+        "page_count": 1,
+        "document_format": "txt",
+    }
+    assert artifact_summary.read(artifact) == artifact_summary.from_answer(
+        ANNOUNCEMENT_ANSWER,
+        model="scripted:test-model",
+        prompt_version="llm-announcement-summary-v3",
+    )
+    assert (run.status, run.items_analyzed) == (ScrapeRunStatus.COMPLETED, 1)
+    assert alerts == [
+        NotificationMessage(
+            artifact_id=artifact.id,
+            ticker="CSL",
+            scrape_run_id=run.id,
+            sentiment_label="positive",
+            confidence_score=0.9,
+        )
+    ]
+
+
+def test_an_announcement_announced_before_its_download_is_recorded_is_reconciled(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    run, artifact = _pipeline_announcement(db_session)
+    stored = _put(store, artifact)
+
+    analyse_stored_document(
+        stored.location,
+        _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store),
+    )
+
+    db_session.refresh(artifact)
+    db_session.refresh(run)
+    assert (artifact.download_status, artifact.s3_key) == (
+        DownloadStatus.STORED,
+        stored.location.key,
+    )
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert (run.items_downloaded, run.items_analyzed) == (1, 1)
+
+
+def _untrusted(notification: str, store: RawDocumentStore, stored, artifact: Artifact):
+    """What an untrusted notification names, given an object stored for another artifact."""
+    key = stored.location.key
+    other_id = str(stored.location.artifact_id)
+    if notification == "another_bucket":
+        return locate("someone-elses-bucket", key)
+    if notification == "another_ticker":
+        return locate(store.name, key.replace("/CSL/", "/BHP/"))
+    if notification == "unknown_artifact":
+        return locate(store.name, key.replace(other_id, str(uuid.uuid4())))
+    # An object under this artifact's key whose metadata names the other one.
+    forged_key = key.replace(other_id, str(artifact.id))
+    store.bucket.objects[forged_key] = store.bucket.objects[key]
+    return locate(store.name, forged_key)
+
+
+@pytest.mark.parametrize(
+    ("notification", "code"),
+    [
+        ("another_bucket", "unexpected_bucket"),
+        ("another_ticker", "artifact_identity_mismatch"),
+        ("unknown_artifact", "artifact_not_found"),
+        ("forged_object", "artifact_identity_mismatch"),
+    ],
+)
+def test_a_notification_that_cannot_be_trusted_records_nothing(
+    db_session: Session,
+    store: RawDocumentStore,
+    notification: str,
+    code: str,
+) -> None:
+    _run, artifact = _pipeline_announcement(db_session)
+    _other_run, other = _pipeline_announcement(db_session)
+    location = _untrusted(notification, store, _put(store, other), artifact)
+    ports = _ports(db_session, documents=store)
+
+    with pytest.raises(PermanentDocumentError) as error:
+        analyse_stored_document(location, ports)
+
+    assert error.value.code == code
+    for untouched in (artifact, other):
+        db_session.refresh(untouched)
+        assert (untouched.download_status, untouched.analysis_status) == (
+            DownloadStatus.DOWNLOADING,
+            AnalysisStatus.PENDING,
+        )
+    assert ports.scorer.scored == []
+
+
+def test_a_completed_announcement_is_not_analysed_again(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    _run, artifact, stored = _stored_document(db_session, store)
+    analyse_stored_document(
+        stored.location,
+        _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store),
+    )
+    ports = _ports(db_session, documents=store)
+
+    outcome = analyse_stored_document(stored.location, ports)
+
+    assert outcome == AlreadyAnalysed(artifact_id=artifact.id, run_id=artifact.scrape_run_id)
+    assert ports.scorer.scored == []
+
+
+@pytest.mark.parametrize("label", sorted(ALERT_SENTIMENT_LABELS))
+def test_every_alertable_sentiment_is_sent_to_alert_delivery(
+    db_session: Session,
+    store: RawDocumentStore,
+    label: str,
+) -> None:
+    _run, artifact, stored = _stored_document(db_session, store)
+    alerts: list[NotificationMessage] = []
+
+    analyse_stored_document(
+        stored.location,
+        _ports(
+            db_session,
+            ANNOUNCEMENT_ANSWER,
+            scorer=FixedSentiment(label),
+            documents=store,
+            alerts=alerts.append,
+        ),
+    )
+
+    assert [(alert.artifact_id, alert.sentiment_label) for alert in alerts] == [
+        (artifact.id, label)
+    ]
+
+
+def test_a_sentiment_no_rule_can_match_is_not_sent(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    _run, _artifact, stored = _stored_document(db_session, store)
+    alerts: list[NotificationMessage] = []
+
+    analyse_stored_document(
+        stored.location,
+        _ports(
+            db_session,
+            ANNOUNCEMENT_ANSWER,
+            scorer=FixedSentiment("unknown"),
+            documents=store,
+            alerts=alerts.append,
+        ),
+    )
+
+    assert alerts == []
+
+
+def test_a_failed_alert_never_fails_the_analysis(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    _run, artifact, stored = _stored_document(db_session, store)
+
+    def unavailable_queue(_message: NotificationMessage) -> None:
+        raise RuntimeError("Notification queue is unavailable")
+
+    outcome = analyse_stored_document(
+        stored.location,
+        _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store, alerts=unavailable_queue),
+    )
+
+    db_session.refresh(artifact)
+    assert outcome.alert_error == "RuntimeError"
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+
+
+def test_the_sqs_alert_sender_sends_the_notification_contract() -> None:
+    client = MagicMock()
+    message = NotificationMessage(
+        artifact_id=uuid.uuid4(),
+        ticker="csl",
+        scrape_run_id=uuid.uuid4(),
+        sentiment_label="negative",
+        confidence_score=0.8,
+    )
+
+    sqs_alert_sender("https://sqs.example/notifications", client)(message)
+
+    sent = client.send_message.call_args.kwargs
+    body = json.loads(sent["MessageBody"])
+    assert sent["QueueUrl"] == "https://sqs.example/notifications"
+    assert set(body) == {
+        "schema_version",
+        "artifact_id",
+        "ticker",
+        "scrape_run_id",
+        "sentiment_label",
+        "confidence_score",
+    }
+    assert NotificationMessage.model_validate(body) == message
+    with pytest.raises(RuntimeError, match="not configured"):
+        sqs_alert_sender("", client)(message)
+
+
+@pytest.mark.parametrize(("enabled", "alerts"), [("true", True), ("false", False)])
+def test_the_lambda_sends_alerts_only_when_notifications_are_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: str,
+    alerts: bool,
+) -> None:
+    monkeypatch.setattr(artifact_analysis, "load_runtime_configuration", lambda: None)
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
+    monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
+    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")
+
+    ports = deployed_ports()
+
+    assert (ports.alerts is not None) is alerts
+    assert ports.documents.name == "raw-documents"
 
 
 def test_every_path_gives_finbert_the_title_and_text(
