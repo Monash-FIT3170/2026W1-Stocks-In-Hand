@@ -3,10 +3,9 @@
 A summary has four text lines (``summary``, ``about``, ``changed`` and
 ``matters``) and two clarity lists (``confirmed_facts`` and ``speculation``)
 that only announcement summaries sort their claims into. It is stored twice:
-as top-level keys of ``artifacts.artifact_metadata``, which the category
-sentiment keyword search still reads, and as the lines joined into the
-artifact's one ``artifact_summaries`` row. This module is the only code that
-writes either store. ``record`` replaces both inside the caller's
+as top-level keys of ``artifacts.artifact_metadata``, and as the lines joined
+into the artifact's one ``artifact_summaries`` row. This module is the only
+code that writes either store. ``record`` replaces both inside the caller's
 transaction, and ``read`` gives them back as one ``Summary``, recovering
 older records that kept only the joined text. ``is_complete`` is the one
 rule for whether a summary has everything its source type should have.

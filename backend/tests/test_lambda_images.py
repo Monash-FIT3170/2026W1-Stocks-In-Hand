@@ -5,11 +5,19 @@ Each Dockerfile copies an explicit list of files. The analysis image copied
 ``parsing.extractors`` or ``parsing.classification_metadata`` it imports, so
 the analysis handler could not be imported once deployed. Nothing failed until
 the Lambda started, because the image build never imports the handler.
+
+The API image installs no model runtime: it reads the sentiment the analysis
+worker stored and never runs FinBERT, so neither torch nor transformers is
+installed in it, and every handler it runs starts without them.
 """
 
 from __future__ import annotations
 
 import ast
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,6 +31,19 @@ IMAGE_DOCKERFILES = {
     "ApiImageUri": "Dockerfile.api",
     "ScraperImageUri": "Dockerfile.scraper",
     "AnalysisImageUri": "Dockerfile.analysis",
+}
+MODEL_RUNTIME = {"torch", "transformers"}
+# pip options followed by a value that is not a requirement.
+_PIP_VALUE_OPTIONS = {
+    "-c",
+    "--constraint",
+    "-i",
+    "--index-url",
+    "--extra-index-url",
+    "-f",
+    "--find-links",
+    "-t",
+    "--target",
 }
 
 
@@ -158,3 +179,89 @@ def test_import_scan_sees_function_level_and_relative_imports() -> None:
     assert "app.crud.artifact" in names
     assert not any(name.startswith("scrapers") for name in names)
     assert "parsing/classification/engine.py" in _backend_imports("lambdas.analysis")
+
+
+def _distribution(requirement: str) -> str:
+    """The normalised distribution name of a requirement such as ``Foo_Bar[x]==1``."""
+    name = re.split(r"[\s\[<>=!~;@]", requirement.strip(), maxsplit=1)[0]
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _requirements_file(path: Path) -> set[str]:
+    """Distributions a requirements file names, following its ``-r`` files."""
+    names: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line.startswith(("-r ", "--requirement ")):
+            names |= _requirements_file(path.parent / line.split(maxsplit=1)[1])
+        elif line and not line.startswith("-"):
+            names.add(_distribution(line))
+    return names
+
+
+def _installed_distributions(dockerfile: str) -> set[str]:
+    """Distributions the Dockerfile's ``pip install`` commands name, with their ``-r`` files."""
+    text = (BACKEND / dockerfile).read_text(encoding="utf-8").replace("\\\n", " ")
+    names: set[str] = set()
+    for line in text.splitlines():
+        if not line.startswith("RUN "):
+            continue
+        for command in line[len("RUN ") :].split("&&"):
+            words = command.split()
+            if words[:2] != ["pip", "install"]:
+                continue
+            arguments = iter(words[2:])
+            for word in arguments:
+                if word in ("-r", "--requirement"):
+                    # Requirements files are copied next to the task root.
+                    names |= _requirements_file(BACKEND / Path(next(arguments)).name)
+                elif word in _PIP_VALUE_OPTIONS:
+                    next(arguments)
+                elif not word.startswith("-"):
+                    names.add(_distribution(word))
+    return names
+
+
+def test_api_image_installs_no_model_runtime() -> None:
+    installed = _installed_distributions("Dockerfile.api")
+
+    assert "fastapi" in installed
+    assert not installed & MODEL_RUNTIME
+
+
+def test_model_runtime_rule_sees_the_analysis_image() -> None:
+    """The rule above can fail: the analysis image does install both."""
+    assert MODEL_RUNTIME <= _installed_distributions("Dockerfile.analysis")
+
+
+def test_api_image_handlers_start_without_a_model_runtime() -> None:
+    """Every handler the API image runs imports with torch and transformers missing."""
+    handlers = sorted(
+        module for _id, dockerfile, module in _image_handlers() if dockerfile == "Dockerfile.api"
+    )
+    script = "\n".join(
+        [
+            "import importlib, sys",
+            *(f"sys.modules[{name!r}] = None" for name in sorted(MODEL_RUNTIME)),
+            f"for name in {handlers!r}:",
+            "    importlib.import_module(name)",
+        ]
+    )
+    # No SSM parameter is read and no database is reached while importing.
+    environment = {
+        name: value for name, value in os.environ.items() if not name.endswith("_PARAMETER")
+    }
+    environment["DATABASE_URL"] = "postgresql://user:password@127.0.0.1:9/unreachable"
+
+    started = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert "lambda_api" in handlers
+    assert started.returncode == 0, started.stderr

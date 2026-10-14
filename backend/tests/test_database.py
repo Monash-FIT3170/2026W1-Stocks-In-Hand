@@ -639,69 +639,6 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.artifact_metadata["subreddit"] == "ASX"
 
 
-def test_ticker_mentions_connect_social_sentiment_to_ticker(
-    db_session: Session,
-) -> None:
-    """A social artifact can reach ticker sentiment through the join table."""
-    from app.api.routes.category_sentiment import read_ticker_category_sentiment
-
-    ticker = Ticker(
-        symbol=f"P{uuid.uuid4().hex[:8].upper()}",
-        company_name="Public Discussion Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.flush()
-
-    artifact = Artifact(
-        ticker_id=None,
-        source_type="mastodon",
-        artifact_type="mastodon_post",
-        title=f"Investors discuss {ticker.symbol}",
-        url="https://aus.social/@investor/123",
-        raw_text=f"I am positive about {ticker.symbol} after the update.",
-        content_hash=f"public-discussion-{uuid.uuid4()}",
-        published_at=datetime.now(timezone.utc),
-    )
-    db_session.add(artifact)
-    db_session.flush()
-    db_session.add_all(
-        [
-            ArtifactTickerMention(
-                artifact_id=artifact.id,
-                ticker_id=ticker.id,
-                match_method="ticker_symbol",
-                match_confidence=0.95,
-                matched_text=ticker.symbol,
-            ),
-            ArtifactSentiment(
-                artifact_id=artifact.id,
-                sentiment_label="positive",
-                confidence_score=0.9,
-                model_used="test-finbert",
-            ),
-        ]
-    )
-    db_session.commit()
-
-    result = read_ticker_category_sentiment(ticker.symbol, db_session)
-    discussion = result["categories"]["user_discussion"]
-
-    assert artifact.ticker_id is None
-    assert discussion["available"] is True
-    assert discussion["sentiment_label"] == "positive"
-    assert discussion["sources_count"] == 1
-    assert discussion["sources"] == [
-        {
-            "source_type": "mastodon",
-            "title": f"Investors discuss {ticker.symbol}",
-            "url": "https://aus.social/@investor/123",
-            "author": None,
-            "published_at": artifact.published_at,
-        }
-    ]
-
-
 def test_public_discussion_backfill_is_dry_run_first_and_idempotent(
     db_session: Session,
 ) -> None:

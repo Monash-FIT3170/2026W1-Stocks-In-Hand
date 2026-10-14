@@ -12,7 +12,8 @@ Route modules should:
 - define URL paths and HTTP methods;
 - receive request data;
 - get a database session with `Depends(get_db)`;
-- call CRUD functions;
+- call CRUD functions, or the one read-model function (`app/read_models/`)
+  that answers a page's question;
 - raise `HTTPException` for HTTP-specific errors;
 - return response objects that match the Pydantic response schemas.
 
@@ -113,7 +114,11 @@ Source content routes:
 
 Analysis routes:
 
-- `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
+- `category_sentiment.py`: `GET /sentiment/{ticker}`, a ticker's stored
+  sentiment in each sentiment bucket, read through the ticker sentiment
+  read-model (`app/read_models/ticker_sentiment.py`). It never runs FinBERT.
+  `POST /sentiment/{ticker}` is an older compatibility route that answers the
+  same read.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
 - `llm.py`: admin category splits generated on request, and admin summary
   requests queued for the analysis worker.

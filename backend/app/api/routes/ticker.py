@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
-from app.models.artifact_sentiment import ArtifactSentiment
+from app.read_models import ticker_sentiment
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 from app.services import artifact_card, artifact_summary
 from app.services.quotes import Quote, QuoteSource, live_quotes
@@ -75,16 +75,6 @@ def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Art
     )
 
 
-def _latest_sentiment_for_ticker(db: Session, ticker_id: UUID) -> ArtifactSentiment | None:
-    return (
-        db.query(ArtifactSentiment)
-        .join(Artifact, ArtifactSentiment.artifact_id == Artifact.id)
-        .filter(Artifact.ticker_id == ticker_id)
-        .order_by(ArtifactSentiment.created_at.desc())
-        .first()
-    )
-
-
 def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[str]:
     themes: list[str] = []
     seen: set[str] = set()
@@ -113,12 +103,12 @@ def _ticker_brief_payload(symbol: str, db: Session, quotes: QuoteSource) -> dict
     quote = quotes.quote(ticker.symbol)
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
-    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
+    signal = ticker_sentiment.latest_signals(db, [ticker.id]).get(ticker.id)
     latest_summary = artifact_summary.read(latest_artifact) if latest_artifact else None
     sources = artifact_card.sources(latest_artifact) if latest_artifact else []
     confidence_pct = (
-        f"{round(float(latest_sentiment.confidence_score) * 100)}%"
-        if latest_sentiment and latest_sentiment.confidence_score is not None
+        f"{round(signal.confidence_score * 100)}%"
+        if signal and signal.confidence_score is not None
         else "N/A"
     )
 
@@ -126,10 +116,8 @@ def _ticker_brief_payload(symbol: str, db: Session, quotes: QuoteSource) -> dict
         "symbol": ticker.symbol,
         "company_name": ticker.company_name,
         "sector": ticker.sector or ticker.industry or ticker.exchange,
-        "sentiment_status": "available" if latest_sentiment else "unavailable",
-        "sentiment_label": _sentiment_label(
-            latest_sentiment.sentiment_label if latest_sentiment else None
-        ),
+        "sentiment_status": "available" if signal else "unavailable",
+        "sentiment_label": _sentiment_label(signal.sentiment_label if signal else None),
         "last_updated": (
             _format_announcement_time(latest_artifact)
             if latest_artifact
@@ -140,11 +128,9 @@ def _ticker_brief_payload(symbol: str, db: Session, quotes: QuoteSource) -> dict
         "story": artifact_summary.brief(latest_summary),
         "sources_count": len(sources),
         "latest_signal_confidence_pct": confidence_pct,
-        "latest_signal_model": latest_sentiment.model_used if latest_sentiment else None,
+        "latest_signal_model": signal.model_used if signal else None,
         "latest_signal_analyzed_at": (
-            latest_sentiment.created_at.isoformat()
-            if latest_sentiment and latest_sentiment.created_at
-            else None
+            signal.analyzed_at.isoformat() if signal and signal.analyzed_at else None
         ),
         # Deprecated compatibility field. New consumers must use the accurately
         # named latest-signal field above.
