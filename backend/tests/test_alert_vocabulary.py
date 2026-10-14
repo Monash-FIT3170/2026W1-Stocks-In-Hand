@@ -16,9 +16,10 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
+from app.alert_vocabulary import ALERT_SENTIMENT_LABELS, DEFAULT_ALERT_MIN_CONFIDENCE
 from app.crud.alert_rule import KNOWN_SENTIMENT_LABELS
 from app.messages import NotificationMessage
+from app.models.alert_rule import AlertRule
 from app.schemas.notification import NotificationPreferencesUpdate
 from lambdas import analysis
 
@@ -79,6 +80,13 @@ def test_api_and_rule_validation_share_the_vocabulary() -> None:
     assert set(update.sentiment_labels) == ALERT_SENTIMENT_LABELS
     assert KNOWN_SENTIMENT_LABELS == ALERT_SENTIMENT_LABELS
     assert NotificationPreferencesUpdate(enabled=True).sentiment_labels == ["negative"]
+
+
+def test_a_new_rule_wants_the_vocabulary_threshold() -> None:
+    assert NotificationPreferencesUpdate(enabled=True).min_confidence == float(
+        DEFAULT_ALERT_MIN_CONFIDENCE
+    )
+    assert AlertRule.__table__.c.min_confidence.default.arg == DEFAULT_ALERT_MIN_CONFIDENCE
 
 
 def test_settings_page_offers_exactly_the_alertable_labels() -> None:

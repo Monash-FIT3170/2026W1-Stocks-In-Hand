@@ -1,4 +1,8 @@
-"""The status columns accept exactly the values in app.status."""
+"""Each status column accepts exactly the values of its enum.
+
+The pipeline's statuses are in app.status and the alerts' in
+app.alert_vocabulary.
+"""
 
 import uuid
 from collections.abc import Iterator
@@ -8,8 +12,12 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.alert_vocabulary import DeliveryStatus, VerificationStatus
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
+from app.models.alert_delivery import AlertDelivery
+from app.models.alert_subscription import AlertSubscription
+from app.models.investor import Investor
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
@@ -83,6 +91,47 @@ def test_status_column_accepts_exactly_its_enum(
 ) -> None:
     run, artifact = _artifact(db_session)
     row_id = run.id if table == "scrape_runs" else artifact.id
+
+    assert all(
+        _accepts(db_session, table, column, row_id, status) for status in statuses
+    )
+    assert not _accepts(db_session, table, column, row_id, "succeeded")
+
+
+def _alert_rows(db: Session) -> tuple[AlertDelivery, AlertSubscription]:
+    run, artifact = _artifact(db)
+    investor = Investor(
+        email=f"status-{uuid.uuid4().hex}@example.com",
+        username="Status constraint test",
+    )
+    db.add(investor)
+    db.flush()
+    delivery = AlertDelivery(
+        investor_id=investor.id,
+        artifact_id=artifact.id,
+        scrape_run_id=run.id,
+    )
+    subscription = AlertSubscription(investor_id=investor.id, email=investor.email)
+    db.add_all([delivery, subscription])
+    db.flush()
+    return delivery, subscription
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "statuses"),
+    [
+        ("alert_deliveries", "status", DeliveryStatus),
+        ("alert_subscriptions", "verification_status", VerificationStatus),
+    ],
+)
+def test_alert_status_column_accepts_exactly_its_enum(
+    db_session: Session,
+    table: str,
+    column: str,
+    statuses,
+) -> None:
+    delivery, subscription = _alert_rows(db_session)
+    row_id = delivery.id if table == "alert_deliveries" else subscription.id
 
     assert all(
         _accepts(db_session, table, column, row_id, status) for status in statuses

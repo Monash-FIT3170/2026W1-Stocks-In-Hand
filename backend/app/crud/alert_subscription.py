@@ -14,12 +14,11 @@ from sqlalchemy import case, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.alert_vocabulary import VerificationStatus
 from app.models.alert_subscription import AlertSubscription
 
 
-VERIFICATION_STATUSES: Final[frozenset[str]] = frozenset(
-    {"unverified", "pending", "verified", "failed"}
-)
+VERIFICATION_STATUSES: Final[frozenset[str]] = frozenset(VerificationStatus)
 SHA256_HEX: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
 DELIVERY_ERROR_CODE_LIMIT: Final[int] = 128
 _UNSET: Final[object] = object()
