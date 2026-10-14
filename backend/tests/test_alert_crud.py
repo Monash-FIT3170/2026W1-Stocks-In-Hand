@@ -1,11 +1,11 @@
 """Focused contracts for the alert CRUD modules and the delivery ledger.
 
-The pure tests cover validation and generated PostgreSQL statements without a
-database.  Integration tests use the configured Postgres database when it is
+The pure tests cover validation and commit behaviour without a database.
+Integration tests use the configured Postgres database when it is
 available, and otherwise skip cleanly for local runs without Docker.
 """
 
-# pylint: disable=not-callable,redefined-outer-name,too-few-public-methods,too-many-locals,wrong-import-position
+# pylint: disable=not-callable,redefined-outer-name,too-many-locals,wrong-import-position
 
 from __future__ import annotations
 
@@ -20,14 +20,13 @@ from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import and_, create_engine, func, or_, select, update
-from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.alert_vocabulary import DeliveryKind, DeliveryStatus
+from app.alert_vocabulary import DeliveryKind, DeliveryStatus, VerificationStatus
 from app.core.config import settings
 from app.crud import alert_delivery as ledger
 from app.crud import alert_rule as rule_crud
@@ -43,31 +42,6 @@ from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
-
-
-class _CapturedResult:
-    """Return no row while retaining a SQL statement for pure contract tests."""
-
-    def scalar_one_or_none(self) -> None:
-        """Represent a statement that did not acquire a claim."""
-        return None
-
-
-class _CapturedSession:
-    """Small Session double that records one statement without opening a DB."""
-
-    def __init__(self) -> None:
-        self.statement: Any | None = None
-        self.commit_count = 0
-
-    def execute(self, statement: Any) -> _CapturedResult:
-        """Capture the generated statement for later compilation."""
-        self.statement = statement
-        return _CapturedResult()
-
-    def commit(self) -> None:
-        """Match the write's commit boundary without a database."""
-        self.commit_count += 1
 
 
 class _WriteSession:
@@ -171,6 +145,43 @@ def _artifact_for_run(db: Session, ticker_id: uuid.UUID, run_id: uuid.UUID) -> A
     return artifact
 
 
+def _requested(db: Session, subscription: AlertSubscription) -> datetime:
+    """Record a verification request for the subscription as it stands, and return its time."""
+    requested_at = datetime.now(timezone.utc)
+    reserved = subscription_crud.reserve_verification(
+        db,
+        subscription.investor_id,
+        observed=subscription_crud.VerificationState.of(subscription),
+        requested_at=requested_at,
+    )
+    assert reserved is not None
+    assert (reserved.verification_status, reserved.verification_requested_at) == (
+        "pending",
+        requested_at,
+    )
+    return requested_at
+
+
+@pytest.mark.parametrize(
+    "address",
+    [" Alice.Smith@Example.COM ", "Mixed+Tag@Sub.Example.org", "user@xn--bcher-kva.de"],
+)
+def test_normalising_an_ascii_address_only_trims_and_lower_cases_it(address: str) -> None:
+    normalised = subscription_crud.normalise_email(address)
+
+    assert normalised == address.strip().lower()
+    assert subscription_crud.normalise_email(normalised) == normalised
+
+
+def test_an_internationalised_domain_is_normalised_to_its_ascii_form() -> None:
+    normalised = subscription_crud.normalise_email("user@B\u00dcCHER.de")
+
+    assert normalised == "user@xn--bcher-kva.de"
+    assert subscription_crud.normalise_email(normalised) == normalised
+    with pytest.raises(ValueError, match="valid email"):
+        subscription_crud.normalise_email("\u00e9lise@example.com")
+
+
 def test_alert_crud_validation_needs_no_database() -> None:
     """Reject malformed values before CRUD code executes any SQL."""
     db = Mock()
@@ -184,24 +195,27 @@ def test_alert_crud_validation_needs_no_database() -> None:
         )
     with pytest.raises(ValueError, match="64 lowercase hex"):
         subscription_crud.get_subscription_by_unsubscribe_token_hash(db, "bad")
-    with pytest.raises(ValueError, match="verification status"):
-        subscription_crud.update_verification_state(
+    with pytest.raises(ValueError, match="verified subscription"):
+        subscription_crud.reserve_verification(
             db,
-            investor_id=investor_id,
-            verification_status="unknown",
-            expected_email="alerts@example.com",
-            expected_verification_requested_at=None,
-            expected_verification_status="unverified",
+            investor_id,
+            observed=subscription_crud.VerificationState(
+                "alerts@example.com",
+                VerificationStatus.VERIFIED,
+                datetime.now(timezone.utc),
+            ),
+            requested_at=datetime.now(timezone.utc),
         )
-    # Calling without the mandatory guards is the contract under test.
-    # pylint: disable=missing-kwoa
-    with pytest.raises(TypeError, match="expected_verification_status"):
-        subscription_crud.update_verification_state(
+    with pytest.raises(ValueError, match="timezone"):
+        subscription_crud.reserve_verification(
             db,
-            investor_id=investor_id,
-            verification_status="pending",
-            expected_email="alerts@example.com",
-            expected_verification_requested_at=None,
+            investor_id,
+            observed=subscription_crud.VerificationState(
+                "alerts@example.com",
+                VerificationStatus.UNVERIFIED,
+                None,
+            ),
+            requested_at=datetime.now(),
         )
     with pytest.raises(ValueError, match="enabled"):
         subscription_crud.upsert_subscription(
@@ -296,24 +310,6 @@ def test_alert_crud_validation_needs_no_database() -> None:
     db.scalar.assert_not_called()
 
 
-def test_disable_subscription_is_guarded_by_id_and_token_hash() -> None:
-    """Public unsubscribe must update only the matching subscription secret."""
-    db = _CapturedSession()
-
-    result = subscription_crud.disable_subscription(
-        db,
-        uuid.uuid4(),
-        expected_unsubscribe_token_hash="a" * 64,
-    )
-
-    assert result is None
-    assert db.commit_count == 1
-    sql = str(db.statement.compile(dialect=postgresql.dialect()))
-    assert "alert_subscriptions.id" in sql
-    assert "alert_subscriptions.unsubscribe_token_hash" in sql
-    assert "enabled" in sql
-
-
 def test_subscription_and_rule_upserts_flush_without_committing_on_request() -> None:
     """Settings writes can join a route's transaction when explicitly requested."""
     investor_id = uuid.uuid4()
@@ -379,18 +375,14 @@ def test_subscription_and_rule_upserts_reset_and_replace_values(
         enabled=True,
         unsubscribe_token_hash=token_hash,
     )
-    requested_at = datetime.now(timezone.utc)
-    verified_at = requested_at + timedelta(seconds=1)
-    subscription_crud.update_verification_state(
+    requested_at = _requested(db_session, first)
+    assert subscription_crud.confirm_verification(
         db_session,
-        investor_id=investor.id,
-        verification_status="verified",
-        verification_requested_at=requested_at,
-        verified_at=verified_at,
-        expected_email="first.alerts@example.com",
-        expected_verification_requested_at=None,
-        expected_verification_status="unverified",
-    )
+        investor.id,
+        email="first.alerts@example.com",
+        requested_at=requested_at,
+        verified_at=requested_at + timedelta(seconds=1),
+    ) is not None
 
     replaced = subscription_crud.upsert_subscription(
         db_session,
@@ -448,143 +440,125 @@ def test_subscription_and_rule_upserts_reset_and_replace_values(
     assert disabled.enabled is False
 
 
-def test_old_email_verification_cannot_verify_a_replaced_address(
+def test_a_link_for_an_old_address_cannot_verify_its_replacement(
     db_session: Session,
 ) -> None:
-    """An old confirmation link may not verify a replacement email address."""
+    """A confirmation names the address it was sent to, as well as its request."""
     investor, _, _, _ = _records(db_session)
-    initial = subscription_crud.upsert_subscription(
+    old = subscription_crud.upsert_subscription(
         db_session,
         investor_id=investor.id,
         email="old.address@example.com",
     )
-    pending = subscription_crud.update_verification_state(
-        db_session,
-        investor_id=investor.id,
-        verification_status="pending",
-        expected_email=initial.email,
-        expected_verification_requested_at=None,
-        expected_verification_status="unverified",
-    )
-    assert pending is not None
-    assert pending.verification_requested_at is not None
-    requested_at = pending.verification_requested_at
-
-    changed = subscription_crud.upsert_subscription(
+    _requested(db_session, old)
+    new = subscription_crud.upsert_subscription(
         db_session,
         investor_id=investor.id,
         email="new.address@example.com",
     )
-    stale_confirmation = subscription_crud.update_verification_state(
+    assert (new.verification_status, new.verification_requested_at) == ("unverified", None)
+    requested_at = _requested(db_session, new)
+
+    stale_confirmation = subscription_crud.confirm_verification(
         db_session,
-        investor_id=investor.id,
-        verification_status="verified",
-        expected_email=initial.email,
-        expected_verification_requested_at=requested_at,
-        expected_verification_status="pending",
+        investor.id,
+        email="old.address@example.com",
+        requested_at=requested_at,
+        verified_at=datetime.now(timezone.utc),
     )
 
     assert stale_confirmation is None
-    db_session.refresh(changed)
-    assert changed.email == "new.address@example.com"
-    assert changed.verification_status == "unverified"
-    assert changed.verified_at is None
+    db_session.refresh(new)
+    assert (new.email, new.verification_status, new.verified_at) == (
+        "new.address@example.com",
+        "pending",
+        None,
+    )
+    assert subscription_crud.confirm_verification(
+        db_session,
+        investor.id,
+        email="new.address@example.com",
+        requested_at=requested_at,
+        verified_at=datetime.now(timezone.utc),
+    ) is not None
 
 
-def test_verified_subscription_rejects_a_stale_pending_downgrade(
+def test_a_stale_request_cannot_unverify_a_verified_address(
     db_session: Session,
 ) -> None:
-    """An older request may not downgrade a confirmed email address."""
+    """A request that read the subscription before it was verified changes nothing."""
     investor, _, _, _ = _records(db_session)
     email = "stable.address@example.com"
-    subscription_crud.upsert_subscription(
+    subscription = subscription_crud.upsert_subscription(
         db_session,
         investor_id=investor.id,
         email=email,
     )
-    pending = subscription_crud.update_verification_state(
+    requested_at = _requested(db_session, subscription)
+    stale = subscription_crud.VerificationState.of(subscription)
+    verified = subscription_crud.confirm_verification(
         db_session,
-        investor_id=investor.id,
-        verification_status="pending",
-        expected_email=email,
-        expected_verification_requested_at=None,
-        expected_verification_status="unverified",
-    )
-    assert pending is not None
-    assert pending.verification_requested_at is not None
-    requested_at = pending.verification_requested_at
-    verified = subscription_crud.update_verification_state(
-        db_session,
-        investor_id=investor.id,
-        verification_status="verified",
-        expected_email=email,
-        expected_verification_requested_at=requested_at,
-        expected_verification_status="pending",
+        investor.id,
+        email=email,
+        requested_at=requested_at,
+        verified_at=datetime.now(timezone.utc),
     )
     assert verified is not None
-    assert verified.verification_status == "verified"
 
-    stale_pending = subscription_crud.update_verification_state(
+    stale_request = subscription_crud.reserve_verification(
         db_session,
-        investor_id=investor.id,
-        verification_status="pending",
-        expected_email=email,
-        expected_verification_requested_at=requested_at,
-        expected_verification_status="pending",
+        investor.id,
+        observed=stale,
+        requested_at=datetime.now(timezone.utc),
     )
 
-    assert stale_pending is None
-    current = subscription_crud.get_subscription_by_investor(db_session, investor.id)
-    assert current is not None
-    assert current.verification_status == "verified"
+    assert stale.status == VerificationStatus.PENDING
+    assert stale_request is None
+    db_session.refresh(verified)
+    assert (verified.verification_status, verified.verification_requested_at) == (
+        "verified",
+        requested_at,
+    )
 
 
-@pytest.mark.parametrize("observed_status", ("unverified", "failed"))
-def test_current_state_change_can_downgrade_a_verified_subscription(
+def test_a_failed_request_keeps_its_time_and_only_the_newest_request_can_fail(
     db_session: Session,
-    observed_status: str,
 ) -> None:
-    """A current compare-and-set write may replace a verified local state."""
+    """The resend interval still counts from a request whose email was not sent."""
     investor, _, _, _ = _records(db_session)
-    email = f"disagreement-{uuid.uuid4().hex}@example.com"
-    subscription_crud.upsert_subscription(
+    email = "failed.address@example.com"
+    subscription = subscription_crud.upsert_subscription(
         db_session,
         investor_id=investor.id,
         email=email,
     )
-    pending = subscription_crud.update_verification_state(
-        db_session,
-        investor_id=investor.id,
-        verification_status="pending",
-        expected_email=email,
-        expected_verification_requested_at=None,
-        expected_verification_status="unverified",
-    )
-    assert pending is not None
-    assert pending.verification_requested_at is not None
-    requested_at = pending.verification_requested_at
-    verified = subscription_crud.update_verification_state(
-        db_session,
-        investor_id=investor.id,
-        verification_status="verified",
-        expected_email=email,
-        expected_verification_requested_at=requested_at,
-        expected_verification_status="pending",
-    )
-    assert verified is not None
+    first_request = _requested(db_session, subscription)
 
-    corrected = subscription_crud.update_verification_state(
+    failed = subscription_crud.fail_verification(
         db_session,
-        investor_id=investor.id,
-        verification_status=observed_status,
-        expected_email=email,
-        expected_verification_requested_at=requested_at,
-        expected_verification_status="verified",
+        investor.id,
+        email=email,
+        requested_at=first_request,
     )
 
-    assert corrected is not None
-    assert corrected.verification_status == observed_status
-    assert corrected.verified_at is None
+    assert failed is not None
+    assert (
+        failed.verification_status,
+        failed.verification_requested_at,
+        failed.verified_at,
+    ) == ("failed", first_request, None)
+    second_request = _requested(db_session, failed)
+    assert subscription_crud.fail_verification(
+        db_session,
+        investor.id,
+        email=email,
+        requested_at=first_request,
+    ) is None
+    db_session.refresh(failed)
+    assert (failed.verification_status, failed.verification_requested_at) == (
+        "pending",
+        second_request,
+    )
 
 
 def test_watcher_lookup_is_distinct_across_overlapping_watchlists(

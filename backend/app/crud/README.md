@@ -145,6 +145,18 @@ lost after the provider took the email, can still send it twice (see
 onto the investor's alert subscription in one transaction. The delivery
 statuses live in `app/alert_vocabulary.py`.
 
+`alert_subscription.py`
+
+Stores each investor's alert subscription: the address, whether alerts are
+on, the verification state and the hash of the unsubscribe secret.
+`app/services/alert_subscriptions.py` runs the subscription's lifecycle and
+calls this module. `reserve_verification` writes only while the row still
+holds the address, status and request time the caller read
+(`VerificationState`), and refuses a verified address.
+`fail_verification` and `confirm_verification` write only while the request
+they finish is still pending, at its address and request time. So a stale
+request or link changes nothing. Changing the address resets verification.
+
 ## Write Behavior
 
 Create/update/delete functions usually call:
