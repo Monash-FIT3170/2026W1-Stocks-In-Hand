@@ -34,6 +34,8 @@ from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.status import AnalysisStatus
 from lambdas import analysis, pipeline_stage
+from lambdas.artifact_analysis import AnalysisPorts, FinBertScorer
+from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from parsing import storage
 from parsing.classification import ClassificationInput, classify_document
 from scrapers.base import Announcement
@@ -120,6 +122,14 @@ def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
 
     for module in (analysis, pipeline_stage):
         monkeypatch.setattr(module, "database_session", test_session)
+    monkeypatch.setattr(
+        analysis,
+        "deployed_ports",
+        lambda: AnalysisPorts(
+            records=PostgresAnalysisRecords(test_session),
+            scorer=FinBertScorer(),
+        ),
+    )
 
 
 def _artifact(db: Session, **values) -> Artifact:

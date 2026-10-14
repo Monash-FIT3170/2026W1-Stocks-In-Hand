@@ -114,6 +114,30 @@ def test_an_unavailable_provider_is_an_explicit_result() -> None:
     )
 
 
+@pytest.fixture(params=["bedrock_disabled", "groq_without_key"])
+def unavailable_provider(request: pytest.FixtureRequest):
+    if request.param == "bedrock_disabled":
+        overrides = {"LLM_PROVIDER": "bedrock", "BEDROCK_ENABLED": False}
+    else:
+        overrides = {"LLM_PROVIDER": "groq", "GROQ_API_KEY": ""}
+    with patch.multiple(settings, **overrides):
+        yield request.param
+
+
+def test_both_providers_report_unavailable(unavailable_provider: str) -> None:
+    """Analysis used to look for "not configured", which only Groq raised, so
+    with Bedrock disabled every analysis failed and was retried."""
+    result = generate(
+        NewsSummary(
+            title="BHP cuts guidance",
+            source_name=None,
+            raw_text="BHP lowered its copper guidance.",
+        )
+    )
+
+    assert isinstance(result, Unavailable)
+
+
 def test_a_failed_call_is_raised_for_a_retry() -> None:
     provider = ScriptedProvider([RuntimeError("Amazon Bedrock model invocation failed")])
 

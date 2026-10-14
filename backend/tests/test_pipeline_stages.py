@@ -12,10 +12,11 @@ the source adapter, SQS and S3.
 
 import hashlib
 import json
+import logging
 import sys
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -37,6 +38,7 @@ from app.models.artifact_summary import ArtifactSummary
 from app.models.scrape_run import ScrapeRun
 from app.services import artifact_summary, scrape_runs
 from app.services.artifact_summary import Summary
+from app.services.generation.providers import ScriptedProvider
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 from lambdas import (
@@ -46,6 +48,8 @@ from lambdas import (
     pipeline_stage,
     schedule,
 )
+from lambdas.artifact_analysis import AnalysisPorts, FixedSentiment
+from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from lambdas.common import MAX_RECEIVE_COUNT, PermanentDocumentError
 from lambdas.download_validation import validated_document
 from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
@@ -687,6 +691,29 @@ def _analyse(body: str, attempt: int = 1) -> None:
     analysis.handler({"Records": [_record(body, attempt)]}, None)
 
 
+def _analysis_ports(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    *answers: dict,
+) -> AnalysisPorts:
+    """The ports the analysis handler builds, over the test session."""
+    ports = AnalysisPorts(
+        records=PostgresAnalysisRecords(lambda: nullcontext(db)),
+        scorer=FixedSentiment("positive", confidence=0.9, model="ProsusAI/finbert"),
+        provider=ScriptedProvider([json.dumps(answer) for answer in answers]),
+    )
+    monkeypatch.setattr(analysis, "deployed_ports", lambda: ports)
+    return ports
+
+
+def _pipeline_events(caplog: pytest.LogCaptureFixture) -> list[dict]:
+    return [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "document_pipeline"
+    ]
+
+
 def test_analysis_records_the_result_finishes_the_run_and_notifies(
     workers_use: Session,
     store: RawDocumentStore,
@@ -890,6 +917,54 @@ def test_analysis_event_from_another_bucket_is_not_recorded_against_the_artifact
     assert artifact.last_error is None
 
 
+def _stored_text_message(artifact: Artifact) -> str:
+    return json.dumps(
+        {"message_type": "public_discussion_analysis", "artifact_id": str(artifact.id)}
+    )
+
+
+def test_stored_text_is_analysed_once_and_each_message_is_logged(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    story = Artifact(
+        source_type="news",
+        artifact_type="news_article",
+        title="BHP lifts copper output",
+        raw_text="BHP reported an increase in quarterly copper production.",
+        content_hash=f"news:{uuid.uuid4()}",
+    )
+    workers_use.add(story)
+    workers_use.commit()
+    ports = _analysis_ports(
+        workers_use,
+        monkeypatch,
+        {
+            "summary": "BHP reported higher copper production.",
+            "about": "The story covers BHP's quarterly copper output.",
+            "changed": "Reported production increased.",
+            "matters": "The increase may affect revenue expectations.",
+        },
+    )
+
+    with caplog.at_level(logging.INFO):
+        _analyse(_stored_text_message(story))
+        _analyse(_stored_text_message(story), attempt=2)
+
+    workers_use.refresh(story)
+    completed, skipped = _pipeline_events(caplog)
+    assert story.analysis_status == AnalysisStatus.COMPLETED
+    assert len(ports.provider.calls) == 1
+    assert (completed["event"], completed["category"], completed["source_type"]) == (
+        "completed",
+        "NEWS_ARTICLE",
+        "news",
+    )
+    assert completed["artifact_id"] == str(story.id)
+    assert (skipped["event"], skipped["attempt"]) == ("duplicate_skipped", 2)
+
+
 def test_stored_text_without_text_fails_its_analysis_at_once(
     workers_use: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -903,11 +978,9 @@ def test_stored_text_without_text_fails_its_analysis_at_once(
     )
     workers_use.add(artifact)
     workers_use.commit()
-    body = json.dumps(
-        {"message_type": "public_discussion_analysis", "artifact_id": str(artifact.id)}
-    )
+    _analysis_ports(workers_use, monkeypatch)
 
-    analysis.handler({"Records": [_record(body)]}, None)
+    _analyse(_stored_text_message(artifact))
 
     workers_use.refresh(artifact)
     assert artifact.analysis_status == AnalysisStatus.FAILED

@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import zipfile
-from contextlib import contextmanager
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -14,9 +13,6 @@ import pytest
 from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
-from app.services.artifact_summary import Summary
-from app.services.generation import providers
-from app.services.generation.providers import ScriptedProvider
 from app.messages import (
     NotificationMessage,
     PublicDiscussionAnalysisMessage,
@@ -31,13 +27,7 @@ from lambdas.download_validation import (
     validated_document,
 )
 from parsing import analysis as parsing_analysis
-from parsing.analysis import (
-    AnalysisOutput,
-    ParsedDocument,
-    analyse_news_text,
-    analyse_public_discussion_text,
-    extract_pdf,
-)
+from parsing.analysis import extract_pdf
 
 
 def test_runtime_configuration_loads_public_discussion_parameters(
@@ -526,27 +516,6 @@ def test_analysis_worker_parses_public_discussion_message() -> None:
     ) is None
 
 
-def test_analysis_handler_dispatches_public_discussion_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    analyse = MagicMock()
-    monkeypatch.setattr(analysis, "_analyse_public_discussion_artifact", analyse)
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
-
-    result = analysis.handler(
-        {"Records": [sqs_record(message.model_dump_json())]},
-        None,
-    )
-
-    assert result == {"processed": 1}
-    analyse.assert_called_once_with(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-
 def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:
     with pytest.raises(ValueError, match="requires confirmation"):
         analysis.handler(
@@ -557,252 +526,6 @@ def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> No
             },
             None,
         )
-
-
-def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    analyse_sentiment = MagicMock(
-        return_value={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        }
-    )
-    llm = ScriptedProvider(
-        [
-            json.dumps(
-                {
-                    "summary": "The author expects BHP earnings to rise.",
-                    "about": "The post discusses BHP earnings.",
-                    "changed": "The author claims the outlook improved.",
-                    "matters": "The claim may affect investor expectations.",
-                }
-            )
-        ]
-    )
-    monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
-
-    output = analyse_public_discussion_text(
-        title="$BHP earnings outlook",
-        raw_text="I think profit will rise next year.",
-        source_type="reddit",
-    )
-
-    assert output.parsed.category == "USER_DISCUSSION"
-    assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary.about == "The post discusses BHP earnings."
-    assert output.summary.model == "scripted:test-model"
-    assert output.summary.prompt_version == "llm-public-discussion-summary-v2"
-    analyse_sentiment.assert_called_once_with(
-        "$BHP earnings outlook\n\nI think profit will rise next year."
-    )
-    [call] = llm.calls
-    assert call.prompt.startswith("You are summarising one public discussion post")
-    assert "Source type:\nreddit" in call.prompt
-    assert call.prompt.endswith("I think profit will rise next year.")
-
-
-def test_news_analysis_uses_source_text_and_news_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    analyse_sentiment = MagicMock(
-        return_value={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        }
-    )
-    llm = ScriptedProvider(
-        [
-            json.dumps(
-                {
-                    "summary": "BHP reported stronger copper production.",
-                    "about": "The article covers BHP production.",
-                    "changed": "Reported copper production increased.",
-                    "matters": "Higher output may affect revenue expectations.",
-                }
-            )
-        ]
-    )
-    monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
-
-    output = analyse_news_text(
-        title="BHP production update",
-        raw_text="BHP reported stronger copper production.",
-        source_name="Publisher",
-    )
-
-    assert output.parsed.category == "NEWS_ARTICLE"
-    assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary.changed == "Reported copper production increased."
-    assert output.summary.model == "scripted:test-model"
-    assert output.summary.prompt_version == "llm-news-summary-v2"
-    analyse_sentiment.assert_called_once_with(
-        "BHP production update\n\nBHP reported stronger copper production."
-    )
-    [call] = llm.calls
-    assert call.prompt.startswith("You are summarising a financial news story")
-    assert "Source:\nPublisher" in call.prompt
-    assert call.prompt.endswith("BHP reported stronger copper production.")
-
-
-def test_analysis_worker_persists_public_discussion_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    run_id = uuid4()
-    output = AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text="Investors discuss $BHP earnings.",
-            page_count=1,
-            category="USER_DISCUSSION",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary=Summary(
-            summary="Investors discuss BHP earnings.",
-            about="The post is about BHP.",
-            changed="No claimed change identified.",
-            matters="Earnings interest BHP investors.",
-            model="bedrock:test-model",
-            prompt_version="llm-public-discussion-summary-v2",
-        ),
-        sentiment={
-            "sentiment_label": "neutral",
-            "label": "neutral",
-            "confidence_score": 0.9,
-            "model_used": "test-finbert",
-        },
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(
-        analysis,
-        "_public_discussion_artifact_state",
-        lambda _artifact_id: {
-            "completed": False,
-            "run_id": run_id,
-            "title": "$BHP earnings",
-            "raw_text": "Investors discuss $BHP earnings.",
-            "source_type": "reddit",
-        },
-    )
-    monkeypatch.setattr(
-        analysis,
-        "analyse_public_discussion_text",
-        lambda **_kwargs: output,
-    )
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
-    )
-    monkeypatch.setattr(
-        "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
-    )
-
-    analysis._analyse_public_discussion_artifact(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-    assert calls["started"] is True
-    assert calls["stored"]["metadata"]["category"] == "user_discussion"
-    assert calls["stored"]["sentiment"]["sentiment_label"] == "neutral"
-    assert calls["completed"] is True
-
-
-def test_analysis_worker_persists_news_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    output = AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text="BHP reported stronger copper production.",
-            page_count=1,
-            category="NEWS_ARTICLE",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary=Summary(
-            summary="BHP reported stronger copper production.",
-            about="The article covers BHP production.",
-            changed="Reported copper production increased.",
-            matters="Higher output may affect revenue expectations.",
-            model="bedrock:test-model",
-            prompt_version="llm-news-summary-v2",
-        ),
-        sentiment={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        },
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(
-        analysis,
-        "_public_discussion_artifact_state",
-        lambda _artifact_id: {
-            "completed": False,
-            "run_id": None,
-            "title": "BHP production update",
-            "raw_text": "BHP reported stronger copper production.",
-            "source_type": "news",
-            "source_name": "Publisher",
-        },
-    )
-    monkeypatch.setattr(
-        analysis,
-        "analyse_news_text",
-        lambda **_kwargs: output,
-    )
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
-    )
-    monkeypatch.setattr(
-        "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
-    )
-
-    analysis._analyse_public_discussion_artifact(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-    assert calls["started"] is True
-    assert calls["stored"]["metadata"]["category"] == "news_article"
-    assert calls["stored"]["summary"].changed == (
-        "Reported copper production increased."
-    )
-    assert calls["completed"] is True
 
 
 def test_pdf_page_limit_is_permanent(tmp_path):

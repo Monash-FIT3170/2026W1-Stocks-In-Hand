@@ -12,16 +12,13 @@ from uuid import UUID
 
 import boto3
 from app.messages import PublicDiscussionAnalysisMessage
-from parsing.analysis import (
-    AnalysisOutput,
-    analyse_document,
-    analyse_news_text,
-    analyse_public_discussion_text,
-)
+from parsing.analysis import AnalysisOutput, analyse_document
 from pydantic import ValidationError
 
 from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.messages import NotificationMessage
+from lambdas import artifact_analysis
+from lambdas.artifact_analysis import AlreadyAnalysed, deployed_ports
 from lambdas.common import (
     PermanentDocumentError,
     database_session,
@@ -342,126 +339,6 @@ def _try_publish_notification(  # pylint: disable=too-many-arguments
         )
 
 
-def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
-    """Load a stored-text artifact for the legacy inline-analysis queue contract."""
-    with database_session() as db:
-        from app.crud.artifact import get_artifact
-        from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
-
-        artifact = get_artifact(db, artifact_id)
-        if artifact is None:
-            raise PermanentDocumentError(
-                "Artifact does not exist",
-                code="artifact_not_found",
-            )
-        source_type = str(artifact.source_type or "").lower()
-        supported_source_types = PUBLIC_DISCUSSION_SOURCE_TYPES | {"news"}
-        if source_type not in supported_source_types:
-            raise PermanentDocumentError(
-                "Artifact is not a supported stored-text source",
-                code="artifact_identity_mismatch",
-            )
-        title = (artifact.title or "").strip()
-        raw_text = (artifact.raw_text or "").strip()
-        if not title and not raw_text:
-            raise PermanentDocumentError(
-                "Stored-text artifact has no text",
-                code="no_extractable_text",
-            )
-        metadata = (
-            artifact.artifact_metadata
-            if isinstance(artifact.artifact_metadata, dict)
-            else {}
-        )
-        source_name = metadata.get("source_name") or metadata.get("provider")
-        return {
-            "completed": artifact.analysis_status == AnalysisStatus.COMPLETED,
-            "run_id": artifact.scrape_run_id,
-            "title": title or (
-                "Untitled news article"
-                if source_type == "news"
-                else "Untitled public discussion"
-            ),
-            "raw_text": raw_text,
-            "source_type": source_type,
-            "source_name": source_name if isinstance(source_name, str) else None,
-        }
-
-
-def _analyse_public_discussion_artifact(
-    *,
-    artifact_id: UUID,
-    correlation: str,
-    attempt: int,
-) -> None:
-    started_at = time.monotonic()
-    state = _public_discussion_artifact_state(artifact_id)
-    if state["completed"]:
-        log_event(
-            stage=STAGE,
-            event="duplicate_skipped",
-            started_at=started_at,
-            correlation_id=correlation,
-            run_id=state["run_id"],
-            artifact_id=artifact_id,
-            attempt=attempt,
-        )
-        return
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_inline_artifact_analysis_started
-
-        mark_inline_artifact_analysis_started(db, artifact_id)
-
-    is_news = state["source_type"] == "news"
-    if is_news:
-        output = analyse_news_text(
-            title=state["title"],
-            raw_text=state["raw_text"],
-            source_name=state.get("source_name"),
-        )
-    else:
-        output = analyse_public_discussion_text(
-            title=state["title"],
-            raw_text=state["raw_text"],
-            source_type=state["source_type"],
-        )
-
-    category = "news_article" if is_news else "user_discussion"
-
-    with database_session() as db:
-        from app.crud.artifact import store_artifact_analysis
-
-        store_artifact_analysis(
-            db,
-            artifact_id=artifact_id,
-            raw_text=output.parsed.raw_text,
-            metadata={
-                "category": category,
-                "category_confidence": 1.0,
-            },
-            summary=output.summary,
-            sentiment=_sentiment_values(output),
-        )
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_inline_artifact_analysis_completed
-
-        mark_inline_artifact_analysis_completed(db, artifact_id)
-
-    log_event(
-        stage=STAGE,
-        event="completed",
-        started_at=started_at,
-        correlation_id=correlation,
-        run_id=state["run_id"],
-        artifact_id=artifact_id,
-        attempt=attempt,
-        category=category.upper(),
-        source_type=state["source_type"],
-    )
-
-
 def _analyse_object(
     *,
     store: RawDocumentStore,
@@ -562,12 +439,18 @@ def _analyse_object(
 def _analyse(current: StageRecord) -> None:
     stored_text_message = parse_public_discussion_message(current.record)
     if stored_text_message is not None:
-        current.subject = analysed_stored_text(stored_text_message.artifact_id)
-        _analyse_public_discussion_artifact(
-            artifact_id=stored_text_message.artifact_id,
-            correlation=current.correlation_id,
-            attempt=current.attempt,
-        )
+        artifact_id = stored_text_message.artifact_id
+        current.subject = analysed_stored_text(artifact_id)
+        outcome = artifact_analysis.analyse_stored_text(artifact_id, deployed_ports())
+        if isinstance(outcome, AlreadyAnalysed):
+            current.log("duplicate_skipped", run_id=outcome.run_id)
+        else:
+            current.log(
+                "completed",
+                run_id=outcome.run_id,
+                category=outcome.category.upper(),
+                source_type=outcome.source_type,
+            )
         return
     locations = parse_s3_notifications(current.record)
     store = raw_document_store()
