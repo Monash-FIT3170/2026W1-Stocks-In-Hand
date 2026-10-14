@@ -3,7 +3,8 @@
 These tests read an environment through ``Settings.from_environment`` and
 never set an environment variable for a setting. ``settings`` keeps what the
 environment held at its first read, so a test that set one could leak it
-into every later test.
+into every later test. The two tests of the first read itself build the
+settings again before and after they run.
 """
 
 from __future__ import annotations
@@ -13,15 +14,22 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
+from botocore.exceptions import ClientError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core import config
 from app.core.config import (
+    SECRETS,
     ConfigurationError,
+    InMemoryParameterStore,
+    Secret,
     Settings,
+    SsmParameterStore,
     get_settings,
     reset_settings,
     settings,
@@ -29,6 +37,9 @@ from app.core.config import (
 from app.sources import SOURCES
 
 BACKEND = Path(__file__).resolve().parents[1]
+PARAMETER = "/stocks-in-hand/test/secret"
+REQUIRED_SECRETS = [secret for secret in SECRETS if not secret.optional]
+OPTIONAL_SECRETS = [secret for secret in SECRETS if secret.optional]
 
 
 @pytest.fixture()
@@ -224,6 +235,110 @@ def test_patching_before_the_first_read_builds_the_settings_first(
     assert get_settings().ALERT_DAILY_BUDGET == (
         Settings.from_environment(os.environ).ALERT_DAILY_BUDGET
     )
+
+
+def _setting(secret: Secret, environ: dict[str, str], **kwargs: Any) -> Any:
+    return getattr(Settings.from_environment(environ, **kwargs), secret.setting)
+
+
+@pytest.mark.parametrize("secret", SECRETS, ids=lambda secret: secret.setting)
+def test_a_secret_is_read_from_the_parameter_its_variable_names(secret: Secret) -> None:
+    parameters = InMemoryParameterStore({PARAMETER: "https://value.example/a"})
+    environ = {secret.variable: PARAMETER}
+
+    read = _setting(secret, environ, parameters=parameters)
+
+    assert read == _setting(secret, {secret.setting: "https://value.example/a"})
+    assert parameters.requested == [PARAMETER]
+    assert environ == {secret.variable: PARAMETER}
+
+
+@pytest.mark.parametrize("value", ["https://value.example/local", ""])
+@pytest.mark.parametrize("secret", SECRETS, ids=lambda secret: secret.setting)
+def test_a_secret_that_is_set_is_not_read_from_its_parameter(secret: Secret, value: str) -> None:
+    parameters = InMemoryParameterStore({PARAMETER: "https://value.example/ssm"})
+
+    read = _setting(secret, {secret.variable: PARAMETER, secret.setting: value}, parameters=parameters)
+
+    assert read == _setting(secret, {secret.setting: value})
+    assert parameters.requested == []
+
+
+@pytest.mark.parametrize("secret", OPTIONAL_SECRETS, ids=lambda secret: secret.setting)
+def test_a_missing_optional_secret_reads_as_empty(secret: Secret) -> None:
+    read = _setting(secret, {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({}))
+
+    assert read == _setting(secret, {secret.setting: ""})
+
+
+@pytest.mark.parametrize("secret", REQUIRED_SECRETS, ids=lambda secret: secret.setting)
+def test_a_missing_required_secret_is_a_configuration_error(secret: Secret) -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment(
+            {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({})
+        )
+
+    assert rejected.value.problems == (f"{secret.variable} names a parameter that does not exist",)
+
+
+def test_the_database_url_and_the_marketaux_token_are_the_required_secrets() -> None:
+    assert [secret.setting for secret in REQUIRED_SECRETS] == [
+        "DATABASE_URL",
+        "MARKETAUX_API_TOKEN",
+    ]
+
+
+def test_a_named_secret_needs_a_parameter_store() -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({"BREVO_API_KEY_PARAMETER": PARAMETER})
+
+    assert rejected.value.problems == (
+        "BREVO_API_KEY_PARAMETER is set, but no parameter store was given",
+    )
+
+
+class FakeSsm:
+    """An SSM client that answers every GetParameter the same way."""
+
+    def __init__(self, error_code: str | None = None) -> None:
+        self.error_code = error_code
+        self.requests: list[dict[str, Any]] = []
+
+    def get_parameter(self, **request: Any) -> dict[str, Any]:
+        self.requests.append(request)
+        if self.error_code is not None:
+            raise ClientError({"Error": {"Code": self.error_code}}, "GetParameter")
+        return {"Parameter": {"Name": request["Name"], "Value": "decrypted"}}
+
+
+def test_ssm_decrypts_the_parameter() -> None:
+    client = FakeSsm()
+
+    assert SsmParameterStore(client).get(PARAMETER) == "decrypted"
+    assert client.requests == [{"Name": PARAMETER, "WithDecryption": True}]
+
+
+def test_ssm_answers_none_for_a_missing_parameter() -> None:
+    assert SsmParameterStore(FakeSsm("ParameterNotFound")).get(PARAMETER) is None
+
+
+def test_ssm_raises_any_other_error() -> None:
+    with pytest.raises(ClientError):
+        SsmParameterStore(FakeSsm("AccessDeniedException")).get(PARAMETER)
+
+
+def test_the_first_read_resolves_secrets_from_ssm(
+    unbuilt_settings: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ssm = InMemoryParameterStore({PARAMETER: "brevo-key-from-ssm"})
+    monkeypatch.setattr(config, "SsmParameterStore", lambda: ssm)
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.setenv("BREVO_API_KEY_PARAMETER", PARAMETER)
+
+    assert settings.BREVO_API_KEY == "brevo-key-from-ssm"
+    assert ssm.requested == [PARAMETER]
+    assert "BREVO_API_KEY" not in os.environ
 
 
 def test_no_repr_shows_a_value() -> None:

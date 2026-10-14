@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-import boto3
-from botocore.exceptions import ClientError
+from app.core.config import get_settings
 
 LOGGER = logging.getLogger("document_pipeline")
 LOGGER.setLevel(logging.INFO)
-_RUNTIME_CONFIGURATION_LOADED = False
 # Matches maxReceiveCount on every pipeline queue's RedrivePolicy in
 # infra/template.yaml. A failure on this receive is the last one before SQS
 # moves the message to its dead-letter queue.
@@ -78,51 +75,8 @@ def correlation_id(record: dict[str, Any]) -> str:
 
 
 def load_runtime_configuration() -> None:
-    """Resolve encrypted runtime values before importing the database layer."""
-    global _RUNTIME_CONFIGURATION_LOADED
-    if _RUNTIME_CONFIGURATION_LOADED:
-        return
-
-    parameter_names = {
-        "DATABASE_URL": os.getenv("DATABASE_URL_PARAMETER", ""),
-        "BREVO_API_KEY": os.getenv("BREVO_API_KEY_PARAMETER", ""),
-        "MARKETAUX_API_TOKEN": os.getenv(
-            "MARKETAUX_API_TOKEN_PARAMETER",
-            "",
-        ),
-        "REDDIT_CLIENT_ID": os.getenv("REDDIT_CLIENT_ID_PARAMETER", ""),
-        "REDDIT_CLIENT_SECRET": os.getenv("REDDIT_CLIENT_SECRET_PARAMETER", ""),
-        "PUBLIC_DISCUSSION_FEED_URLS": os.getenv(
-            "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-            "",
-        ),
-    }
-    missing = {
-        variable: parameter
-        for variable, parameter in parameter_names.items()
-        if parameter and variable not in os.environ
-    }
-    if not missing:
-        _RUNTIME_CONFIGURATION_LOADED = True
-        return
-
-    ssm = boto3.client("ssm")
-    for variable, parameter in missing.items():
-        try:
-            response = ssm.get_parameter(Name=parameter, WithDecryption=True)
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if variable in {
-                "BREVO_API_KEY",
-                "REDDIT_CLIENT_ID",
-                "REDDIT_CLIENT_SECRET",
-                "PUBLIC_DISCUSSION_FEED_URLS",
-            } and code == "ParameterNotFound":
-                os.environ[variable] = ""
-                continue
-            raise
-        os.environ[variable] = response["Parameter"]["Value"]
-    _RUNTIME_CONFIGURATION_LOADED = True
+    """Build the settings, reading their secrets from SSM, before the database layer."""
+    get_settings()
 
 
 @contextmanager

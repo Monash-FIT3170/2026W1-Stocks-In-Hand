@@ -10,16 +10,13 @@ and the cold-start order.
 from __future__ import annotations
 
 import json
-import os
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
 from app.core.config import settings
-from lambdas import common as lambda_common
 from lambdas import notify
 
 
@@ -135,34 +132,3 @@ def test_runtime_configuration_load_precedes_configured_imports() -> None:
     sender_position = source.index("\nfrom app.services import email_sender")
 
     assert load_position < settings_position < sender_position
-
-
-def test_runtime_configuration_loads_brevo_key_from_ssm(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The API key must be decrypted from its configured SSM parameter."""
-    ssm = MagicMock()
-    ssm.get_parameter.return_value = {
-        "Parameter": {"Value": "brevo-test-key"},
-    }
-    monkeypatch.setattr(
-        lambda_common,
-        "_RUNTIME_CONFIGURATION_LOADED",
-        False,
-    )
-    monkeypatch.delenv("BREVO_API_KEY", raising=False)
-    monkeypatch.setenv(
-        "BREVO_API_KEY_PARAMETER",
-        "/stocks-in-hand/staging/brevo-api-key",
-    )
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
-    monkeypatch.setattr(lambda_common.boto3, "client", lambda _service: ssm)
-
-    lambda_common.load_runtime_configuration()
-
-    assert os.environ["BREVO_API_KEY"] == "brevo-test-key"
-    ssm.get_parameter.assert_called_once_with(
-        Name="/stocks-in-hand/staging/brevo-api-key",
-        WithDecryption=True,
-    )

@@ -3,9 +3,9 @@ name: Infra and queue wiring CI
 # Commit/CI checks for the SQS pipeline (Discovery -> Download -> Analysis),
 # the SAM template that declares it and the other infrastructure templates
 # (the deploy roles, ECR and the custom domain). Runs on every push/PR that
-# touches a template, the queue-pipeline code or the workflows its tests
-# read, entirely offline: no AWS credentials are requested and nothing in
-# AWS is read, written, or otherwise touched by this workflow.
+# touches a template, the queue-pipeline code, a module its tests import or
+# a workflow they read, entirely offline: no AWS credentials are requested
+# and nothing in AWS is read, written, or otherwise touched by this workflow.
 #
 # This is deliberately scoped to infra/queue wiring only. General backend
 # lint/type/test and frontend build CI live in their own workflow.
@@ -21,6 +21,10 @@ on:
       - "infra/bootstrap.yaml"
       - "infra/domain.yaml"
       - "infra/README.md"
+      - "backend/app/__init__.py"
+      - "backend/app/alert_vocabulary.py"
+      - "backend/app/core/__init__.py"
+      - "backend/app/core/config.py"
       - "backend/app/messages.py"
       - "backend/app/sources.py"
       - "backend/tools/sync_tickers.py"
@@ -52,6 +56,10 @@ on:
       - "infra/bootstrap.yaml"
       - "infra/domain.yaml"
       - "infra/README.md"
+      - "backend/app/__init__.py"
+      - "backend/app/alert_vocabulary.py"
+      - "backend/app/core/__init__.py"
+      - "backend/app/core/config.py"
       - "backend/app/messages.py"
       - "backend/app/sources.py"
       - "backend/tools/sync_tickers.py"

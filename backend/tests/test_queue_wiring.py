@@ -20,12 +20,15 @@ Companion checks:
 
 import copy
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import yaml
 
+from app.core.config import SECRETS
 from tools import verify_queue_wiring
 from tools.template_model import (
     TemplateModel,
@@ -116,6 +119,36 @@ def parameter_variables_have_ssm_grants(model: TemplateModel) -> list[str]:
     return problems
 
 
+def parameter_variables_name_registered_secrets(model: TemplateModel) -> list[str]:
+    """Each *_PARAMETER variable names its secret's parameter, as SECRETS registers it.
+
+    A gated secret's variable is empty while its switch is off.
+    """
+    registered = {secret.variable: secret for secret in SECRETS}
+    problems = []
+    for function in model.functions().values():
+        for name, value in function.environment.items():
+            if not name.endswith("_PARAMETER"):
+                continue
+            secret = registered.get(name)
+            if secret is None:
+                problems.append(f"{function.logical_id}.{name} is not a registered secret")
+                continue
+            expected = f"${{ParameterPathPrefix}}/{secret.parameter}"
+            if [parameter for parameter in possible_strings(value) if parameter] != [expected]:
+                problems.append(f"{function.logical_id}.{name} does not name {expected}")
+    return problems
+
+
+def registered_secrets_are_deployed(model: TemplateModel) -> list[str]:
+    named = {name for function in model.functions().values() for name in function.environment}
+    return [
+        f"No function names {secret.variable}"
+        for secret in SECRETS
+        if secret.variable not in named
+    ]
+
+
 def queues_are_encrypted(model: TemplateModel) -> list[str]:
     return [
         f"{queue_id} is not encrypted"
@@ -154,6 +187,8 @@ RULES = [
     queue_url_variables_have_send_grants,
     send_grants_have_queue_url_variables,
     parameter_variables_have_ssm_grants,
+    parameter_variables_name_registered_secrets,
+    registered_secrets_are_deployed,
     queues_are_encrypted,
     dead_letter_queues_outlive_their_sources,
     dead_letter_queue_alarms_page_the_alarm_topic,
@@ -222,6 +257,25 @@ BREAKAGES = {
         lambda d: _environment(d, "NotificationFunction").update(
             REDDIT_CLIENT_ID_PARAMETER={"Fn::Sub": "${ParameterPathPrefix}/reddit-client-id"}
         ),
+    ),
+    "unregistered parameter variable": (
+        parameter_variables_name_registered_secrets,
+        lambda d: _environment(d, "ApiFunction").update(
+            GROQ_API_KEY_PARAMETER={"Fn::Sub": "${ParameterPathPrefix}/groq-api-key"}
+        ),
+    ),
+    "parameter path drift": (
+        parameter_variables_name_registered_secrets,
+        lambda d: _environment(d, "ApiFunction").update(
+            REDDIT_CLIENT_ID_PARAMETER={"Fn::Sub": "${ParameterPathPrefix}/reddit-id"}
+        ),
+    ),
+    "registered secret unused": (
+        registered_secrets_are_deployed,
+        lambda d: [
+            _environment(d, function_id).pop("BREVO_API_KEY_PARAMETER")
+            for function_id in ("ApiFunction", "NotificationFunction")
+        ],
     ),
     "queue encryption removed": (
         queues_are_encrypted,
@@ -444,3 +498,35 @@ def test_queue_ci_lints_every_template_and_runs_when_one_changes() -> None:
     assert templates <= set(push)
     assert {f"backend/{test}" for test in re.findall(r"tests/\w+\.py", tests)} <= set(push)
     assert ".github/workflows/verify-staging-queue-wiring.yml" in push
+
+
+def test_queue_ci_imports_the_configuration_with_the_standard_library_alone() -> None:
+    """This file reads SECRETS from app.core.config in a job without the backend's packages.
+
+    The import runs with no site-packages at all, and the job must run when
+    any module it loads changes.
+    """
+    backend = REPOSITORY_ROOT / "backend"
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            "import sys, app.core.config; "
+            "print(*sorted(name for name in sys.modules if name.split('.')[0] == 'app'))",
+        ],
+        cwd=backend,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    workflow = yaml.safe_load(QUEUE_CI_WORKFLOW.read_text(encoding="utf-8"))
+
+    def source(module: str) -> str:
+        path = backend.joinpath(*module.split("."))
+        path = path / "__init__.py" if path.is_dir() else path.with_suffix(".py")
+        return path.relative_to(REPOSITORY_ROOT).as_posix()
+
+    assert {source(module) for module in loaded.stdout.split()} <= set(
+        workflow[True]["push"]["paths"]
+    )

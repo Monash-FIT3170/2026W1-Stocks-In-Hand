@@ -39,6 +39,22 @@ environment without overriding variables that are already set. Docker
 compose files set their own values, such as `DATABASE_URL`, so containers
 connect to their own services instead of `localhost`.
 
+## Secrets
+
+`SECRETS` lists the settings AWS keeps in SSM Parameter Store, such as
+`DATABASE_URL` and `BREVO_API_KEY`. In AWS a Lambda's environment holds only
+the parameter's name, in `<SETTING>_PARAMETER`. When that variable names a
+parameter and the setting itself is not set, the first read gets the value
+through `SsmParameterStore`, in whatever process makes it. The value stays in
+`settings` and is never copied into `os.environ`.
+
+A missing optional secret, such as the Reddit credentials, reads as empty and
+switches its feature off. A missing required secret (`DATABASE_URL` or
+`MARKETAUX_API_TOKEN`) is a `ConfigurationError`. Tests use
+`InMemoryParameterStore`. `tests/test_queue_wiring.py` checks that every
+`*_PARAMETER` variable in `infra/template.yaml` names a registered secret's
+parameter.
+
 ## Where It Is Used
 
 Modules import the shared object and read it where they need a value:

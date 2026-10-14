@@ -6,18 +6,25 @@ from the environment the first time any setting is read, and the whole set is
 checked then: a malformed value, or one outside its limits, raises
 ``ConfigurationError``, which names every bad variable and never its value.
 
-Two rules follow from building on first use:
+A secret (``SECRETS``) is a setting AWS keeps in SSM Parameter Store. A
+Lambda's environment holds only the parameter's name, in
+``<SETTING>_PARAMETER``, and the build reads the value through a
+``ParameterStore`` when the setting itself is not set. The value stays in the
+settings and never goes into ``os.environ``.
+
+Three rules follow from building on first use:
 
 - Importing this module reads no setting, so any module may import
   ``settings`` at the top, in any order.
+- Secrets are read at the first use, in whatever process uses them.
 - Tests patch ``settings`` with ``patch.object`` or ``monkeypatch.setattr``
   and never set an environment variable for a setting: the first read keeps
   whatever the environment held then. A test of how a value is read builds
   its own ``Settings.from_environment``.
 
 Only the standard library and ``app`` modules that need nothing else are
-imported here, because the queue-wiring CI job imports this module with just
-pytest and PyYAML installed.
+imported at the top, because the queue-wiring CI job imports this module with
+just pytest and PyYAML installed. boto3 is imported when SSM is first read.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from app.alert_vocabulary import DEFAULT_ALERT_MIN_CONFIDENCE
 from app.sources import SOURCES
@@ -64,6 +71,102 @@ class ConfigurationError(Exception):
     def __init__(self, problems: Sequence[str]) -> None:
         self.problems = tuple(problems)
         super().__init__("Invalid runtime configuration: " + "; ".join(self.problems))
+
+
+@dataclass(frozen=True)
+class Secret:
+    """A setting AWS keeps in SSM Parameter Store.
+
+    A function in infra/template.yaml names the parameter in ``variable`` as
+    ``${ParameterPathPrefix}/<parameter>``. A missing optional secret reads as
+    empty, which switches off the feature that needs it.
+    """
+
+    setting: str
+    parameter: str
+    optional: bool = False
+
+    @property
+    def variable(self) -> str:
+        return f"{self.setting}_PARAMETER"
+
+
+SECRETS = (
+    Secret("DATABASE_URL", "database-url"),
+    Secret("BREVO_API_KEY", "brevo-api-key", optional=True),
+    Secret("MARKETAUX_API_TOKEN", "marketaux-api-token"),
+    Secret("REDDIT_CLIENT_ID", "reddit-client-id", optional=True),
+    Secret("REDDIT_CLIENT_SECRET", "reddit-client-secret", optional=True),
+    Secret("PUBLIC_DISCUSSION_FEED_URLS", "public-discussion-feed-urls", optional=True),
+)
+
+
+class ParameterStore(Protocol):
+    """Where secrets are kept."""
+
+    def get(self, name: str) -> str | None:
+        """The parameter's decrypted value, or None when it does not exist."""
+
+
+class SsmParameterStore:
+    """SSM Parameter Store, through one boto3 client made at the first read."""
+
+    def __init__(self, client: Any = None) -> None:
+        self._client = client
+
+    def get(self, name: str) -> str | None:
+        # Imported on use: the queue-wiring CI job has no boto3.
+        from botocore.exceptions import ClientError
+
+        if self._client is None:
+            import boto3
+
+            self._client = boto3.client("ssm")
+        try:
+            response = self._client.get_parameter(Name=name, WithDecryption=True)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise
+        return response["Parameter"]["Value"]
+
+
+@dataclass
+class InMemoryParameterStore:
+    """Parameters held in a dict, for tests. ``requested`` lists each name read."""
+
+    values: dict[str, str]
+    requested: list[str] = field(default_factory=list)
+
+    def get(self, name: str) -> str | None:
+        self.requested.append(name)
+        return self.values.get(name)
+
+
+def _with_secrets(
+    environ: Mapping[str, str],
+    parameters: ParameterStore | None,
+) -> tuple[dict[str, str], list[str]]:
+    """A copy of ``environ`` holding each secret read from its parameter, and the problems.
+
+    A secret is read only when its variable names a parameter and the setting
+    itself is not set, even to an empty value.
+    """
+    resolved = dict(environ)
+    problems = []
+    for secret in SECRETS:
+        name = environ.get(secret.variable, "")
+        if not name or secret.setting in environ:
+            continue
+        if parameters is None:
+            problems.append(f"{secret.variable} is set, but no parameter store was given")
+            continue
+        value = parameters.get(name)
+        if value is None and not secret.optional:
+            problems.append(f"{secret.variable} names a parameter that does not exist")
+            continue
+        resolved[secret.setting] = value or ""
+    return resolved, problems
 
 
 # Reads one variable's text. It raises ValueError saying which limit the text
@@ -227,16 +330,21 @@ class Settings:
     SESSION_COOKIE_SAMESITE: str = text("lax")
 
     @classmethod
-    def from_environment(cls, environ: Mapping[str, str]) -> Settings:
-        """The settings ``environ`` holds. ``environ`` is only read.
+    def from_environment(
+        cls,
+        environ: Mapping[str, str],
+        *,
+        parameters: ParameterStore | None = None,
+    ) -> Settings:
+        """The settings ``environ`` holds, with its secrets read from ``parameters``.
 
-        A variable that is set is read even when it is empty. Every bad value
-        is reported in one ConfigurationError.
+        ``environ`` is only read. A variable that is set is read even when it
+        is empty. Every bad value is reported in one ConfigurationError.
         """
+        resolved, problems = _with_secrets(environ, parameters)
         values: dict[str, Any] = {}
-        problems: list[str] = []
         for setting in fields(cls):
-            raw = _raw(environ, (setting.name, *setting.metadata["aliases"]))
+            raw = _raw(resolved, (setting.name, *setting.metadata["aliases"]))
             if raw is None:
                 continue
             try:
@@ -269,14 +377,16 @@ _built: Settings | None = None
 
 
 def get_settings() -> Settings:
-    """This process's settings, built from its environment at the first call."""
+    """This process's settings, built at the first call from its environment and SSM."""
     global _built
     built = _built
     if built is None:
         with _lock:
             built = _built
             if built is None:
-                built = _built = Settings.from_environment(os.environ)
+                built = _built = Settings.from_environment(
+                    os.environ, parameters=SsmParameterStore()
+                )
     return built
 
 
