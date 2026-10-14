@@ -689,16 +689,24 @@ def test_an_unknown_ticker_is_not_found(db_session: Session) -> None:
 
 
 @pytest.mark.usefixtures("without_model_runtime")
-def test_the_latest_signal_is_each_tickers_newest_analysed_sentiment(
-    db_session: Session,
-) -> None:
+def test_the_latest_signal_is_each_tickers_latest_filing(db_session: Session) -> None:
     first, second, quiet = _ticker(db_session), _ticker(db_session), _ticker(db_session)
-    _analyse(db_session, _artifact(db_session, first, day=1), "negative", 0.6, analysed_day=1)
-    _analyse(db_session, _artifact(db_session, first, day=2), "positive", 0.91, analysed_day=3)
-    _analyse(db_session, _artifact(db_session, second, day=1), "neutral", 0.7, analysed_day=2)
-    _analyse(db_session, _post(db_session, first), "negative", 0.99, analysed_day=9)
-    _artifact(db_session, quiet)
+    # Analysed again after the newer filing, but published before it.
+    _analyse(db_session, _artifact(db_session, first, day=1), "negative", 0.6, analysed_day=9)
+    latest = _artifact(db_session, first, day=2)
+    _analyse(db_session, latest, "positive", 0.91, analysed_day=3)
+    _analyse(db_session, _artifact(db_session, first, day=6), "mixed", 0.8, analysed_day=4)
+    news = _artifact(db_session, first, day=5, source_type="news", artifact_type="news_article")
+    _analyse(db_session, news, "negative", 0.99, analysed_day=5)
+    _analyse(db_session, _post(db_session, first, day=7), "negative", 0.99, analysed_day=9)
+    _analyse(db_session, _artifact(db_session, second, day=2), "positive", 0.7)
+    collected = datetime(2040, 1, 3, tzinfo=timezone.utc)
+    undated = _artifact(db_session, second, published_at=None, created_at=collected)
+    _analyse(db_session, undated, "neutral", 0.7)
+    quiet_news = _artifact(db_session, quiet, source_type="news", artifact_type="news_article")
+    _analyse(db_session, quiet_news, "positive")
     ticker_ids = [first.id, second.id, quiet.id]
+    latest_id = latest.id
 
     with _statements(db_session) as statements:
         signals = ticker_sentiment.latest_signals(db_session, ticker_ids)
@@ -708,6 +716,7 @@ def test_the_latest_signal_is_each_tickers_newest_analysed_sentiment(
         first.id: "positive",
         second.id: "neutral",
     }
+    assert signals[first.id].artifact_id == latest_id
     assert signals[first.id].confidence_score == pytest.approx(0.91)
     assert signals[first.id].model_used == "ProsusAI/finbert"
     assert signals[first.id].analyzed_at == datetime(2040, 2, 3, tzinfo=timezone.utc)

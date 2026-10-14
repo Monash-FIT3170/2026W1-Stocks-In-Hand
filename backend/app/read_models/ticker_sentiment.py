@@ -1,7 +1,8 @@
 """Ticker sentiment: the one definition of a ticker's analysed sentiment.
 
 Two read-models share it. The latest signal is the headline sentiment the
-brief and the watchlist cards show. Category sentiment breaks a ticker's
+brief and the watchlist cards show: that of the ticker's latest filing,
+apart from news and public discussion. Category sentiment breaks a ticker's
 analysed artifacts down by sentiment bucket, with public discussion as a
 sixth group, for its research summary. Both read the sentiment the
 analysis worker stored and never run FinBERT, so the API needs no model
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.artifact import Artifact
@@ -95,7 +96,7 @@ AnalysedRow = tuple[Artifact, ArtifactSentiment]
 
 @dataclass(frozen=True)
 class LatestSignal:
-    """The sentiment of the artifact a ticker's headline signal comes from."""
+    """The sentiment of the filing a ticker's headline signal comes from."""
 
     artifact_id: UUID
     sentiment_label: str
@@ -107,9 +108,11 @@ class LatestSignal:
 def latest_signals(db: Session, ticker_ids: Iterable[UUID]) -> dict[UUID, LatestSignal]:
     """Each ticker's latest signal, in one query however many tickers are asked for.
 
-    The signal is the most recently analysed sentiment of any artifact
-    stored against the ticker. A post linked to it only by a mention does
-    not count. A ticker with no analysed artifact is left out.
+    The signal is the sentiment of the ticker's most recently published ASX
+    announcement that has a sentiment label, dated by when it was collected
+    when it has no publication date. Analysing an older filing again does
+    not make it the latest, and news, public discussion and other labels do
+    not count. A ticker with no such filing is left out.
     """
     ids = list(ticker_ids)
     if not ids:
@@ -118,7 +121,13 @@ def latest_signals(db: Session, ticker_ids: Iterable[UUID]) -> dict[UUID, Latest
         db.query(Artifact.ticker_id, ArtifactSentiment)
         .join(ArtifactSentiment, ArtifactSentiment.artifact_id == Artifact.id)
         .filter(Artifact.ticker_id.in_(ids))
-        .order_by(Artifact.ticker_id, ArtifactSentiment.created_at.desc())
+        .filter(Artifact.source_type == "asx_announcement")
+        .filter(func.lower(ArtifactSentiment.sentiment_label).in_(SENTIMENT_LABELS))
+        .order_by(
+            Artifact.ticker_id,
+            func.coalesce(Artifact.published_at, Artifact.created_at).desc().nullslast(),
+            ArtifactSentiment.created_at.desc().nullslast(),
+        )
         .distinct(Artifact.ticker_id)
         .all()
     )

@@ -32,9 +32,11 @@ from app.models.investor import Investor
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
+from app.read_models.ticker_brief import read_ticker_brief
 from app.read_models.watchlist_summary import read_watchlist_summary
 from app.schemas.watchlist_summary import WatchedSignal
 from app.services import artifact_summary
+from app.services.quotes import FixedQuotes
 
 SUMMARY = {
     "summary": "The company confirmed its half-year result.",
@@ -130,10 +132,10 @@ def _filing(
     db: Session, ticker: Ticker, *, day: int, about: str | None = None, **values
 ) -> Artifact:
     values.setdefault("published_at", _when(day))
+    values.setdefault("source_type", "asx_announcement")
+    values.setdefault("artifact_type", "asx_announcement_other")
     artifact = Artifact(
         ticker_id=ticker.id,
-        source_type="asx_announcement",
-        artifact_type="asx_announcement_other",
         title=f"Filing {day}",
         raw_text="Raw filing text that is not a summary.",
         content_hash=f"watchlist-summary-{uuid.uuid4()}",
@@ -205,6 +207,23 @@ def test_each_company_shows_its_latest_signal_and_brief(db_session: Session) -> 
     )
     # An unsummarised record has no brief, and is dated when it was collected.
     assert (third.brief, third.last_brief_at) == (None, _when(5))
+
+
+def test_the_card_and_the_brief_show_the_same_latest_filing_signal(db_session: Session) -> None:
+    investor = _investor(db_session)
+    ticker = _watched(db_session, _watchlist(db_session, investor))
+    _analyse(db_session, _filing(db_session, ticker, day=2, about="A brief."), "positive", 0.9)
+    news = _filing(db_session, ticker, day=4, source_type="news", artifact_type="news_article")
+    _analyse(db_session, news, "negative", 0.95)
+
+    [company] = read_watchlist_summary(db_session, investor.id).companies
+    overview = read_ticker_brief(db_session, ticker.symbol, quotes=FixedQuotes()).overview
+
+    assert company.latest_signal.sentiment_label == "positive"
+    assert (overview.sentiment_label, overview.latest_signal_confidence_pct) == (
+        "Generally Positive",
+        "90%",
+    )
 
 
 def test_another_investors_watchlist_is_not_shown(db_session: Session) -> None:
