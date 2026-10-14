@@ -399,8 +399,9 @@ class _Request:
 def _frontend_url(path: str, *, token: str | None = None) -> str:
     """A link to ``path`` on the website, with ``token`` as its ``t`` parameter.
 
-    Every link an alert email carries is built here, on ``FRONTEND_BASE_URL``,
-    which a deploy sets to the custom domain when the site has one.
+    Every link an alert or verification email carries is built here, on
+    ``FRONTEND_BASE_URL``, which a deploy sets to the custom domain when the
+    site has one.
     """
     base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
     query = "" if token is None else f"?{urlencode({'t': token})}"

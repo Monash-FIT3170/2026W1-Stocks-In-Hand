@@ -788,7 +788,7 @@ def _cloudfront_serves(path: str) -> bool:
     return route in static_routes or re.fullmatch(ticker_route.group(1), route) is not None
 
 
-def test_every_link_in_an_alert_email_opens_a_page_the_site_serves(
+def test_every_link_in_an_alert_or_verification_email_opens_a_page_the_site_serves(
     api: Api,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
