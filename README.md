@@ -191,7 +191,7 @@ signed email link, so they do not need to be added to Brevo first. See the
 ### Sentiment (FinBERT)
 | Method | Path | Description |
 |---|---|---|
-| POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
+| POST | `/analyse` | Admin only. Runs FinBERT on raw text where torch, transformers and the model are installed, as in the local Docker backend. Body: `{ "text": "..." }`. Returns `label` (positive/negative/neutral) and its confidence, `score`. The deployed API answers 503 for any non-blank text, because its image has no FinBERT; FinBERT runs in the analysis worker |
 | GET | `/sentiment/{ticker}` | A ticker's stored sentiment in each sentiment bucket (revenue, strategy, risk, dividend, organisational) and in public discussion, read from what the analysis worker stored. Never runs FinBERT. Params: `days` (default: 365), `limit` (default: 250) |
 
 ### Reddit (PRAW)
@@ -389,10 +389,14 @@ deployment to validate anything AWS-specific (IAM, throttling, budgets).
 
 ### Verifying it's working
 
-**1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session,
-like every other write route except sign-up, sign-in, sign-out, email
-verification and unsubscribe. Sign up, promote yourself in Postgres, then sign
-back in:
+**1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session. So
+does every other write route except sign-up, sign-in, sign-out, email
+verification and unsubscribe, which anyone may call, `POST /auth/bootstrap`,
+which needs a Cognito sign-in, and a signed-in investor's changes to their own
+watchlists and alert settings (`/watchlists`, `/watchlist-tickers`,
+`PUT /notifications/preferences` and
+`POST /notifications/preferences/resend-verification`). Sign up, promote
+yourself in Postgres, then sign back in:
 
 ```bash
 curl -c cookies.txt -X POST http://localhost:8000/auth/sign-up \

@@ -393,7 +393,8 @@ these values:
 
 Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
 the feed allowlist exists. Each EventBridge event has a stable idempotency key,
-the Lambda has reserved concurrency one, and at most five blog feeds run.
+so a retried event does not collect again what that event already collected.
+At most five blog feeds run, and the Lambda has no reserved concurrency.
 Collected public posts are queued for analysis even when they discuss the ASX
 market generally and do not name one of the supported company tickers.
 
@@ -489,9 +490,16 @@ AUTO_DEPLOY_MARKETAUX_PER_TICKER_LIMIT
 Leave notifications, schedules, and Bedrock disabled until their smoke tests
 pass. A manual run of **Deploy staging release** still creates an unexecuted
 change set. Its inputs default to `keep`, which keeps the live value, so the
-change set changes only the inputs you choose. **Execute approved staging
-change set** and **Publish staging frontend** remain available for reviewed
-recovery work.
+change set changes only the inputs you choose. It does build and push the
+three images for its commit, unless ECR already has them, and they count
+toward the two images each repository keeps (see Rollback). So a manual run
+on a commit that never goes live, such as a pull request branch, expires the
+release before the live one, and the next release then expires the live one.
+Before such a run, either raise `countNumber` in `infra/bootstrap.yaml` and
+redeploy the bootstrap stack with the §1 command, or accept that a rollback
+after the next release must target a SHA still in ECR. **Execute approved
+staging change set** and **Publish staging frontend** remain available for
+reviewed recovery work.
 
 The workflows request short-lived AWS tokens through OIDC. Automatic main
 deployments execute only after the same workflow passes backend tests, security
@@ -507,7 +515,10 @@ summaries and evidence categorisation:
 - the API and analysis Lambdas receive permission only when Bedrock is enabled;
 - IAM permits only regional `openai.gpt-oss-120b-1:0`;
 - API requests use Standard tier and cost-bearing routes require authentication;
-- queued analysis uses Flex tier, concurrency one, and SQS batch size one;
+- queued analysis uses Flex tier and SQS batch size one, with no concurrency
+  cap on its event source, so a burst such as the ticker summary route's 50
+  requests can start up to 50 analysis Lambdas and as many flex-tier Bedrock
+  calls at once;
 - prompts are capped at 30,000 characters and completions at 4,096 tokens; and
 - responses must pass the existing strict JSON schemas before storage.
 
@@ -596,8 +607,10 @@ earlier successful stages.
 
 ## Rollback
 
-ECR keeps the two newest image versions. Use **Prepare staging backend rollback**
-with the previous full SHA. Its plan refuses a SHA whose images are no longer in
+ECR keeps the two newest images in each repository, and a manual **Deploy
+staging release** run on a commit that never went live takes one of those
+places (see §10). Use **Prepare staging backend rollback** with the previous
+full SHA. Its plan refuses a SHA whose images are no longer in
 ECR. The change set keeps every parameter the live stack runs with (auth
 provider, feature switches, custom domain, alert sender) and swaps only the
 three image URIs. A parameter the stack does not have yet takes the template

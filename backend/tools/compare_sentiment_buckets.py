@@ -8,10 +8,19 @@ For each catalogue ticker, or the one given, it reads the analysed
 artifacts the category sentiment view counts, leaving out any whose stored
 label is not a sentiment label, as the view does. For each bucket it prints
 how many count in it, which is the research summary's source count, and
-their dominant label, under the keyword rule the view used to follow and
-under the view's taxonomy rule, and how many of the taxonomy rule's were
-placed by its keyword fallback. Then it lists each artifact whose buckets
-differ. The session runs in a read-only transaction and is rolled back.
+their dominant label, under the keyword rule and under the view's taxonomy
+rule, and how many of the taxonomy rule's were placed by its keyword
+fallback. Then it lists each artifact whose buckets differ. The session
+runs in a read-only transaction and is rolled back.
+
+The keyword column applies this code's keyword rule to every artifact:
+keywords match whole words, and each row is weighted by its confidence. It
+is not what staging shows before #56 deploys. ``main`` matches keywords
+inside words, so it counts an Appendix 3G/3H notice stored as
+``SecurityNotification`` in risk, and it gives a row with zero or no
+confidence a weight of 1.0. To keep the numbers investors see today, save
+``GET /api/sentiment/{ticker}`` for each catalogue ticker from staging
+before the deploy.
 """
 
 from __future__ import annotations
