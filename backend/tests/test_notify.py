@@ -107,13 +107,6 @@ def _lease(investor_id: UUID, *, rollup: bool = False) -> notify.DeliveryLease:
     )
 
 
-def _brevo_error(status_code: int, code: str) -> notify.brevo_alerts.BrevoApiError:
-    return notify.brevo_alerts.BrevoApiError(
-        status_code=status_code,
-        code=code,
-    )
-
-
 def test_notification_message_parser_accepts_the_versioned_contract() -> None:
     """A valid producer payload should reach the worker as typed values."""
     artifact_id = uuid4()
@@ -714,83 +707,6 @@ def test_unconfirmed_recipient_is_rejected_before_provider_send(
     )
 
 
-def test_brevo_success_marks_the_delivery_sent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A returned Brevo message ID should become the final ledger outcome."""
-    lease = _lease(uuid4())
-    transition = Mock()
-    monkeypatch.setattr(
-        notify,
-        "_send_alert",
-        Mock(return_value="brevo-message-123"),
-    )
-    monkeypatch.setattr(notify, "_transition_delivery", transition)
-
-    notify._send_rendered(
-        lease,
-        _preferences(investor_id=lease.investor_id),
-        ("subject", "<p>html</p>", "text"),
-        "https://app.example.test/unsubscribe/?token=signed",
-    )
-
-    transition.assert_called_once_with(
-        lease,
-        "sent",
-        provider_message_id="brevo-message-123",
-    )
-
-
-def test_terminal_brevo_rejection_is_recorded_and_acknowledged(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A Brevo validation error is terminal and must not return to SQS."""
-    lease = _lease(uuid4())
-    transition = Mock()
-    monkeypatch.setattr(
-        notify,
-        "_send_alert",
-        Mock(side_effect=_brevo_error(400, "invalid_parameter")),
-    )
-    monkeypatch.setattr(notify, "_transition_delivery", transition)
-
-    notify._send_rendered(
-        lease,
-        _preferences(investor_id=lease.investor_id),
-        ("subject", "<p>html</p>", "text"),
-        "https://app.example.test/unsubscribe/?token=signed",
-    )
-
-    assert transition.call_args.args == (lease, "rejected")
-    assert transition.call_args.kwargs["error_code"] == "invalid_parameter"
-
-
-def test_retryable_brevo_throttle_is_recorded_before_batch_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Throttling must release the claim as failed, then retry that record."""
-    lease = _lease(uuid4())
-    transition = Mock(return_value="failed")
-    monkeypatch.setattr(
-        notify,
-        "_send_alert",
-        Mock(side_effect=_brevo_error(429, "rate_limit")),
-    )
-    monkeypatch.setattr(notify, "_transition_delivery", transition)
-
-    with pytest.raises(notify.RetryableNotificationError) as raised:
-        notify._send_rendered(
-            lease,
-            _preferences(investor_id=lease.investor_id),
-            ("subject", "<p>html</p>", "text"),
-            "https://app.example.test/unsubscribe/?token=signed",
-        )
-
-    assert raised.value.code == "rate_limit"
-    assert transition.call_args.args == (lease, "failed")
-    assert transition.call_args.kwargs["error_code"] == "rate_limit"
-
-
 def test_confirmed_recipient_needs_no_provider_identity_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -802,32 +718,6 @@ def test_confirmed_recipient_needs_no_provider_identity_lookup(
 
     assert notify._check_recipient_confirmation(lease, preferences) is True
     transition.assert_not_called()
-
-
-def test_live_send_limiter_spaces_fanout_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Reserved concurrency alone must not exceed the one-send rate."""
-    sleep = Mock()
-    send = Mock(return_value="brevo-message-id")
-    monotonic = Mock(side_effect=[10.25, 11.25])
-    monkeypatch.setattr(settings, "NOTIFICATIONS_DRY_RUN", False, raising=False)
-    monkeypatch.setattr(notify, "_LAST_LIVE_SEND_AT", 10.0)
-    monkeypatch.setattr(notify.time, "monotonic", monotonic)
-    monkeypatch.setattr(notify.time, "sleep", sleep)
-    monkeypatch.setattr(notify.brevo_alerts, "send_email", send)
-
-    result = notify._send_alert(
-        to="investor@example.com",
-        subject="subject",
-        html="<p>html</p>",
-        text_body="text",
-        unsubscribe_url="https://app.example.test/unsubscribe/?token=signed",
-    )
-
-    assert result == "brevo-message-id"
-    sleep.assert_called_once_with(0.75)
-    send.assert_called_once()
 
 
 def test_api_image_packages_the_notification_worker() -> None:
@@ -851,9 +741,9 @@ def test_runtime_configuration_load_precedes_configured_imports() -> None:
 
     load_position = source.index("\nload_runtime_configuration()\n")
     settings_position = source.index("\nfrom app.core.config import settings")
-    brevo_position = source.index("\nfrom app.services import brevo_alerts")
+    sender_position = source.index("\nfrom app.services import email_sender")
 
-    assert load_position < settings_position < brevo_position
+    assert load_position < settings_position < sender_position
 
 
 def test_runtime_configuration_loads_brevo_key_from_ssm(

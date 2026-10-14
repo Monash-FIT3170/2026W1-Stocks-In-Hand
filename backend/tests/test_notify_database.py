@@ -8,7 +8,6 @@ import json
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine, inspect, select
@@ -28,6 +27,8 @@ from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
+from app.services import email_sender
+from app.services.email_sender import RecordingEmailSender
 from lambdas import notify
 
 
@@ -190,9 +191,8 @@ def test_worker_sends_and_deduplicates_against_postgres(
                 "confidence_score": "0.8200",
             }
 
-        send = Mock(return_value="brevo-integration-message")
+        sender = RecordingEmailSender()
         monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
-        monkeypatch.setattr(settings, "NOTIFICATIONS_DRY_RUN", True, raising=False)
         monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", 100_000, raising=False)
         monkeypatch.setattr(
             settings,
@@ -200,7 +200,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
             "https://app.example.test",
             raising=False,
         )
-        monkeypatch.setattr(notify.brevo_alerts, "send_email", send)
+        monkeypatch.setattr(email_sender, "configured_sender", lambda **_: sender)
         record = {
             "messageId": f"notify-{suffix}",
             "body": json.dumps(message),
@@ -213,7 +213,7 @@ def test_worker_sends_and_deduplicates_against_postgres(
         assert notify.handler({"Records": [record]}, None) == {
             "batchItemFailures": []
         }
-        send.assert_called_once()
+        assert len(sender.sent) == 1
 
         with Session(engine) as db:
             deliveries = list(
@@ -230,15 +230,12 @@ def test_worker_sends_and_deduplicates_against_postgres(
             )
             assert len(deliveries) == 1
             assert deliveries[0].status == "sent"
-            assert (
-                deliveries[0].provider_message_id
-                == "brevo-integration-message"
-            )
+            assert deliveries[0].provider_message_id == "recorded-1"
             assert subscription is not None
             assert subscription.last_delivery_status == "sent"
             assert subscription.last_delivery_error_code is None
         # The seeded summary row has only joined text, so the alert recovers it.
-        assert "Earnings were below expectations." in send.call_args.kwargs["text"]
+        assert "Earnings were below expectations." in sender.sent[0].text
     finally:
         if ids:
             _cleanup(engine, ids=ids)

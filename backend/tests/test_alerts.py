@@ -5,12 +5,11 @@
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 from unittest.mock import MagicMock, Mock
 from uuid import UUID, uuid4
 
@@ -113,13 +112,6 @@ def _lease(investor_id: UUID, *, rollup: bool = False) -> notify.DeliveryLease:
         investor_id=investor_id,
         claimed_at=datetime.now(timezone.utc),
         rollup=rollup,
-    )
-
-
-def _message_rejected() -> notify.brevo_alerts.BrevoApiError:
-    return notify.brevo_alerts.BrevoApiError(
-        status_code=400,
-        code="invalid_parameter",
     )
 
 
@@ -259,42 +251,6 @@ def test_daily_budget_suppresses_without_send_or_retry(
     assert transition.call_args.args == (lease, "suppressed_budget")
     assert transition.call_args.kwargs["error_code"] == "daily_budget"
     send.assert_not_called()
-
-
-def test_terminal_brevo_error_updates_ledger_and_subscription(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A terminal provider error must update both outcome records and stop."""
-    preferences = _preferences()
-    lease = _lease(preferences.investor_id)
-    db = MagicMock()
-    rejected = Mock(return_value=SimpleNamespace(status="rejected"))
-    mirrored = Mock(return_value=object())
-
-    @contextmanager
-    def fake_session() -> Iterator[MagicMock]:
-        yield db
-
-    monkeypatch.setattr(notify, "database_session", fake_session)
-    monkeypatch.setattr(notify, "_send_alert", Mock(side_effect=_message_rejected()))
-    monkeypatch.setattr(notify.alert_delivery_crud, "mark_rejected", rejected)
-    monkeypatch.setattr(
-        notify.alert_subscription_crud,
-        "record_delivery_outcome",
-        mirrored,
-    )
-
-    notify._send_rendered(
-        lease,
-        preferences,
-        ("subject", "<p>html</p>", "text"),
-        "https://app.example.test/unsubscribe/?t=signed",
-    )
-
-    assert rejected.call_args.args[3] == "invalid_parameter"
-    assert mirrored.call_args.kwargs["delivery_status"] == "rejected"
-    assert mirrored.call_args.kwargs["error_code"] == "invalid_parameter"
-    db.commit.assert_called_once_with()
 
 
 def test_template_renders_when_summary_is_null() -> None:

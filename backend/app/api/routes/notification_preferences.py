@@ -12,7 +12,6 @@ from typing import cast
 from urllib.parse import urlencode
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -34,8 +33,17 @@ from app.schemas.notification import (
     VerificationResponse,
     VerificationStatus,
 )
-from app.services import brevo_alerts
 from app.services.alert_templates import render_verification_email
+from app.services.email_sender import (
+    Accepted,
+    EmailSender,
+    Misconfigured,
+    OutgoingEmail,
+    RecipientRejected,
+    SendOutcome,
+    Unavailable,
+    current_sender,
+)
 from app.services.unsubscribe_tokens import (
     subscription_id_from_signed_token,
     verify_signed_unsubscribe_token,
@@ -54,6 +62,23 @@ UNSUBSCRIBE_MESSAGE = "If the token was valid, notifications are now disabled."
 VERIFICATION_MESSAGE = "Your email address is verified for watchlist alerts."
 INVALID_VERIFICATION_MESSAGE = "The verification link is invalid or expired."
 _DUMMY_TOKEN_HASH = "0" * 64
+# What a route answers when its verification email is not sent. The investor
+# can fix a refused address, a retry may reach an unavailable service, and a
+# misconfiguration needs a fix on our side.
+_UNSENT_VERIFICATION: dict[type[SendOutcome], tuple[int, str]] = {
+    RecipientRejected: (
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "The email service refused this address. Check the email address on your account.",
+    ),
+    Unavailable: (
+        status.HTTP_502_BAD_GATEWAY,
+        "The verification service is unavailable",
+    ),
+    Misconfigured: (
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "Email verification is not configured",
+    ),
+}
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -146,12 +171,13 @@ def _require_notifications_enabled() -> None:
 
 def _send_verification_email(
     *,
+    sender: EmailSender,
     subscription_id: UUID,
     email: str,
     unsubscribe_token_hash: str,
     requested_at: datetime,
 ) -> None:
-    """Send one app-owned confirmation link through Brevo."""
+    """Send one app-owned confirmation link, or raise the error its outcome means."""
     try:
         token = create_signed_verification_token(
             subscription_id,
@@ -163,30 +189,21 @@ def _send_verification_email(
             f"{base_url}/verify-notifications/?{urlencode({'t': token})}"
         )
         subject, html, text = render_verification_email(verification_url)
-        brevo_alerts.send_email(
-            to=email,
-            subject=subject,
-            html=html,
-            text=text,
+    except ValueError:
+        outcome: SendOutcome = Misconfigured("invalid_notification_configuration")
+    else:
+        outcome = sender.send(
+            OutgoingEmail(to=email, subject=subject, html=html, text=text)
         )
-    except ValueError as exc:
-        LOGGER.error(
-            "Brevo verification configuration failed error_code=%s",
-            type(exc).__name__,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Email verification is not configured",
-        ) from exc
-    except (brevo_alerts.BrevoApiError, httpx.HTTPError, RuntimeError) as exc:
-        LOGGER.error(
-            "Brevo verification request failed error_code=%s",
-            type(exc).__name__,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="The verification service is unavailable",
-        ) from exc
+    if isinstance(outcome, Accepted):
+        return
+    LOGGER.error(
+        "Verification email not sent outcome=%s error_code=%s",
+        type(outcome).__name__,
+        outcome.code,
+    )
+    status_code, detail = _UNSENT_VERIFICATION[type(outcome)]
+    raise HTTPException(status_code=status_code, detail=detail)
 
 
 @router.get("/preferences", response_model=NotificationPreferencesResponse)
@@ -208,6 +225,7 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
     body: NotificationPreferencesUpdate,
     db: Session = Depends(get_db),
     current_investor: Investor = Depends(get_current_investor),
+    sender: EmailSender = Depends(current_sender),
 ) -> NotificationPreferencesResponse:
     """Atomically update preferences and send confirmation when required."""
     existing = alert_subscription_crud.get_subscription_by_investor(
@@ -308,6 +326,7 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
         db.rollback()
         try:
             _send_verification_email(
+                sender=sender,
                 subscription_id=subscription_id,
                 email=verification_email,
                 unsubscribe_token_hash=token_secret,
@@ -346,6 +365,7 @@ def update_notification_preferences(  # pylint: disable=too-many-locals
 def resend_notification_verification(
     db: Session = Depends(get_db),
     current_investor: Investor = Depends(get_current_investor),
+    sender: EmailSender = Depends(current_sender),
 ) -> NotificationPreferencesResponse:
     """Reserve and send at most one confirmation email per minute."""
     _require_notifications_enabled()
@@ -402,6 +422,7 @@ def resend_notification_verification(
     db.rollback()
     try:
         _send_verification_email(
+            sender=sender,
             subscription_id=reserved_id,
             email=email,
             unsubscribe_token_hash=token_secret,

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -19,7 +18,6 @@ from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
-import httpx
 from pydantic import ValidationError
 from sqlalchemy import select
 
@@ -45,7 +43,7 @@ from app.messages import NotificationMessage  # noqa: E402
 from app.models.artifact import Artifact  # noqa: E402
 from app.models.artifact_sentiment import ArtifactSentiment  # noqa: E402
 from app.models.ticker import Ticker  # noqa: E402
-from app.services import brevo_alerts  # noqa: E402
+from app.services import email_sender  # noqa: E402
 from app.services.alert_templates import (  # noqa: E402
     render_alert_email,
     render_rollup_email,
@@ -59,9 +57,6 @@ from app.status import AnalysisStatus  # noqa: E402
 
 STAGE = "notify"
 _CONFIDENCE_TOLERANCE = Decimal("0.0001")
-_LIVE_SEND_INTERVAL_SECONDS = 1.0
-_SEND_LOCK = threading.Lock()
-_LAST_LIVE_SEND_AT: float | None = None
 
 
 class PermanentNotificationError(ValueError):
@@ -509,90 +504,38 @@ def _notification_urls(
     return news_url, unsubscribe_url
 
 
-def _send_alert(  # pylint: disable=too-many-arguments
-    *,
-    to: str,
-    subject: str,
-    html: str,
-    text_body: str,
-    unsubscribe_url: str,
-) -> str:
-    """Rate-limit live sends inside one fan-out Lambda invocation."""
-    global _LAST_LIVE_SEND_AT  # pylint: disable=global-statement
-    with _SEND_LOCK:
-        if not settings.NOTIFICATIONS_DRY_RUN and _LAST_LIVE_SEND_AT is not None:
-            delay = _LIVE_SEND_INTERVAL_SECONDS - (
-                time.monotonic() - _LAST_LIVE_SEND_AT
-            )
-            if delay > 0:
-                time.sleep(delay)
-        try:
-            return brevo_alerts.send_email(
-                to=to,
-                subject=subject,
-                html=html,
-                text=text_body,
-                unsubscribe_url=unsubscribe_url,
-            )
-        finally:
-            if not settings.NOTIFICATIONS_DRY_RUN:
-                _LAST_LIVE_SEND_AT = time.monotonic()
-
-
 def _send_rendered(
     lease: DeliveryLease,
     preferences: WatcherPreferences,
     rendered: tuple[str, str, str],
     unsubscribe_url: str,
 ) -> None:
-    """Send one rendered message and classify Brevo failures."""
-    subject, html, text_body = rendered
-    try:
-        message_id = _send_alert(
+    """Send one rendered message and record the email sender's outcome.
+
+    A refused recipient is final. Any other unsent outcome releases the claim
+    as failed and retries the record.
+    """
+    subject, html, text = rendered
+    outcome = email_sender.configured_sender(paced=True).send(
+        email_sender.OutgoingEmail(
             to=preferences.email,
             subject=subject,
             html=html,
-            text_body=text_body,
+            text=text,
             unsubscribe_url=unsubscribe_url,
         )
-    except brevo_alerts.BrevoApiError as exc:
-        code = exc.code[:128]
-        if not exc.retryable and exc.status_code in {400, 404, 422}:
-            _transition_delivery(
-                lease,
-                "rejected",
-                error_code=code,
-                error_detail="Brevo rejected the recipient or message",
-            )
-            return
-        _fail_and_retry(lease, code=code)
-    except httpx.HTTPError:
-        _fail_and_retry(lease, code="brevo_transport_error")
-    except brevo_alerts.BrevoAlertConfigurationError:
-        _fail_and_retry(lease, code="brevo_configuration_error")
-    except ValueError as exc:
-        code = (
-            "invalid_recipient"
-            if "recipient" in str(exc).lower()
-            else "invalid_notification_configuration"
-        )
-        if code == "invalid_recipient":
-            _transition_delivery(
-                lease,
-                "rejected",
-                error_code=code,
-                error_detail="Recipient address is invalid",
-            )
-            return
-        _fail_and_retry(lease, code=code)
-    except Exception:  # pylint: disable=broad-exception-caught
-        _fail_and_retry(lease, code="brevo_send_failed")
-
-    _transition_delivery(
-        lease,
-        "sent",
-        provider_message_id=message_id,
     )
+    if isinstance(outcome, email_sender.Accepted):
+        _transition_delivery(lease, "sent", provider_message_id=outcome.message_id)
+    elif isinstance(outcome, email_sender.RecipientRejected):
+        _transition_delivery(
+            lease,
+            "rejected",
+            error_code=outcome.code,
+            error_detail=outcome.detail,
+        )
+    else:
+        _fail_and_retry(lease, code=outcome.code)
 
 
 def _preferences_still_current(
