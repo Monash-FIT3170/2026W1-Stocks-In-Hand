@@ -1224,9 +1224,9 @@ def test_schedule_fails_abandoned_work_before_requesting_runs(
     def test_session():
         yield workers_use
 
-    monkeypatch.setenv("SCHEDULED_TICKERS", "")
-    monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
-    monkeypatch.setenv("MARKETAUX_ENABLED", "false")
+    monkeypatch.setattr(settings, "SCHEDULED_TICKERS", [])
+    monkeypatch.setattr(settings, "DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
+    monkeypatch.setattr(settings, "MARKETAUX_ENABLED", False)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(schedule.boto3, "client", lambda _service: FakeSqs())
 

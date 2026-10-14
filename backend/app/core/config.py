@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 from app.alert_vocabulary import DEFAULT_ALERT_MIN_CONFIDENCE
-from app.sources import SOURCES
+from app.sources import SOURCES, scheduled_tickers
 
 
 def _load_local_env() -> None:
@@ -257,8 +257,16 @@ def fraction(default: float) -> float:
     return cast(float, _setting(default, parse))
 
 
-def names(default: Sequence[str], *, case: Literal["upper", "lower", "keep"]) -> list[str]:
-    """A comma-separated list. Each entry is trimmed and empty entries are dropped."""
+def names(
+    default: Sequence[str],
+    *,
+    case: Literal["upper", "lower", "keep"],
+    keep_only: Sequence[str] | None = None,
+) -> list[str]:
+    """A comma-separated list. Each entry is trimmed and empty entries are dropped.
+
+    With ``keep_only``, an entry outside it is dropped and the rest follow its order.
+    """
     convert: Callable[[str], str] = {
         "upper": str.upper,
         "lower": str.lower,
@@ -266,7 +274,10 @@ def names(default: Sequence[str], *, case: Literal["upper", "lower", "keep"]) ->
     }[case]
 
     def parse(raw: str) -> list[str]:
-        return [convert(entry.strip()) for entry in raw.split(",") if entry.strip()]
+        entries = [convert(entry.strip()) for entry in raw.split(",") if entry.strip()]
+        if keep_only is None:
+            return entries
+        return [name for name in keep_only if name in entries]
 
     return cast(list[str], _setting(list(default), parse))
 
@@ -342,6 +353,14 @@ class Settings:
     SESSION_EXPIRE_DAYS: int = integer(7)
     SESSION_COOKIE_SECURE: bool = flag()
     SESSION_COOKIE_SAMESITE: str = text("lax")
+    # The tickers the weekly schedule scrapes, in catalogue order. A ticker
+    # outside the catalogue is dropped.
+    SCHEDULED_TICKERS: list[str] = names(
+        scheduled_tickers(), case="upper", keep_only=tuple(SOURCES)
+    )
+    MARKETAUX_ENABLED: bool = flag()
+    # News stories the weekly schedule asks Marketaux for, per ticker.
+    MARKETAUX_PER_TICKER_LIMIT: int = integer(10, minimum=1, maximum=25)
 
     @classmethod
     def from_environment(
@@ -370,6 +389,13 @@ class Settings:
         if problems:
             raise ConfigurationError(problems)
         return built
+
+    def required(self, name: str) -> str:
+        """The value of a text setting the caller cannot work without."""
+        value = getattr(self, name)
+        if not value:
+            raise ConfigurationError([f"{name} must be set"])
+        return value
 
     def _sign_in_problems(self) -> list[str]:
         """Cognito sign-in needs its user pool, its app client and a JWKS cache."""

@@ -3,20 +3,18 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import boto3
 
+from app.core.config import settings
 from app.messages import QueueAMessage
-from app.sources import SOURCES, scheduled_tickers
 from lambdas.common import database_session, log_event
 
 STAGE = "schedule"
 MAX_MARKETAUX_TICKERS_PER_RUN = 5
-MAX_MARKETAUX_ITEMS_PER_TICKER = 25
 # Longer than any pipeline queue's redelivery window (visibility timeout
 # times maxReceiveCount, 6 hours for analysis). test_pipeline_stages checks
 # it against the template.
@@ -30,25 +28,6 @@ def _event_key(event: dict) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _enabled_tickers() -> list[str]:
-    configured = {
-        ticker.strip().upper()
-        for ticker in os.getenv(
-            "SCHEDULED_TICKERS", ",".join(scheduled_tickers())
-        ).split(",")
-        if ticker.strip()
-    }
-    return [ticker for ticker in SOURCES if ticker in configured]
-
-
-def _marketaux_limit() -> int:
-    try:
-        configured = int(os.getenv("MARKETAUX_PER_TICKER_LIMIT", "10"))
-    except ValueError:
-        configured = 10
-    return max(1, min(configured, MAX_MARKETAUX_ITEMS_PER_TICKER))
-
-
 def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
     """Collect a bounded Marketaux batch for the first scheduled tickers."""
     result = {
@@ -57,7 +36,7 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
         "marketaux_analysis_queued": 0,
         "marketaux_errors": 0,
     }
-    if os.getenv("MARKETAUX_ENABLED", "false").lower() != "true":
+    if not settings.MARKETAUX_ENABLED:
         return result
 
     # Imported on use: importing the database layer creates the engine.
@@ -67,7 +46,9 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
         result["marketaux_tickers"] += 1
         try:
             with database_session() as db:
-                collected = marketaux.fetch_and_store_news(ticker, _marketaux_limit(), db)
+                collected = marketaux.fetch_and_store_news(
+                    ticker, settings.MARKETAUX_PER_TICKER_LIMIT, db
+                )
         except Exception as exc:  # noqa: BLE001
             result["marketaux_errors"] += 1
             log_event(
@@ -139,7 +120,7 @@ def _fail_abandoned_work() -> None:
 def handler(event: dict, _context) -> dict:
     """Create one durable run per ticker for a single EventBridge event."""
     started_at = time.monotonic()
-    queue_url = os.environ["DISCOVERY_QUEUE_URL"]
+    queue_url = settings.required("DISCOVERY_QUEUE_URL")
     sqs = boto3.client("sqs")
 
     def send(message: QueueAMessage) -> None:
@@ -156,7 +137,7 @@ def handler(event: dict, _context) -> dict:
 
     _fail_abandoned_work()
     try:
-        tickers = _enabled_tickers()
+        tickers = settings.SCHEDULED_TICKERS
         for ticker in tickers:
             queued += int(
                 _request_run(ticker=ticker, event_key=event_key, send=send)

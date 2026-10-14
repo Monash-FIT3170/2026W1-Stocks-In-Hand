@@ -34,7 +34,7 @@ from app.core.config import (
     reset_settings,
     settings,
 )
-from app.sources import SOURCES
+from app.sources import SOURCES, scheduled_tickers
 
 BACKEND = Path(__file__).resolve().parents[1]
 PARAMETER = "/stocks-in-hand/test/secret"
@@ -95,6 +95,8 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert defaults.CORS_ORIGINS == ["http://localhost:3000"]
     assert (defaults.SESSION_COOKIE_NAME, defaults.SESSION_EXPIRE_DAYS) == ("stonks_session", 7)
     assert (defaults.SESSION_COOKIE_SECURE, defaults.SESSION_COOKIE_SAMESITE) == (False, "lax")
+    assert defaults.SCHEDULED_TICKERS == scheduled_tickers()
+    assert (defaults.MARKETAUX_ENABLED, defaults.MARKETAUX_PER_TICKER_LIMIT) == (False, 10)
 
 
 def test_values_are_read_as_the_backend_always_read_them() -> None:
@@ -118,9 +120,25 @@ def test_values_are_read_as_the_backend_always_read_them() -> None:
 
 
 def test_a_variable_that_is_set_is_read_even_when_empty() -> None:
-    read = Settings.from_environment({"SUPPORTED_TICKERS": "", "FRONTEND_BASE_URL": ""})
+    read = Settings.from_environment({"SUPPORTED_TICKERS": "", "SCHEDULED_TICKERS": ""})
 
-    assert (read.SUPPORTED_TICKERS, read.FRONTEND_BASE_URL) == ([], "")
+    assert (read.SUPPORTED_TICKERS, read.SCHEDULED_TICKERS) == ([], [])
+
+
+def test_the_schedule_keeps_only_catalogue_tickers_in_catalogue_order() -> None:
+    read = Settings.from_environment({"SCHEDULED_TICKERS": "wes, XYZ,anz,WES"})
+
+    assert read.SCHEDULED_TICKERS == ["ANZ", "WES"]
+
+
+def test_a_required_setting_must_be_set() -> None:
+    assert Settings.from_environment(
+        {"DISCOVERY_QUEUE_URL": "https://sqs.example/queue-a"}
+    ).required("DISCOVERY_QUEUE_URL") == "https://sqs.example/queue-a"
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({"DISCOVERY_QUEUE_URL": ""}).required("DISCOVERY_QUEUE_URL")
+
+    assert rejected.value.problems == ("DISCOVERY_QUEUE_URL must be set",)
 
 
 @pytest.mark.parametrize(
@@ -139,6 +157,9 @@ def test_a_variable_that_is_set_is_read_even_when_empty() -> None:
         ("ALERT_DEFAULT_MIN_CONFIDENCE", "high", "must be a number"),
         ("COGNITO_JWKS_CACHE_SECONDS", "five", "must be a whole number"),
         ("SESSION_EXPIRE_DAYS", "", "must be a whole number"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "0", "must be at least 1"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "26", "must be at most 25"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "abc", "must be a whole number"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:

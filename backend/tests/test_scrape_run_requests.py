@@ -255,9 +255,9 @@ def test_schedule_requests_each_enabled_ticker_once_per_event(
         yield db_session
 
     sqs = MagicMock()
-    monkeypatch.setenv("SCHEDULED_TICKERS", "CSL,ANZ")
-    monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
-    monkeypatch.setenv("MARKETAUX_ENABLED", "false")
+    monkeypatch.setattr(settings, "SCHEDULED_TICKERS", ["ANZ", "CSL"])
+    monkeypatch.setattr(settings, "DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
+    monkeypatch.setattr(settings, "MARKETAUX_ENABLED", False)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(schedule.boto3, "client", lambda _service: sqs)
     event = {"id": f"scheduled-{uuid.uuid4()}"}
