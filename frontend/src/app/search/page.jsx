@@ -35,18 +35,6 @@ function matchesQuery(ticker, query) {
     .some((value) => value.toLowerCase().includes(search))
 }
 
-function normalizeTickers(data) {
-  if (Array.isArray(data)) {
-    return data
-  }
-
-  if (Array.isArray(data?.tickers)) {
-    return data.tickers
-  }
-
-  return []
-}
-
 function SearchContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -67,7 +55,7 @@ function SearchContent() {
 
       try {
         const data = await fetchTickers({ limit: 100 })
-        const nextTickers = normalizeTickers(data)
+        const nextTickers = Array.isArray(data) ? data : []
         if (!cancelled) {
           setTickers(nextTickers)
           if (nextTickers.length === 0) {
@@ -99,7 +87,7 @@ function SearchContent() {
   }, [routeQuery])
 
   const results = useMemo(
-    () => normalizeTickers(tickers).filter((ticker) => matchesQuery(ticker, query)),
+    () => tickers.filter((ticker) => matchesQuery(ticker, query)),
     [tickers, query]
   )
   const isPreview = tickers.some((ticker) => ticker.is_preview)
