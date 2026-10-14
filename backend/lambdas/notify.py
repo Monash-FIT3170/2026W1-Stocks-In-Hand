@@ -1,9 +1,12 @@
-"""SQS consumer for database-backed Brevo watchlist alerts.
+"""SQS consumer that delivers database-backed Brevo watchlist alerts.
 
-Durable ledger outcomes deduplicate normal SQS replays. The external boundary
-is still at least once: Brevo can accept a message immediately before the
-Lambda loses its response or its outcome transaction. A stale takeover may
-then send that message again.
+Each record names one analysed artifact. ``app.services.alert_delivery``
+decides what every investor watching its ticker gets, sends it and records
+it in the delivery ledger, so a replayed record sends nothing twice. This
+handler parses the records, asks for the paced email sender once per
+invocation, and returns the records that need another delivery as SQS partial
+batch failures. The email boundary is still at least once; that module says
+when an email can go out twice.
 """
 
 from __future__ import annotations
@@ -11,15 +14,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
-from typing import Any, NoReturn, cast
-from urllib.parse import quote, urlencode
-from uuid import UUID
+from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import select
 
 from lambdas.common import (
     correlation_id,
@@ -33,30 +30,14 @@ from lambdas.common import (
 # encrypted runtime values first, matching the API Lambda cold-start order.
 load_runtime_configuration()
 
-# pylint: disable=wrong-import-position,too-many-lines
+# pylint: disable=wrong-import-position
 from app.core.config import settings  # noqa: E402
-from app.crud import alert_delivery as alert_delivery_crud  # noqa: E402
-from app.crud import alert_rule as alert_rule_crud  # noqa: E402
-from app.crud import alert_subscription as alert_subscription_crud  # noqa: E402
-from app.crud import watchlist_ticker as watchlist_ticker_crud  # noqa: E402
 from app.messages import NotificationMessage  # noqa: E402
-from app.models.artifact import Artifact  # noqa: E402
-from app.models.artifact_sentiment import ArtifactSentiment  # noqa: E402
-from app.models.ticker import Ticker  # noqa: E402
+from app.services import alert_delivery  # noqa: E402
 from app.services import email_sender  # noqa: E402
-from app.services.alert_templates import (  # noqa: E402
-    render_alert_email,
-    render_rollup_email,
-)
-from app.services.artifact_summary import alert_text  # noqa: E402
-from app.services.unsubscribe_tokens import (  # noqa: E402
-    create_signed_unsubscribe_token,
-)
-from app.status import AnalysisStatus  # noqa: E402
 
 
 STAGE = "notify"
-_CONFIDENCE_TOLERANCE = Decimal("0.0001")
 
 
 class PermanentNotificationError(ValueError):
@@ -75,55 +56,6 @@ class RetryableNotificationError(RuntimeError):
         self.code = code
 
 
-@dataclass(frozen=True)
-class NotificationContext:  # pylint: disable=too-many-instance-attributes
-    """Canonical database values used to match and render an alert."""
-
-    message: NotificationMessage
-    ticker_id: UUID
-    ticker_symbol: str
-    company_name: str
-    artifact_title: str | None
-    summary_text: str | None
-    sentiment_label: str
-    confidence_score: Decimal
-
-
-@dataclass(frozen=True)
-class RulePreferences:
-    """Detached rule values needed during one delivery attempt."""
-
-    id: UUID
-    enabled: bool
-    rule_type: str
-    sentiment_labels: tuple[str, ...]
-    min_confidence: Decimal
-
-
-@dataclass(frozen=True)
-class WatcherPreferences:  # pylint: disable=too-many-instance-attributes
-    """Detached subscription and rule values for one investor."""
-
-    investor_id: UUID
-    subscription_id: UUID
-    email: str
-    enabled: bool
-    verification_status: str
-    verification_requested_at: datetime | None
-    unsubscribe_token_hash: str | None
-    rule: RulePreferences | None
-
-
-@dataclass(frozen=True)
-class DeliveryLease:
-    """The values required to apply a guarded delivery transition."""
-
-    id: UUID
-    investor_id: UUID
-    claimed_at: datetime
-    rollup: bool
-
-
 def parse_notification_record(record: dict[str, Any]) -> NotificationMessage:
     """Parse one SQS body without logging its potentially private content."""
     try:
@@ -138,636 +70,27 @@ def parse_notification_record(record: dict[str, Any]) -> NotificationMessage:
         ) from exc
 
 
-def _decimal(value: object, *, field: str) -> Decimal:
-    """Return one finite canonical decimal value."""
-    try:
-        result = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise RetryableNotificationError(
-            f"Canonical {field} is not numeric",
-            code="canonical_analysis_invalid",
-        ) from exc
-    if not result.is_finite():
-        raise RetryableNotificationError(
-            f"Canonical {field} is not finite",
-            code="canonical_analysis_invalid",
-        )
-    return result
-
-
-def _load_context(message: NotificationMessage) -> NotificationContext:
-    """Load canonical content and reject message identity mismatches."""
-    with database_session() as db:
-        row = db.execute(
-            select(
-                Artifact.scrape_run_id.label("scrape_run_id"),
-                Artifact.analysis_status.label("analysis_status"),
-                Artifact.title.label("artifact_title"),
-                Ticker.id.label("ticker_id"),
-                Ticker.symbol.label("ticker_symbol"),
-                Ticker.company_name.label("company_name"),
-                ArtifactSentiment.sentiment_label.label("sentiment_label"),
-                ArtifactSentiment.confidence_score.label("confidence_score"),
-            )
-            .outerjoin(Ticker, Ticker.id == Artifact.ticker_id)
-            .outerjoin(
-                ArtifactSentiment,
-                ArtifactSentiment.artifact_id == Artifact.id,
-            )
-            .where(Artifact.id == message.artifact_id)
-        ).mappings().one_or_none()
-        summary_text = alert_text(db, message.artifact_id)
-
-    if row is None:
-        raise RetryableNotificationError(
-            "Artifact is not visible yet",
-            code="artifact_not_visible",
-        )
-    if row["analysis_status"] != AnalysisStatus.COMPLETED:
-        raise RetryableNotificationError(
-            "Artifact analysis is not complete yet",
-            code="analysis_not_complete",
-        )
-    if (
-        row["ticker_id"] is None
-        or row["ticker_symbol"] is None
-        or row["company_name"] is None
-        or row["sentiment_label"] is None
-        or row["confidence_score"] is None
-    ):
-        raise RetryableNotificationError(
-            "Canonical alert data is not visible yet",
-            code="canonical_analysis_not_visible",
-        )
-
-    canonical_symbol = str(row["ticker_symbol"]).strip().upper()
-    canonical_label = str(row["sentiment_label"]).strip().lower()
-    canonical_confidence = _decimal(
-        row["confidence_score"],
-        field="confidence_score",
-    )
-    if not Decimal("0") <= canonical_confidence <= Decimal("1"):
-        raise RetryableNotificationError(
-            "Canonical confidence is outside the supported range",
-            code="canonical_analysis_invalid",
-        )
-    identity_mismatch = (
-        row["scrape_run_id"] != message.scrape_run_id
-        or canonical_symbol != message.ticker
-        or canonical_label != message.sentiment_label
-        or abs(canonical_confidence - message.confidence_score)
-        > _CONFIDENCE_TOLERANCE
-    )
-    if identity_mismatch:
-        raise PermanentNotificationError(
-            "Notification identity does not match the canonical artifact",
-            code="notification_identity_mismatch",
-        )
-
-    return NotificationContext(
-        message=message,
-        ticker_id=row["ticker_id"],
-        ticker_symbol=canonical_symbol,
-        company_name=str(row["company_name"]),
-        artifact_title=row["artifact_title"],
-        summary_text=summary_text,
-        sentiment_label=canonical_label,
-        confidence_score=canonical_confidence,
-    )
-
-
-def _load_preferences(investor_id: UUID) -> WatcherPreferences | None:
-    """Copy one investor's current preferences out of a short DB session."""
-    with database_session() as db:
-        subscription = alert_subscription_crud.get_subscription_by_investor(
-            db,
-            investor_id,
-        )
-        if subscription is None:
-            return None
-        rule = alert_rule_crud.get_default_alert_rule(db, investor_id)
-        rule_snapshot = None
-        if rule is not None:
-            rule_snapshot = RulePreferences(
-                id=cast(UUID, rule.id),
-                enabled=bool(rule.enabled),
-                rule_type=str(rule.rule_type),
-                sentiment_labels=tuple(
-                    str(item)
-                    for item in cast(list[str], rule.sentiment_labels)
-                ),
-                min_confidence=_decimal(
-                    rule.min_confidence,
-                    field="minimum confidence",
-                ),
-            )
-        return WatcherPreferences(
-            investor_id=investor_id,
-            subscription_id=cast(UUID, subscription.id),
-            email=str(subscription.email),
-            enabled=bool(subscription.enabled),
-            verification_status=str(subscription.verification_status),
-            verification_requested_at=cast(
-                datetime | None,
-                subscription.verification_requested_at,
-            ),
-            unsubscribe_token_hash=cast(
-                str | None,
-                subscription.unsubscribe_token_hash,
-            ),
-            rule=rule_snapshot,
-        )
-
-
-def _rule_matches(rule: object, label: str, confidence: Decimal) -> bool:
-    """Apply the enabled label and inclusive confidence threshold gates."""
-    if not bool(getattr(rule, "enabled", False)):
-        return False
-    if getattr(rule, "rule_type", "sentiment_threshold") != "sentiment_threshold":
-        return False
-    labels = {
-        str(item).strip().lower()
-        for item in (getattr(rule, "sentiment_labels", ()) or ())
-    }
-    try:
-        threshold = Decimal(str(getattr(rule, "min_confidence")))
-    except (InvalidOperation, TypeError, ValueError):
-        return False
-    return label.lower() in labels and confidence >= threshold
-
-
-def _preferences_match(
-    preferences: WatcherPreferences | None,
-    context: NotificationContext,
-) -> bool:
-    return bool(
-        preferences is not None
-        and preferences.enabled
-        and preferences.rule is not None
-        and _rule_matches(
-            preferences.rule,
-            context.sentiment_label,
-            context.confidence_score,
-        )
-    )
-
-
-def _lease(delivery: Any, *, rollup: bool) -> DeliveryLease:
-    """Detach the exact lease values needed after the claim commit."""
-    if delivery.claimed_at is None:
-        raise RetryableNotificationError(
-            "Claim did not return its lease timestamp",
-            code="claim_state_invalid",
-        )
-    return DeliveryLease(
-        id=delivery.id,
-        investor_id=delivery.investor_id,
-        claimed_at=delivery.claimed_at,
-        rollup=rollup,
-    )
-
-
-def _claim_direct(
-    context: NotificationContext,
-    preferences: WatcherPreferences,
-) -> tuple[DeliveryLease | None, str | None]:
-    """Commit a direct claim, or return the existing terminal state."""
-    with database_session() as db:
-        delivery = alert_delivery_crud.claim(
-            db,
-            preferences.investor_id,
-            context.message.artifact_id,
-            context.message.scrape_run_id,
-            preferences.rule.id if preferences.rule else None,
-            stale_after_minutes=settings.ALERT_CLAIM_STALE_MINUTES,
-        )
-        if delivery is not None:
-            return _lease(delivery, rollup=False), None
-        existing = alert_delivery_crud.get_for_artifact(
-            db,
-            preferences.investor_id,
-            context.message.artifact_id,
-        )
-        return None, str(existing.status) if existing is not None else None
-
-
-def _claim_rollup(
-    context: NotificationContext,
-    preferences: WatcherPreferences,
-) -> tuple[DeliveryLease | None, str | None]:
-    """Commit the one allowed rollup claim for this investor and run."""
-    with database_session() as db:
-        delivery = alert_delivery_crud.claim_rollup(
-            db,
-            preferences.investor_id,
-            context.message.scrape_run_id,
-            preferences.rule.id if preferences.rule else None,
-            stale_after_minutes=settings.ALERT_CLAIM_STALE_MINUTES,
-        )
-        if delivery is not None:
-            return _lease(delivery, rollup=True), None
-        existing = alert_delivery_crud.get_rollup(
-            db,
-            preferences.investor_id,
-            context.message.scrape_run_id,
-        )
-        return None, str(existing.status) if existing is not None else None
-
-
-def _transition_delivery(  # pylint: disable=too-many-arguments,too-many-branches
-    lease: DeliveryLease,
-    outcome: str,
-    *,
-    provider_message_id: str | None = None,
-    error_code: str | None = None,
-    error_detail: str | None = None,
-) -> str:
-    """Commit a ledger transition and D17 subscription mirror atomically."""
-    delivery_at = datetime.now(timezone.utc)
-    with database_session() as db:
-        if outcome == "sent":
-            changed = alert_delivery_crud.mark_sent(
-                db,
-                lease.id,
-                lease.claimed_at,
-                provider_message_id or "",
-                commit=False,
-            )
-        elif outcome == "rejected":
-            changed = alert_delivery_crud.mark_rejected(
-                db,
-                lease.id,
-                lease.claimed_at,
-                error_code or "rejected",
-                error_detail,
-                commit=False,
-            )
-        elif outcome == "failed":
-            changed = alert_delivery_crud.mark_failed(
-                db,
-                lease.id,
-                lease.claimed_at,
-                error_code or "retryable_failure",
-                error_detail,
-                commit=False,
-            )
-        elif outcome == "suppressed_cap":
-            changed = alert_delivery_crud.mark_suppressed_cap(
-                db,
-                lease.id,
-                lease.claimed_at,
-                error_detail,
-                commit=False,
-            )
-        elif outcome == "suppressed_budget":
-            changed = alert_delivery_crud.mark_suppressed_budget(
-                db,
-                lease.id,
-                lease.claimed_at,
-                error_detail,
-                commit=False,
-            )
-        else:
-            raise ValueError(f"Unknown delivery outcome: {outcome}")
-
-        if changed is None:
-            raise RetryableNotificationError(
-                "Delivery claim was replaced before its outcome commit",
-                code="delivery_lease_lost",
-            )
-        subscription = alert_subscription_crud.record_delivery_outcome(
-            db,
-            investor_id=lease.investor_id,
-            delivery_status=str(changed.status),
-            delivery_at=delivery_at,
-            error_code=error_code,
-            commit=False,
-        )
-        if subscription is None:
-            raise RetryableNotificationError(
-                "Subscription disappeared before its outcome commit",
-                code="subscription_state_changed",
-            )
-        db.commit()
-        return str(changed.status)
-
-
-def _fail_and_retry(lease: DeliveryLease, *, code: str) -> NoReturn:
-    """Persist a sanitized retryable outcome, then fail the SQS record."""
-    _transition_delivery(
-        lease,
-        "failed",
-        error_code=code,
-        error_detail="A temporary notification dependency failed",
-    )
-    raise RetryableNotificationError(
-        "Notification dependency failed",
-        code=code,
-    )
-
-
-def _check_recipient_confirmation(
-    lease: DeliveryLease,
-    preferences: WatcherPreferences,
-) -> bool:
-    """Require the application-owned recipient confirmation before sending."""
-    if preferences.verification_status == "verified":
-        return True
-    _transition_delivery(
-        lease,
-        "rejected",
-        error_code="recipient_not_verified",
-        error_detail="The subscription email has not been confirmed",
-    )
-    return False
-
-
-def _notification_urls(
-    context: NotificationContext,
-    preferences: WatcherPreferences,
-) -> tuple[str, str]:
-    """Build app and signed unsubscribe URLs without exposing stored hashes."""
-    if not preferences.unsubscribe_token_hash:
-        raise RetryableNotificationError(
-            "Enabled subscription lacks an unsubscribe signing key",
-            code="unsubscribe_key_missing",
-        )
-    token = create_signed_unsubscribe_token(
-        preferences.subscription_id,
-        preferences.unsubscribe_token_hash,
-    )
-    base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
-    encoded_ticker = quote(context.ticker_symbol, safe="")
-    news_url = f"{base_url}/ticker/{encoded_ticker}/news/"
-    query = urlencode({"t": token})
-    unsubscribe_url = f"{base_url}/unsubscribe/?{query}"
-    return news_url, unsubscribe_url
-
-
-def _send_rendered(
-    lease: DeliveryLease,
-    preferences: WatcherPreferences,
-    rendered: tuple[str, str, str],
-    unsubscribe_url: str,
-) -> None:
-    """Send one rendered message and record the email sender's outcome.
-
-    A refused recipient is final. Any other unsent outcome releases the claim
-    as failed and retries the record.
-    """
-    subject, html, text = rendered
-    outcome = email_sender.configured_sender(paced=True).send(
-        email_sender.OutgoingEmail(
-            to=preferences.email,
-            subject=subject,
-            html=html,
-            text=text,
-            unsubscribe_url=unsubscribe_url,
-        )
-    )
-    if isinstance(outcome, email_sender.Accepted):
-        _transition_delivery(lease, "sent", provider_message_id=outcome.message_id)
-    elif isinstance(outcome, email_sender.RecipientRejected):
-        _transition_delivery(
-            lease,
-            "rejected",
-            error_code=outcome.code,
-            error_detail=outcome.detail,
-        )
-    else:
-        _fail_and_retry(lease, code=outcome.code)
-
-
-def _preferences_still_current(
-    expected: WatcherPreferences,
-    context: NotificationContext,
-) -> bool:
-    """Recheck consent and matching rule just before the send boundary."""
-    current = _load_preferences(expected.investor_id)
-    return current == expected and _preferences_match(current, context)
-
-
-def _at_daily_budget() -> bool:
-    with database_session() as db:
-        return (
-            alert_delivery_crud.count_budget_commitments_last_24h(db)
-            > settings.ALERT_DAILY_BUDGET
-        )
-
-
-def _over_run_cap(context: NotificationContext, investor_id: UUID) -> bool:
-    with database_session() as db:
-        return (
-            alert_delivery_crud.count_for_run(
-                db,
-                investor_id,
-                context.message.scrape_run_id,
-            )
-            > settings.ALERT_MAX_PER_INVESTOR_PER_RUN
-        )
-
-
-def _suppressed_count(context: NotificationContext, investor_id: UUID) -> int:
-    with database_session() as db:
-        return alert_delivery_crud.count_suppressed_for_run(
-            db,
-            investor_id,
-            context.message.scrape_run_id,
-        )
-
-
-def _ensure_rollup(  # pylint: disable=too-many-return-statements
-    context: NotificationContext,
-    preferences: WatcherPreferences,
-    *,
-    confirmation_checked: bool,
-) -> None:
-    """Claim or recover the one rollup allowed for this scrape run."""
-    lease, existing_status = _claim_rollup(context, preferences)
-    if lease is None:
-        if existing_status in {
-            "claimed",
-            "rollup_sent",
-            "rejected",
-            "suppressed_budget",
-        }:
-            return
-        raise RetryableNotificationError(
-            "Rollup claim could not be acquired",
-            code="rollup_claim_unavailable",
-        )
-
-    if not confirmation_checked and not _check_recipient_confirmation(
-        lease,
-        preferences,
-    ):
-        return
-    if _at_daily_budget():
-        _transition_delivery(
-            lease,
-            "suppressed_budget",
-            error_code="daily_budget",
-            error_detail="Account daily alert budget reached",
-        )
-        log_event(
-            stage=STAGE,
-            event="suppressed",
-            level=logging.WARNING,
-            investor_id=preferences.investor_id,
-            scrape_run_id=context.message.scrape_run_id,
-            reason="daily_budget",
-            rollup=True,
-        )
-        return
-    if not _preferences_still_current(preferences, context):
-        _transition_delivery(
-            lease,
-            "rejected",
-            error_code="preferences_changed",
-            error_detail="Alert preferences changed before send",
-        )
-        return
-
-    count = _suppressed_count(context, preferences.investor_id)
-    if count < 1:
-        _fail_and_retry(lease, code="rollup_count_not_visible")
-    try:
-        news_url, unsubscribe_url = _notification_urls(context, preferences)
-        rendered = render_rollup_email(
-            ticker_symbol=context.ticker_symbol,
-            company_name=context.company_name,
-            suppressed_count=count,
-            news_url=news_url,
-            unsubscribe_url=unsubscribe_url,
-        )
-    except RetryableNotificationError:
-        _fail_and_retry(lease, code="unsubscribe_key_missing")
-    except (TypeError, ValueError):
-        _fail_and_retry(lease, code="invalid_notification_configuration")
-    _send_rendered(lease, preferences, rendered, unsubscribe_url)
-
-
-def _process_watcher(  # pylint: disable=too-many-return-statements
-    context: NotificationContext,
-    investor_id: UUID,
-) -> None:
-    """Process one investor and artifact under the delivery ledger."""
-    preferences = _load_preferences(investor_id)
-    if not _preferences_match(preferences, context):
-        return
-    if preferences is None:
-        return
-
-    lease, existing_status = _claim_direct(context, preferences)
-    if lease is None:
-        if existing_status == "suppressed_cap":
-            _ensure_rollup(
-                context,
-                preferences,
-                confirmation_checked=False,
-            )
-            return
-        if existing_status in {
-            "claimed",
-            "sent",
-            "rejected",
-            "suppressed_budget",
-        }:
-            return
-        raise RetryableNotificationError(
-            "Direct delivery claim could not be acquired",
-            code="delivery_claim_unavailable",
-        )
-
-    if not _check_recipient_confirmation(lease, preferences):
-        return
-    if _over_run_cap(context, investor_id):
-        _transition_delivery(
-            lease,
-            "suppressed_cap",
-            error_code="per_run_cap",
-            error_detail="Investor per-run alert limit reached",
-        )
-        _ensure_rollup(
-            context,
-            preferences,
-            confirmation_checked=True,
-        )
-        return
-    if _at_daily_budget():
-        _transition_delivery(
-            lease,
-            "suppressed_budget",
-            error_code="daily_budget",
-            error_detail="Account daily alert budget reached",
-        )
-        log_event(
-            stage=STAGE,
-            event="suppressed",
-            level=logging.WARNING,
-            investor_id=investor_id,
-            artifact_id=context.message.artifact_id,
-            reason="daily_budget",
-            rollup=False,
-        )
-        return
-    if not _preferences_still_current(preferences, context):
-        _transition_delivery(
-            lease,
-            "rejected",
-            error_code="preferences_changed",
-            error_detail="Alert preferences changed before send",
-        )
-        return
-
-    try:
-        news_url, unsubscribe_url = _notification_urls(context, preferences)
-        rendered = render_alert_email(
-            ticker_symbol=context.ticker_symbol,
-            company_name=context.company_name,
-            artifact_title=context.artifact_title,
-            summary_text=context.summary_text,
-            sentiment_label=context.sentiment_label,
-            confidence_score=context.confidence_score,
-            news_url=news_url,
-            unsubscribe_url=unsubscribe_url,
-        )
-    except RetryableNotificationError:
-        _fail_and_retry(lease, code="unsubscribe_key_missing")
-    except (TypeError, ValueError):
-        _fail_and_retry(lease, code="invalid_notification_configuration")
-    _send_rendered(lease, preferences, rendered, unsubscribe_url)
-
-
-def _process_record(record: dict[str, Any]) -> None:
-    """Fan one canonical artifact out to each distinct watching investor."""
+def _process_record(record: dict[str, Any], sender: email_sender.EmailSender) -> None:
+    """Deliver one record's alert to each distinct investor watching its ticker."""
     message = parse_notification_record(record)
-    context = _load_context(message)
-    with database_session() as db:
-        investor_ids = watchlist_ticker_crud.investor_ids_watching(
-            db,
-            context.ticker_id,
-        )
-
-    retry_codes: list[str] = []
-    for investor_id in investor_ids:
-        try:
-            _process_watcher(context, investor_id)
-        except PermanentNotificationError as exc:
+    results = alert_delivery.deliver_alerts(
+        message,
+        sender=sender,
+        open_session=database_session,
+    )
+    for result in results:
+        if result.recorded == "suppressed_budget":
             log_event(
                 stage=STAGE,
-                event="investor_skipped",
+                event="suppressed",
                 level=logging.WARNING,
-                investor_id=investor_id,
+                investor_id=result.investor_id,
                 artifact_id=message.artifact_id,
-                error_code=exc.code,
+                scrape_run_id=message.scrape_run_id,
+                kind=result.kind,
+                reason="daily_budget",
             )
-        except RetryableNotificationError as exc:
-            retry_codes.append(exc.code)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            # Isolate every investor so successful siblings still dedupe.
-            retry_codes.append(type(exc).__name__)
-
+    retry_codes = [result.retry_code for result in results if result.retry_code is not None]
     if retry_codes:
         raise RetryableNotificationError(
             "At least one investor delivery needs a retry",
@@ -791,6 +114,9 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, list[dict[str, st
         )
         return {"batchItemFailures": []}
 
+    # Paced senders share ALERT_PACER, so live alerts from this container go
+    # out at least a second apart, across records and warm invocations.
+    sender = email_sender.configured_sender(paced=True)
     failures: list[dict[str, str]] = []
     for record in records:
         if not isinstance(record, dict):
@@ -805,8 +131,8 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, list[dict[str, st
         message_id = correlation_id(record)
         attempt = receive_attempt(record)
         try:
-            _process_record(record)
-        except PermanentNotificationError as exc:
+            _process_record(record, sender)
+        except (PermanentNotificationError, alert_delivery.AlertMismatch) as exc:
             log_event(
                 stage=STAGE,
                 event="record_discarded",
