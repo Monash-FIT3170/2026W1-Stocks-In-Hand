@@ -20,7 +20,6 @@ from app.models.alert_subscription import AlertSubscription
 
 VERIFICATION_STATUSES: Final[frozenset[str]] = frozenset(VerificationStatus)
 SHA256_HEX: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
-DELIVERY_ERROR_CODE_LIMIT: Final[int] = 128
 _UNSET: Final[object] = object()
 
 
@@ -274,57 +273,6 @@ def update_verification_state(  # pylint: disable=too-many-arguments,too-many-br
     subscription = db.get(AlertSubscription, subscription_id)
     if subscription is None:
         raise RuntimeError("alert subscription disappeared after verification update")
-    db.refresh(subscription)
-    return subscription
-
-
-def record_delivery_outcome(  # pylint: disable=too-many-arguments
-    db: Session,
-    *,
-    investor_id: UUID,
-    delivery_status: str,
-    delivery_at: datetime,
-    error_code: str | None = None,
-    commit: bool = True,
-) -> AlertSubscription | None:
-    """Record an outcome without allowing an older event to replace a newer one."""
-    commit = _validate_commit(commit)
-    delivery_at = _aware_timestamp(delivery_at, field="delivery_at")
-    status = str(delivery_status).strip()
-    if not status:
-        raise ValueError("delivery status must not be empty")
-    if "\r" in status or "\n" in status:
-        raise ValueError("delivery status must not contain line breaks")
-    if error_code is not None and ("\r" in error_code or "\n" in error_code):
-        raise ValueError("error code must not contain line breaks")
-    normalised_error_code = (
-        error_code.strip()[:DELIVERY_ERROR_CODE_LIMIT] or None
-        if error_code is not None
-        else None
-    )
-
-    subscription_id = db.execute(
-        update(AlertSubscription)
-        .where(
-            AlertSubscription.investor_id == investor_id,
-            (AlertSubscription.last_delivery_at.is_(None))
-            | (AlertSubscription.last_delivery_at < delivery_at),
-        )
-        .values(
-            last_delivery_status=status,
-            last_delivery_error_code=normalised_error_code,
-            last_delivery_at=delivery_at,
-            updated_at=func.now(),
-        )
-        .returning(AlertSubscription.id)
-    ).scalar_one_or_none()
-    _finish_write(db, commit=commit)
-    if subscription_id is None:
-        return get_subscription_by_investor(db, investor_id)
-
-    subscription = db.get(AlertSubscription, subscription_id)
-    if subscription is None:
-        raise RuntimeError("alert subscription disappeared after delivery update")
     db.refresh(subscription)
     return subscription
 

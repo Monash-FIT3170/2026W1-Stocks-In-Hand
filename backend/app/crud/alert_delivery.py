@@ -1,406 +1,337 @@
-"""Atomic claim and outcome transitions for alert deliveries."""
+"""The delivery ledger: one row for each alert or rollup an investor may get.
 
-# The public CRUD signatures carry the IDs and lease needed for safe writes.
-# SQLAlchemy's dynamic ``func`` namespace also confuses Pylint's call checker.
-# pylint: disable=too-many-arguments,too-many-positional-arguments,not-callable
+A row is claimed before its email is sent, and then records what became of
+it: sent, rejected, failed or suppressed. A direct alert's row belongs to one
+investor and artifact, and a rollup's row to one investor and scrape run, with
+no artifact. Each claim is committed on its own before anything is sent, so
+an email goes out at most once for each row, and every count here includes
+every claim other workers have committed.
 
-from datetime import datetime, timedelta
+Recording an outcome also mirrors it onto the investor's alert subscription
+(``last_delivery_status``, ``last_delivery_error_code`` and
+``last_delivery_at``) in the same transaction, unless the subscription already
+shows a newer outcome.
+"""
+
+# SQLAlchemy's dynamic ``func`` namespace confuses Pylint's call checker.
+# pylint: disable=not-callable
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
-from sqlalchemy.sql import Executable
 
+from app.alert_vocabulary import DeliveryKind, DeliveryStatus
 from app.models.alert_delivery import AlertDelivery
+from app.models.alert_subscription import AlertSubscription
 from app.models.artifact import Artifact
 
 
-_ERROR_CODE_LIMIT = 128
-_ERROR_DETAIL_LIMIT = 2_000
+_CODE_LIMIT = 128
+_DETAIL_LIMIT = 2_000
+_MESSAGE_ID_LIMIT = 512
+_SENT = (DeliveryStatus.SENT, DeliveryStatus.ROLLUP_SENT)
+
+
+@dataclass(frozen=True)
+class Lease:
+    """A claim an attempt holds on one ledger row, needed to record its outcome."""
+
+    delivery_id: UUID
+    investor_id: UUID
+    scrape_run_id: UUID
+    artifact_id: UUID | None
+    claimed_at: datetime
+
+    @property
+    def kind(self) -> DeliveryKind:
+        """A rollup's row is the one with no artifact."""
+        return DeliveryKind.ROLLUP if self.artifact_id is None else DeliveryKind.DIRECT
+
+
+@dataclass(frozen=True)
+class Held:
+    """A claim another row holder kept: that row's status, or None if it is gone."""
+
+    status: DeliveryStatus | None
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """What became of a leased delivery, as the ledger records it."""
+
+    status: DeliveryStatus
+    code: str | None = None
+    detail: str | None = None
+    provider_message_id: str | None = None
+
+    @classmethod
+    def sent(cls, provider_message_id: str) -> Outcome:
+        """The provider took the email. Its message id must not be empty."""
+        message_id = provider_message_id.strip()
+        if not message_id:
+            raise ValueError("provider_message_id must not be empty")
+        return cls(
+            DeliveryStatus.SENT,
+            provider_message_id=message_id[:_MESSAGE_ID_LIMIT],
+        )
+
+    @classmethod
+    def rejected(cls, code: str, detail: str) -> Outcome:
+        """The email will never be sent."""
+        return cls(DeliveryStatus.REJECTED, code, detail)
+
+    @classmethod
+    def failed(
+        cls,
+        code: str,
+        detail: str = "A temporary notification dependency failed",
+    ) -> Outcome:
+        """The email was not sent this time, and a later claim may try again."""
+        return cls(DeliveryStatus.FAILED, code, detail)
+
+    @classmethod
+    def suppressed_by_cap(cls, detail: str) -> Outcome:
+        """The investor reached the per-run cap, so the run's rollup stands in."""
+        return cls(DeliveryStatus.SUPPRESSED_CAP, "per_run_cap", detail)
+
+    @classmethod
+    def suppressed_by_budget(cls, detail: str) -> Outcome:
+        """The account reached its daily budget, so the alert is dropped for good."""
+        return cls(DeliveryStatus.SUPPRESSED_BUDGET, "daily_budget", detail)
+
+
+class LeaseLost(RuntimeError):
+    """The row is no longer claimed under this lease, so nothing was recorded."""
+
+    code = "delivery_lease_lost"
+
+
+class SubscriptionGone(RuntimeError):
+    """The investor has no subscription to mirror onto, so nothing was recorded."""
+
+    code = "subscription_state_changed"
 
 
 def _trim(value: str | None, limit: int) -> str | None:
     """Strip an optional error value and keep its stored size bounded."""
     if value is None:
         return None
-    value = value.strip()
-    return value[:limit] or None
+    return value.strip()[:limit] or None
 
 
-def _validate_stale_after(stale_after_minutes: int) -> timedelta:
-    """Return a stale-claim interval after validating the lease duration."""
-    if isinstance(stale_after_minutes, bool) or stale_after_minutes <= 0:
-        raise ValueError("stale_after_minutes must be positive")
-    return timedelta(minutes=stale_after_minutes)
+def claim(  # pylint: disable=too-many-arguments
+    db: Session,
+    kind: DeliveryKind,
+    *,
+    investor_id: UUID,
+    scrape_run_id: UUID,
+    artifact_id: UUID | None = None,
+    rule_id: UUID | None = None,
+    stale_after: timedelta = timedelta(minutes=15),
+) -> Lease | Held:
+    """Claim a delivery and commit, or say which status holds its row.
 
-
-def _validate_claim_ids(
-    artifact_id: UUID | None,
-    scrape_run_id: UUID | None,
-) -> None:
-    """Reject incomplete direct claims before they reach PostgreSQL."""
-    if artifact_id is None:
-        raise ValueError("artifact_id is required for a direct alert claim")
+    A new row is claimed, and so is a failed one, or a claim older than
+    ``stale_after`` whose worker is taken to have stopped. A direct alert
+    names its artifact, which must belong to ``scrape_run_id``. A rollup has
+    no artifact.
+    """
+    if stale_after <= timedelta(0):
+        raise ValueError("stale_after must be positive")
     if scrape_run_id is None:
         raise ValueError("scrape_run_id is required for an alert claim")
+    if kind is DeliveryKind.DIRECT and artifact_id is None:
+        raise ValueError("artifact_id is required for a direct alert claim")
+    if kind is DeliveryKind.ROLLUP and artifact_id is not None:
+        raise ValueError("a rollup claim has no artifact_id")
 
-
-def _returning_delivery(
-    db: Session,
-    statement: Executable,
-    *,
-    commit: bool,
-) -> AlertDelivery | None:
-    """Execute a returning statement under the requested transaction boundary."""
-    delivery = db.execute(
-        statement.execution_options(populate_existing=True)
-    ).scalar_one_or_none()
-    if commit:
-        if delivery is not None:
-            # Keep all returned column values usable without starting a new
-            # transaction after the mandatory pre-send claim commit.
-            db.expunge(delivery)
-        db.commit()
-    return delivery
-
-
-def get_delivery(db: Session, delivery_id: UUID) -> AlertDelivery | None:
-    """Return one delivery by primary key."""
-    return db.get(AlertDelivery, delivery_id)
-
-
-def get_for_artifact(
-    db: Session,
-    investor_id: UUID,
-    artifact_id: UUID,
-) -> AlertDelivery | None:
-    """Return the direct delivery ledger row for one investor and artifact."""
-    return (
-        db.query(AlertDelivery)
-        .filter(
-            AlertDelivery.investor_id == investor_id,
-            AlertDelivery.artifact_id == artifact_id,
-        )
-        .first()
-    )
-
-
-def get_rollup(
-    db: Session,
-    investor_id: UUID,
-    scrape_run_id: UUID,
-) -> AlertDelivery | None:
-    """Return the rollup ledger row for one investor and scrape run."""
-    return (
-        db.query(AlertDelivery)
-        .filter(
-            AlertDelivery.investor_id == investor_id,
-            AlertDelivery.scrape_run_id == scrape_run_id,
-            AlertDelivery.artifact_id.is_(None),
-        )
-        .first()
-    )
-
-
-def claim(
-    db: Session,
-    investor_id: UUID,
-    artifact_id: UUID,
-    scrape_run_id: UUID,
-    rule_id: UUID | None = None,
-    stale_after_minutes: int = 15,
-) -> AlertDelivery | None:
-    """Claim a direct alert after verifying its scrape-run provenance."""
-    _validate_claim_ids(artifact_id, scrape_run_id)
-    stale_after = _validate_stale_after(stale_after_minutes)
-    artifact_scrape_run_id = db.scalar(
-        select(Artifact.scrape_run_id)
-        .where(Artifact.id == artifact_id)
-        .with_for_update(read=True)
-    )
-    if artifact_scrape_run_id is None:
-        raise ValueError("artifact must belong to a scrape run")
-    if artifact_scrape_run_id != scrape_run_id:
-        raise ValueError("scrape_run_id must match the artifact's scrape run")
     claimed_at = func.now()
-    statement = (
-        insert(AlertDelivery)
-        .values(
-            investor_id=investor_id,
-            artifact_id=artifact_id,
-            scrape_run_id=scrape_run_id,
-            rule_id=rule_id,
-            status="claimed",
-            claimed_at=claimed_at,
-        )
-        .on_conflict_do_update(
-            index_elements=[
-                AlertDelivery.investor_id,
-                AlertDelivery.artifact_id,
-            ],
-            set_={
-                "rule_id": rule_id,
-                "status": "claimed",
-                "claimed_at": claimed_at,
-                "provider_message_id": None,
-                "error_code": None,
-                "error_detail": None,
-                "sent_at": None,
-            },
-            where=or_(
-                AlertDelivery.status == "failed",
-                (
-                    (AlertDelivery.status == "claimed")
-                    & (AlertDelivery.claimed_at < claimed_at - stale_after)
-                ),
-            ),
-        )
-        .returning(AlertDelivery)
+    statement = insert(AlertDelivery).values(
+        investor_id=investor_id,
+        artifact_id=artifact_id,
+        scrape_run_id=scrape_run_id,
+        rule_id=rule_id,
+        status=DeliveryStatus.CLAIMED,
+        claimed_at=claimed_at,
     )
-    return _returning_delivery(db, statement, commit=True)
-
-
-def claim_rollup(
-    db: Session,
-    investor_id: UUID,
-    scrape_run_id: UUID,
-    rule_id: UUID | None = None,
-    stale_after_minutes: int = 15,
-) -> AlertDelivery | None:
-    """Atomically claim one rollup using its partial unique index."""
-    if scrape_run_id is None:
-        raise ValueError("scrape_run_id is required for a rollup claim")
-    stale_after = _validate_stale_after(stale_after_minutes)
-    claimed_at = func.now()
-    statement = (
-        insert(AlertDelivery)
-        .values(
-            investor_id=investor_id,
-            artifact_id=None,
-            scrape_run_id=scrape_run_id,
-            rule_id=rule_id,
-            status="claimed",
-            claimed_at=claimed_at,
+    takeover = {
+        "rule_id": rule_id,
+        "status": DeliveryStatus.CLAIMED,
+        "claimed_at": claimed_at,
+        "provider_message_id": None,
+        "error_code": None,
+        "error_detail": None,
+        "sent_at": None,
+    }
+    reclaimable = or_(
+        AlertDelivery.status == DeliveryStatus.FAILED,
+        (AlertDelivery.status == DeliveryStatus.CLAIMED)
+        & (AlertDelivery.claimed_at < claimed_at - stale_after),
+    )
+    if kind is DeliveryKind.DIRECT:
+        artifact_scrape_run_id = db.scalar(
+            select(Artifact.scrape_run_id)
+            .where(Artifact.id == artifact_id)
+            .with_for_update(read=True)
         )
-        .on_conflict_do_update(
-            index_elements=[
-                AlertDelivery.investor_id,
-                AlertDelivery.scrape_run_id,
-            ],
+        if artifact_scrape_run_id is None:
+            raise ValueError("artifact must belong to a scrape run")
+        if artifact_scrape_run_id != scrape_run_id:
+            raise ValueError("scrape_run_id must match the artifact's scrape run")
+        statement = statement.on_conflict_do_update(
+            index_elements=[AlertDelivery.investor_id, AlertDelivery.artifact_id],
+            set_=takeover,
+            where=reclaimable,
+        )
+        same_row = AlertDelivery.artifact_id == artifact_id
+    else:
+        statement = statement.on_conflict_do_update(
+            index_elements=[AlertDelivery.investor_id, AlertDelivery.scrape_run_id],
             index_where=AlertDelivery.artifact_id.is_(None),
-            set_={
-                "rule_id": rule_id,
-                "status": "claimed",
-                "claimed_at": claimed_at,
-                "provider_message_id": None,
-                "error_code": None,
-                "error_detail": None,
-                "sent_at": None,
-            },
-            where=or_(
-                AlertDelivery.status == "failed",
-                (
-                    (AlertDelivery.status == "claimed")
-                    & (AlertDelivery.claimed_at < claimed_at - stale_after)
-                ),
-            ),
+            set_=takeover,
+            where=reclaimable,
         )
-        .returning(AlertDelivery)
-    )
-    return _returning_delivery(db, statement, commit=True)
-
-
-def _transition(
-    db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    *,
-    status: str | object,
-    provider_message_id: str | None = None,
-    error_code: str | None = None,
-    error_detail: str | None = None,
-    sent_at: object | None = None,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Apply an outcome only when the caller still owns the claim lease."""
-    if not isinstance(commit, bool):
-        raise ValueError("commit must be a boolean")
-    statement = (
-        update(AlertDelivery)
-        .where(
-            AlertDelivery.id == delivery_id,
-            AlertDelivery.status == "claimed",
-            AlertDelivery.claimed_at == expected_claimed_at,
+        same_row = (AlertDelivery.scrape_run_id == scrape_run_id) & (
+            AlertDelivery.artifact_id.is_(None)
         )
-        .values(
-            status=status,
-            provider_message_id=provider_message_id,
-            error_code=_trim(error_code, _ERROR_CODE_LIMIT),
-            error_detail=_trim(error_detail, _ERROR_DETAIL_LIMIT),
-            sent_at=sent_at,
+
+    claimed = db.execute(
+        statement.returning(AlertDelivery.id, AlertDelivery.claimed_at)
+    ).one_or_none()
+    db.commit()
+    if claimed is not None:
+        return Lease(
+            delivery_id=claimed.id,
+            investor_id=investor_id,
+            scrape_run_id=scrape_run_id,
+            artifact_id=artifact_id,
+            claimed_at=claimed.claimed_at,
         )
-        .returning(AlertDelivery)
+    status = db.scalar(
+        select(AlertDelivery.status).where(
+            AlertDelivery.investor_id == investor_id,
+            same_row,
+        )
     )
-    return _returning_delivery(db, statement, commit=commit)
+    return Held(None if status is None else DeliveryStatus(status))
 
 
-def mark_sent(
+def record(
     db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    provider_message_id: str,
+    lease: Lease,
+    outcome: Outcome,
     *,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Mark a leased direct or rollup delivery as sent."""
-    message_id = provider_message_id.strip()
-    if not message_id:
-        raise ValueError("provider_message_id must not be empty")
-    return _transition(
-        db,
-        delivery_id,
-        expected_claimed_at,
-        status=case(
-            (AlertDelivery.artifact_id.is_(None), "rollup_sent"),
-            else_="sent",
-        ),
-        provider_message_id=message_id[:512],
-        sent_at=func.now(),
-        commit=commit,
+    at: datetime | None = None,
+) -> DeliveryStatus:
+    """Record a leased delivery's outcome, mirror it onto the subscription, and commit.
+
+    A rollup's send is stored as ``rollup_sent``. The subscription takes the
+    outcome only when ``at``, now by default, is later than the outcome it
+    shows. Raises ``LeaseLost`` when the row is no longer claimed under this
+    lease, and ``SubscriptionGone`` when the investor has no subscription.
+    Either way nothing is written.
+    """
+    if at is None:
+        at = datetime.now(timezone.utc)
+    elif at.tzinfo is None or at.utcoffset() is None:
+        raise ValueError("at must include a timezone")
+    status = outcome.status
+    if status is DeliveryStatus.SENT and lease.kind is DeliveryKind.ROLLUP:
+        status = DeliveryStatus.ROLLUP_SENT
+    code = _trim(outcome.code, _CODE_LIMIT)
+
+    with db.begin_nested():
+        recorded = db.execute(
+            update(AlertDelivery)
+            .where(
+                AlertDelivery.id == lease.delivery_id,
+                AlertDelivery.status == DeliveryStatus.CLAIMED,
+                AlertDelivery.claimed_at == lease.claimed_at,
+            )
+            .values(
+                status=status,
+                provider_message_id=outcome.provider_message_id,
+                error_code=code,
+                error_detail=_trim(outcome.detail, _DETAIL_LIMIT),
+                sent_at=func.now() if status in _SENT else None,
+            )
+            .returning(AlertDelivery.id)
+        ).scalar_one_or_none()
+        if recorded is None:
+            raise LeaseLost("Delivery claim was replaced before its outcome commit")
+        mirrored = db.execute(
+            update(AlertSubscription)
+            .where(
+                AlertSubscription.investor_id == lease.investor_id,
+                (AlertSubscription.last_delivery_at.is_(None))
+                | (AlertSubscription.last_delivery_at < at),
+            )
+            .values(
+                last_delivery_status=status,
+                last_delivery_error_code=code,
+                last_delivery_at=at,
+                updated_at=func.now(),
+            )
+            .returning(AlertSubscription.id)
+        ).scalar_one_or_none()
+        if mirrored is None and db.scalar(
+            select(AlertSubscription.id).where(
+                AlertSubscription.investor_id == lease.investor_id
+            )
+        ) is None:
+            raise SubscriptionGone("Subscription disappeared before its outcome commit")
+    db.commit()
+    return status
+
+
+def over_run_cap(db: Session, lease: Lease, cap: int) -> bool:
+    """Whether the investor's direct alerts in the lease's run exceed ``cap``.
+
+    It counts the alerts claimed or sent, the lease's own among them, and
+    leaves out rollups.
+    """
+    count = db.scalar(
+        select(func.count(AlertDelivery.id)).where(
+            AlertDelivery.investor_id == lease.investor_id,
+            AlertDelivery.scrape_run_id == lease.scrape_run_id,
+            AlertDelivery.artifact_id.is_not(None),
+            AlertDelivery.status.in_((DeliveryStatus.CLAIMED, DeliveryStatus.SENT)),
+        )
     )
+    return int(count or 0) > cap
 
 
-def mark_rejected(
-    db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    error_code: str,
-    error_detail: str | None = None,
-    *,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Record a terminal rejection while the caller owns the lease."""
-    return _transition(
-        db,
-        delivery_id,
-        expected_claimed_at,
-        status="rejected",
-        error_code=error_code,
-        error_detail=error_detail,
-        commit=commit,
+def over_daily_budget(db: Session, budget: int) -> bool:
+    """Whether the alerts sent and claims held in the last 24 hours exceed ``budget``.
+
+    It counts every investor's alerts and rollups. A caller holding a claim is
+    counted too, so its claim may take the budget's last place.
+    """
+    since = func.now() - timedelta(hours=24)
+    count = db.scalar(
+        select(func.count(AlertDelivery.id)).where(
+            or_(
+                (AlertDelivery.status == DeliveryStatus.CLAIMED)
+                & (AlertDelivery.claimed_at >= since),
+                AlertDelivery.status.in_(_SENT) & (AlertDelivery.sent_at >= since),
+            )
+        )
     )
+    return int(count or 0) > budget
 
 
-def mark_failed(
-    db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    error_code: str,
-    error_detail: str | None = None,
-    *,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Record a retryable failure while the caller owns the lease."""
-    return _transition(
-        db,
-        delivery_id,
-        expected_claimed_at,
-        status="failed",
-        error_code=error_code,
-        error_detail=error_detail,
-        commit=commit,
-    )
-
-
-def mark_suppressed_cap(
-    db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    error_detail: str | None = None,
-    *,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Record suppression by the investor's per-run cap."""
-    return _transition(
-        db,
-        delivery_id,
-        expected_claimed_at,
-        status="suppressed_cap",
-        error_code="per_run_cap",
-        error_detail=error_detail,
-        commit=commit,
-    )
-
-
-def mark_suppressed_budget(
-    db: Session,
-    delivery_id: UUID,
-    expected_claimed_at: datetime,
-    error_detail: str | None = None,
-    *,
-    commit: bool = True,
-) -> AlertDelivery | None:
-    """Record suppression by the account's daily sending budget."""
-    return _transition(
-        db,
-        delivery_id,
-        expected_claimed_at,
-        status="suppressed_budget",
-        error_code="daily_budget",
-        error_detail=error_detail,
-        commit=commit,
-    )
-
-
-def count_for_run(db: Session, investor_id: UUID, scrape_run_id: UUID) -> int:
-    """Count direct active or sent alerts against an investor's run cap."""
+def capped_count(db: Session, lease: Lease) -> int:
+    """How many of the investor's direct alerts in the lease's run the cap suppressed."""
     statement = select(func.count(AlertDelivery.id)).where(
-        AlertDelivery.investor_id == investor_id,
-        AlertDelivery.scrape_run_id == scrape_run_id,
+        AlertDelivery.investor_id == lease.investor_id,
+        AlertDelivery.scrape_run_id == lease.scrape_run_id,
         AlertDelivery.artifact_id.is_not(None),
-        AlertDelivery.status.in_(("claimed", "sent")),
-    )
-    return int(db.scalar(statement) or 0)
-
-
-def count_sent_last_24h(db: Session) -> int:
-    """Count direct and rollup messages sent during the last 24 hours."""
-    statement = select(func.count(AlertDelivery.id)).where(
-        AlertDelivery.status.in_(("sent", "rollup_sent")),
-        AlertDelivery.sent_at >= func.now() - timedelta(hours=24),
-    )
-    return int(db.scalar(statement) or 0)
-
-
-def count_budget_commitments_last_24h(db: Session) -> int:
-    """Count recent sends and active claims reserved against the daily cap."""
-    cutoff = func.now() - timedelta(hours=24)
-    statement = select(func.count(AlertDelivery.id)).where(
-        or_(
-            (
-                (AlertDelivery.status == "claimed")
-                & (AlertDelivery.claimed_at >= cutoff)
-            ),
-            (
-                AlertDelivery.status.in_(("sent", "rollup_sent"))
-                & (AlertDelivery.sent_at >= cutoff)
-            ),
-        )
-    )
-    return int(db.scalar(statement) or 0)
-
-
-def count_suppressed_for_run(
-    db: Session,
-    investor_id: UUID,
-    scrape_run_id: UUID,
-) -> int:
-    """Count direct alerts suppressed by an investor's per-run cap."""
-    statement = select(func.count(AlertDelivery.id)).where(
-        AlertDelivery.investor_id == investor_id,
-        AlertDelivery.scrape_run_id == scrape_run_id,
-        AlertDelivery.artifact_id.is_not(None),
-        AlertDelivery.status == "suppressed_cap",
+        AlertDelivery.status == DeliveryStatus.SUPPRESSED_CAP,
     )
     return int(db.scalar(statement) or 0)

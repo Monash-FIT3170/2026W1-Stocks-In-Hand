@@ -132,6 +132,17 @@ Handle investor watchlists and the join table between watchlists and tickers.
 Handles investors, including the password-hashing helpers used by the auth
 routes.
 
+`alert_delivery.py`
+
+The delivery ledger behind watchlist alerts. `app/services/alert_delivery.py`
+decides what each investor gets; this module records it. `claim` takes one
+row per investor and artifact, or per investor and scrape run for a rollup,
+and commits before any email is sent. So an alert goes out at most once, and
+the per-run cap and daily budget counts include every committed claim.
+`record` writes the outcome and mirrors it onto the investor's alert
+subscription in one transaction. The delivery statuses live in
+`app/alert_vocabulary.py`.
+
 ## Write Behavior
 
 Create/update/delete functions usually call:

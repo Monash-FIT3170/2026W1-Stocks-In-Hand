@@ -22,18 +22,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, cast
+from typing import cast
 from urllib.parse import quote, urlencode
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.alert_vocabulary import DeliveryKind
+from app.alert_vocabulary import DeliveryKind, DeliveryStatus, VerificationStatus
 from app.core.config import settings
-from app.crud import alert_delivery as alert_delivery_crud
+from app.crud import alert_delivery as ledger
 from app.crud import alert_rule as alert_rule_crud
 from app.crud import alert_subscription as alert_subscription_crud
 from app.crud import watchlist_ticker as watchlist_ticker_crud
@@ -56,11 +56,18 @@ from app.status import AnalysisStatus
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 _CONFIDENCE_TOLERANCE = Decimal("0.0001")
-_TEMPORARY_FAILURE = "A temporary notification dependency failed"
 # A claim held in one of these statuses needs nothing more from this attempt:
 # the email went out, will never go out, or another attempt holds a fresh
 # claim on it.
-_SETTLED = frozenset({"claimed", "sent", "rollup_sent", "rejected", "suppressed_budget"})
+_SETTLED = frozenset(
+    {
+        DeliveryStatus.CLAIMED,
+        DeliveryStatus.SENT,
+        DeliveryStatus.ROLLUP_SENT,
+        DeliveryStatus.REJECTED,
+        DeliveryStatus.SUPPRESSED_BUDGET,
+    }
+)
 _CLAIM_UNAVAILABLE = {
     DeliveryKind.DIRECT: "delivery_claim_unavailable",
     DeliveryKind.ROLLUP: "rollup_claim_unavailable",
@@ -83,14 +90,6 @@ class AlertMismatch(ValueError):
         self.code = code
 
 
-class _Retry(RuntimeError):
-    """A state race in one investor's delivery that SQS should retry."""
-
-    def __init__(self, message: str, *, code: str):
-        super().__init__(message)
-        self.code = code
-
-
 @dataclass(frozen=True)
 class WatcherResult:
     """What one alert came to for one investor watching its ticker.
@@ -104,7 +103,7 @@ class WatcherResult:
 
     investor_id: UUID
     kind: DeliveryKind | None = None
-    recorded: str | None = None
+    recorded: DeliveryStatus | None = None
     retry_code: str | None = None
 
 
@@ -181,16 +180,6 @@ class _Watcher:  # pylint: disable=too-many-instance-attributes
             return False
         labels = {label.strip().lower() for label in rule.sentiment_labels}
         return alert.sentiment_label in labels and alert.confidence_score >= rule.min_confidence
-
-
-@dataclass(frozen=True)
-class _Lease:
-    """The values a guarded ledger transition needs after the claim commit."""
-
-    id: UUID
-    investor_id: UUID
-    claimed_at: datetime
-    kind: DeliveryKind
 
 
 def _decimal(value: object, *, field: str) -> Decimal:
@@ -344,7 +333,7 @@ def _deliver_to(
         if watcher is None or not watcher.wants(alert):
             return WatcherResult(investor_id)
         return _Delivery(alert, watcher, sender, open_session).attempt(DeliveryKind.DIRECT)
-    except (AlertNotReady, _Retry) as exc:
+    except (AlertNotReady, ledger.LeaseLost, ledger.SubscriptionGone) as exc:
         return WatcherResult(investor_id, retry_code=exc.code)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # Isolate every investor so successful siblings still dedupe.
@@ -370,112 +359,72 @@ class _Delivery:
         # includes this claim and the claims other workers have committed, so
         # workers running at the same time cannot together overshoot the
         # per-run cap or the daily budget.
-        lease, held = self._claim(kind)
-        if lease is None:
-            if kind is DeliveryKind.DIRECT and held == "suppressed_cap":
+        with self.open_session() as db:
+            claim = ledger.claim(
+                db,
+                kind,
+                investor_id=self.watcher.investor_id,
+                scrape_run_id=self.alert.message.scrape_run_id,
+                artifact_id=(
+                    self.alert.message.artifact_id if kind is DeliveryKind.DIRECT else None
+                ),
+                rule_id=self.watcher.rule.id if self.watcher.rule else None,
+                stale_after=timedelta(minutes=settings.ALERT_CLAIM_STALE_MINUTES),
+            )
+        if isinstance(claim, ledger.Held):
+            if kind is DeliveryKind.DIRECT and claim.status is DeliveryStatus.SUPPRESSED_CAP:
                 # An earlier attempt passed the cap and may not have sent the
                 # rollup.
                 return self.attempt(DeliveryKind.ROLLUP)
-            retry_code = None if held in _SETTLED else _CLAIM_UNAVAILABLE[kind]
+            retry_code = None if claim.status in _SETTLED else _CLAIM_UNAVAILABLE[kind]
             return WatcherResult(self.watcher.investor_id, kind, retry_code=retry_code)
-        held_back = self._hold_back(lease)
+        held_back = self._hold_back(claim)
         if held_back is not None:
-            if held_back.recorded == "suppressed_cap":
+            if held_back.recorded is DeliveryStatus.SUPPRESSED_CAP:
                 return self.attempt(DeliveryKind.ROLLUP)
             return held_back
-        email = self._compose(lease)
+        email = self._compose(claim)
         if isinstance(email, WatcherResult):
             return email
-        return self._send(lease, email)
+        return self._send(claim, email)
 
-    def _claim(self, kind: DeliveryKind) -> tuple[_Lease | None, str | None]:
-        """Commit a claim, or return the status of the row that already holds it."""
-        investor_id = self.watcher.investor_id
-        message = self.alert.message
-        rule_id = self.watcher.rule.id if self.watcher.rule else None
-        with self.open_session() as db:
-            if kind is DeliveryKind.DIRECT:
-                delivery = alert_delivery_crud.claim(
-                    db,
-                    investor_id,
-                    message.artifact_id,
-                    message.scrape_run_id,
-                    rule_id,
-                    stale_after_minutes=settings.ALERT_CLAIM_STALE_MINUTES,
-                )
-            else:
-                delivery = alert_delivery_crud.claim_rollup(
-                    db,
-                    investor_id,
-                    message.scrape_run_id,
-                    rule_id,
-                    stale_after_minutes=settings.ALERT_CLAIM_STALE_MINUTES,
-                )
-            if delivery is not None:
-                return _lease(delivery, kind), None
-            if kind is DeliveryKind.DIRECT:
-                existing = alert_delivery_crud.get_for_artifact(
-                    db,
-                    investor_id,
-                    message.artifact_id,
-                )
-            else:
-                existing = alert_delivery_crud.get_rollup(
-                    db,
-                    investor_id,
-                    message.scrape_run_id,
-                )
-            return None, str(existing.status) if existing is not None else None
-
-    def _hold_back(self, lease: _Lease) -> WatcherResult | None:
+    def _hold_back(self, lease: ledger.Lease) -> WatcherResult | None:
         """Record why the alert stops before it is sent, or return None to send it."""
-        if self.watcher.verification_status != "verified":
+        if self.watcher.verification_status != VerificationStatus.VERIFIED:
             return self._record(
                 lease,
-                "rejected",
-                code="recipient_not_verified",
-                detail="The subscription email has not been confirmed",
+                ledger.Outcome.rejected(
+                    "recipient_not_verified",
+                    "The subscription email has not been confirmed",
+                ),
             )
-        if lease.kind is DeliveryKind.DIRECT and self._over_run_cap():
+        if lease.kind is DeliveryKind.DIRECT and self._over_run_cap(lease):
             return self._record(
                 lease,
-                "suppressed_cap",
-                code="per_run_cap",
-                detail="Investor per-run alert limit reached",
+                ledger.Outcome.suppressed_by_cap("Investor per-run alert limit reached"),
             )
         if self._over_daily_budget():
             return self._record(
                 lease,
-                "suppressed_budget",
-                code="daily_budget",
-                detail="Account daily alert budget reached",
+                ledger.Outcome.suppressed_by_budget("Account daily alert budget reached"),
             )
         if not self._still_wanted():
             return self._record(
                 lease,
-                "rejected",
-                code="preferences_changed",
-                detail="Alert preferences changed before send",
+                ledger.Outcome.rejected(
+                    "preferences_changed",
+                    "Alert preferences changed before send",
+                ),
             )
         return None
 
-    def _over_run_cap(self) -> bool:
+    def _over_run_cap(self, lease: ledger.Lease) -> bool:
         with self.open_session() as db:
-            return (
-                alert_delivery_crud.count_for_run(
-                    db,
-                    self.watcher.investor_id,
-                    self.alert.message.scrape_run_id,
-                )
-                > settings.ALERT_MAX_PER_INVESTOR_PER_RUN
-            )
+            return ledger.over_run_cap(db, lease, settings.ALERT_MAX_PER_INVESTOR_PER_RUN)
 
     def _over_daily_budget(self) -> bool:
         with self.open_session() as db:
-            return (
-                alert_delivery_crud.count_budget_commitments_last_24h(db)
-                > settings.ALERT_DAILY_BUDGET
-            )
+            return ledger.over_daily_budget(db, settings.ALERT_DAILY_BUDGET)
 
     def _still_wanted(self) -> bool:
         """Whether the subscription and rule are unchanged since the claim's read."""
@@ -483,16 +432,12 @@ class _Delivery:
             current = _load_watcher(db, self.watcher.investor_id)
         return current is not None and current == self.watcher and current.wants(self.alert)
 
-    def _compose(self, lease: _Lease) -> OutgoingEmail | WatcherResult:
+    def _compose(self, lease: ledger.Lease) -> OutgoingEmail | WatcherResult:
         """The email to send, or the recorded failure when it cannot be written now."""
         capped = 0
         if lease.kind is DeliveryKind.ROLLUP:
             with self.open_session() as db:
-                capped = alert_delivery_crud.count_suppressed_for_run(
-                    db,
-                    self.watcher.investor_id,
-                    self.alert.message.scrape_run_id,
-                )
+                capped = ledger.capped_count(db, lease)
             if capped < 1:
                 return self._fail(lease, "rollup_count_not_visible")
         token_hash = self.watcher.unsubscribe_token_hash
@@ -530,7 +475,7 @@ class _Delivery:
             unsubscribe_url=unsubscribe_url,
         )
 
-    def _send(self, lease: _Lease, email: OutgoingEmail) -> WatcherResult:
+    def _send(self, lease: ledger.Lease, email: OutgoingEmail) -> WatcherResult:
         """Send the email and record the sender's outcome.
 
         A refused recipient is final. Any other unsent outcome releases the
@@ -539,110 +484,23 @@ class _Delivery:
         # EmailSender is a Protocol, so pylint sees no return statement.
         outcome = self.sender.send(email)  # pylint: disable=assignment-from-no-return
         if isinstance(outcome, Accepted):
-            return self._record(lease, "sent", provider_message_id=outcome.message_id)
+            return self._record(lease, ledger.Outcome.sent(outcome.message_id))
         if isinstance(outcome, RecipientRejected):
-            return self._record(lease, "rejected", code=outcome.code, detail=outcome.detail)
+            return self._record(lease, ledger.Outcome.rejected(outcome.code, outcome.detail))
         return self._fail(lease, outcome.code)
 
-    def _fail(self, lease: _Lease, code: str) -> WatcherResult:
+    def _fail(self, lease: ledger.Lease, code: str) -> WatcherResult:
         """Record a failure a retry may get past, and ask SQS for that retry."""
-        return self._record(lease, "failed", code=code, detail=_TEMPORARY_FAILURE)
+        return self._record(lease, ledger.Outcome.failed(code))
 
-    def _record(  # pylint: disable=too-many-arguments
-        self,
-        lease: _Lease,
-        outcome: str,
-        *,
-        code: str | None = None,
-        detail: str | None = None,
-        provider_message_id: str | None = None,
-    ) -> WatcherResult:
-        """Commit a ledger transition and the subscription's mirror of it together."""
-        delivery_at = datetime.now(timezone.utc)
+    def _record(self, lease: ledger.Lease, outcome: ledger.Outcome) -> WatcherResult:
+        """Record the outcome in the ledger, which mirrors it onto the subscription."""
         with self.open_session() as db:
-            if outcome == "sent":
-                changed = alert_delivery_crud.mark_sent(
-                    db,
-                    lease.id,
-                    lease.claimed_at,
-                    provider_message_id or "",
-                    commit=False,
-                )
-            elif outcome == "rejected":
-                changed = alert_delivery_crud.mark_rejected(
-                    db,
-                    lease.id,
-                    lease.claimed_at,
-                    code or "rejected",
-                    detail,
-                    commit=False,
-                )
-            elif outcome == "failed":
-                changed = alert_delivery_crud.mark_failed(
-                    db,
-                    lease.id,
-                    lease.claimed_at,
-                    code or "retryable_failure",
-                    detail,
-                    commit=False,
-                )
-            elif outcome == "suppressed_cap":
-                changed = alert_delivery_crud.mark_suppressed_cap(
-                    db,
-                    lease.id,
-                    lease.claimed_at,
-                    detail,
-                    commit=False,
-                )
-            elif outcome == "suppressed_budget":
-                changed = alert_delivery_crud.mark_suppressed_budget(
-                    db,
-                    lease.id,
-                    lease.claimed_at,
-                    detail,
-                    commit=False,
-                )
-            else:
-                raise ValueError(f"Unknown delivery outcome: {outcome}")
-
-            if changed is None:
-                raise _Retry(
-                    "Delivery claim was replaced before its outcome commit",
-                    code="delivery_lease_lost",
-                )
-            subscription = alert_subscription_crud.record_delivery_outcome(
-                db,
-                investor_id=lease.investor_id,
-                delivery_status=str(changed.status),
-                delivery_at=delivery_at,
-                error_code=code,
-                commit=False,
-            )
-            if subscription is None:
-                raise _Retry(
-                    "Subscription disappeared before its outcome commit",
-                    code="subscription_state_changed",
-                )
-            db.commit()
-            recorded = str(changed.status)
+            recorded = ledger.record(db, lease, outcome)
+        retry_code = outcome.code if recorded is DeliveryStatus.FAILED else None
         return WatcherResult(
             lease.investor_id,
             lease.kind,
             recorded=recorded,
-            retry_code=code if recorded == "failed" else None,
+            retry_code=retry_code,
         )
-
-
-def _lease(delivery: Any, kind: DeliveryKind) -> _Lease:
-    """Detach the exact lease values needed after the claim commit."""
-    if delivery.claimed_at is None:
-        raise _Retry(
-            "Claim did not return its lease timestamp",
-            code="claim_state_invalid",
-        )
-    return _Lease(
-        id=delivery.id,
-        investor_id=delivery.investor_id,
-        claimed_at=delivery.claimed_at,
-        kind=kind,
-    )

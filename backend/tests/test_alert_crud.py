@@ -1,33 +1,35 @@
-"""Focused contracts for the Phase 3 alert CRUD modules.
+"""Focused contracts for the alert CRUD modules and the delivery ledger.
 
 The pure tests cover validation and generated PostgreSQL statements without a
 database.  Integration tests use the configured Postgres database when it is
 available, and otherwise skip cleanly for local runs without Docker.
 """
 
-# pylint: disable=redefined-outer-name,too-few-public-methods,too-many-locals,wrong-import-position
+# pylint: disable=not-callable,redefined-outer-name,too-few-public-methods,too-many-locals,wrong-import-position
 
 from __future__ import annotations
 
 import sys
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from sqlalchemy import create_engine, select, update
+from sqlalchemy import and_, create_engine, func, or_, select, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, object_session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.alert_vocabulary import DeliveryKind, DeliveryStatus
 from app.core.config import settings
-from app.crud import alert_delivery as delivery_crud
+from app.crud import alert_delivery as ledger
 from app.crud import alert_rule as rule_crud
 from app.crud import alert_subscription as subscription_crud
 from app.crud import watchlist_ticker as watchlist_ticker_crud
@@ -54,11 +56,9 @@ class _CapturedResult:
 class _CapturedSession:
     """Small Session double that records one statement without opening a DB."""
 
-    def __init__(self, artifact_scrape_run_id: uuid.UUID | None = None) -> None:
+    def __init__(self) -> None:
         self.statement: Any | None = None
         self.commit_count = 0
-        self.flush_count = 0
-        self.artifact_scrape_run_id = artifact_scrape_run_id
 
     def execute(self, statement: Any) -> _CapturedResult:
         """Capture the generated statement for later compilation."""
@@ -66,17 +66,8 @@ class _CapturedSession:
         return _CapturedResult()
 
     def commit(self) -> None:
-        """Match the claim helper's commit boundary without a database."""
+        """Match the write's commit boundary without a database."""
         self.commit_count += 1
-
-    def flush(self) -> None:
-        """Record a caller-owned write without committing its transaction."""
-        self.flush_count += 1
-
-    def scalar(self, statement: Any) -> uuid.UUID | None:
-        """Return the configured provenance result for a claim lookup."""
-        self.statement = statement
-        return self.artifact_scrape_run_id
 
 
 class _WriteSession:
@@ -260,16 +251,49 @@ def test_alert_crud_validation_needs_no_database() -> None:
             min_confidence=0.75,
             enabled="false",
         )
-    with pytest.raises(ValueError, match="stale_after_minutes"):
-        delivery_crud.claim(
+    with pytest.raises(ValueError, match="stale_after"):
+        ledger.claim(
             db,
-            investor_id,
-            uuid.uuid4(),
-            uuid.uuid4(),
-            stale_after_minutes=0,
+            DeliveryKind.DIRECT,
+            investor_id=investor_id,
+            scrape_run_id=uuid.uuid4(),
+            artifact_id=uuid.uuid4(),
+            stale_after=timedelta(0),
+        )
+    with pytest.raises(ValueError, match="artifact_id is required"):
+        ledger.claim(
+            db,
+            DeliveryKind.DIRECT,
+            investor_id=investor_id,
+            scrape_run_id=uuid.uuid4(),
+        )
+    with pytest.raises(ValueError, match="rollup claim has no artifact"):
+        ledger.claim(
+            db,
+            DeliveryKind.ROLLUP,
+            investor_id=investor_id,
+            scrape_run_id=uuid.uuid4(),
+            artifact_id=uuid.uuid4(),
+        )
+    with pytest.raises(ValueError, match="provider_message_id"):
+        ledger.Outcome.sent("  ")
+    lease = ledger.Lease(
+        delivery_id=uuid.uuid4(),
+        investor_id=investor_id,
+        scrape_run_id=uuid.uuid4(),
+        artifact_id=uuid.uuid4(),
+        claimed_at=datetime.now(timezone.utc),
+    )
+    with pytest.raises(ValueError, match="timezone"):
+        ledger.record(
+            db,
+            lease,
+            ledger.Outcome.sent("message-id"),
+            at=datetime.now(),
         )
 
     db.execute.assert_not_called()
+    db.scalar.assert_not_called()
 
 
 def test_disable_subscription_is_guarded_by_id_and_token_hash() -> None:
@@ -288,21 +312,6 @@ def test_disable_subscription_is_guarded_by_id_and_token_hash() -> None:
     assert "alert_subscriptions.id" in sql
     assert "alert_subscriptions.unsubscribe_token_hash" in sql
     assert "enabled" in sql
-
-
-def test_optional_outcome_write_leaves_transaction_ownership_with_the_caller() -> None:
-    """An outcome can join its caller's transaction, unlike a pre-send claim."""
-    db = _CapturedSession()
-
-    assert delivery_crud.mark_sent(
-        db,
-        uuid.uuid4(),
-        datetime.now(timezone.utc),
-        "message-id",
-        commit=False,
-    ) is None
-    assert db.commit_count == 0
-    assert db.flush_count == 0
 
 
 def test_subscription_and_rule_upserts_flush_without_committing_on_request() -> None:
@@ -337,66 +346,6 @@ def test_subscription_and_rule_upserts_flush_without_committing_on_request() -> 
     assert saved_rule is rule
     assert rule_session.commit_count == 0
     assert rule_session.flush_count == 1
-
-
-def test_claim_sql_contract_uses_failed_or_stale_conflict_takeover() -> None:
-    """The direct-claim statement must retain its PostgreSQL lease guard."""
-    scrape_run_id = uuid.uuid4()
-    db = _CapturedSession(artifact_scrape_run_id=scrape_run_id)
-    delivery_crud.claim(
-        db,
-        uuid.uuid4(),
-        uuid.uuid4(),
-        scrape_run_id,
-        stale_after_minutes=15,
-    )
-
-    assert db.statement is not None
-    sql = str(db.statement.compile(dialect=postgresql.dialect()))
-    assert "ON CONFLICT (investor_id, artifact_id) DO UPDATE" in sql
-    assert "alert_deliveries.status = %(status_1)s" in sql
-    assert "alert_deliveries.claimed_at < now() -" in sql
-    assert "sent_at" in sql
-    assert db.commit_count == 1
-
-
-def test_counter_sql_contract_excludes_rollups_from_the_per_run_cap() -> None:
-    """Rollups do not consume the per-investor, per-run direct-alert cap."""
-    statement_session = Mock()
-    statement_session.scalar.return_value = 0
-
-    assert (
-        delivery_crud.count_for_run(statement_session, uuid.uuid4(), uuid.uuid4())
-        == 0
-    )
-    statement = statement_session.scalar.call_args.args[0]
-    sql = str(
-        statement.compile(
-            dialect=postgresql.dialect(),
-            compile_kwargs={"literal_binds": True},
-        )
-    )
-
-    assert "alert_deliveries.artifact_id IS NOT NULL" in sql
-    assert "alert_deliveries.status IN" in sql
-    assert "claimed" in sql and "sent" in sql
-
-
-def test_rollup_claim_sql_targets_the_partial_unique_index() -> None:
-    """Rollup claims must infer the null-artifact partial unique index."""
-    db = _CapturedSession()
-    delivery_crud.claim_rollup(
-        db,
-        uuid.uuid4(),
-        uuid.uuid4(),
-        stale_after_minutes=15,
-    )
-
-    assert db.statement is not None
-    sql = str(db.statement.compile(dialect=postgresql.dialect()))
-    assert "ON CONFLICT (investor_id, scrape_run_id)" in sql
-    assert "WHERE artifact_id IS NULL" in sql
-    assert "DO UPDATE" in sql
 
 
 def test_rollup_foreign_key_restricts_deleting_ledger_parents() -> None:
@@ -638,45 +587,6 @@ def test_current_state_change_can_downgrade_a_verified_subscription(
     assert corrected.verified_at is None
 
 
-def test_delivery_outcomes_are_monotonic_by_timestamp(db_session: Session) -> None:
-    """A delayed delivery result cannot overwrite a newer subscription outcome."""
-    investor, _, _, _ = _records(db_session)
-    subscription_crud.upsert_subscription(
-        db_session, investor_id=investor.id, email=investor.email
-    )
-    newer = datetime.now(timezone.utc)
-    older = newer - timedelta(minutes=1)
-    subscription_crud.record_delivery_outcome(
-        db_session,
-        investor_id=investor.id,
-        delivery_status="sent",
-        delivery_at=newer,
-    )
-    result = subscription_crud.record_delivery_outcome(
-        db_session,
-        investor_id=investor.id,
-        delivery_status="rejected",
-        delivery_at=older,
-        error_code="MessageRejected",
-    )
-
-    assert result is not None
-    assert result.last_delivery_status == "sent"
-    assert result.last_delivery_error_code is None
-    assert result.last_delivery_at == newer
-
-    equal_timestamp = subscription_crud.record_delivery_outcome(
-        db_session,
-        investor_id=investor.id,
-        delivery_status="rejected",
-        delivery_at=newer,
-        error_code="MessageRejected",
-    )
-    assert equal_timestamp is not None
-    assert equal_timestamp.last_delivery_status == "sent"
-    assert equal_timestamp.last_delivery_error_code is None
-
-
 def test_watcher_lookup_is_distinct_across_overlapping_watchlists(
     db_session: Session,
 ) -> None:
@@ -708,42 +618,120 @@ def test_watcher_lookup_is_distinct_across_overlapping_watchlists(
     }
 
 
-def test_direct_claim_skips_fresh_duplicates_and_takes_over_stale_claims(
+def _subscribe(db: Session, investor: Investor) -> None:
+    """Give the investor the alert subscription outcomes are mirrored onto."""
+    subscription_crud.upsert_subscription(db, investor_id=investor.id, email=investor.email)
+
+
+def _claim_alert(
+    db: Session,
+    investor: Investor,
+    artifact: Artifact,
+    **options: Any,
+) -> ledger.Lease | ledger.Held:
+    """Claim the direct alert about ``artifact`` for ``investor``."""
+    return ledger.claim(
+        db,
+        DeliveryKind.DIRECT,
+        investor_id=investor.id,
+        scrape_run_id=artifact.scrape_run_id,
+        artifact_id=artifact.id,
+        **options,
+    )
+
+
+def _claim_rollup(
+    db: Session,
+    investor: Investor,
+    scrape_run: ScrapeRun,
+) -> ledger.Lease | ledger.Held:
+    """Claim the run's rollup for ``investor``."""
+    return ledger.claim(
+        db,
+        DeliveryKind.ROLLUP,
+        investor_id=investor.id,
+        scrape_run_id=scrape_run.id,
+    )
+
+
+def _leased(claim: ledger.Lease | ledger.Held) -> ledger.Lease:
+    assert isinstance(claim, ledger.Lease), claim
+    return claim
+
+
+def _row(db: Session, lease: ledger.Lease) -> AlertDelivery:
+    """The lease's ledger row as the database holds it now."""
+    row = db.get(AlertDelivery, lease.delivery_id, populate_existing=True)
+    assert row is not None
+    return row
+
+
+def _mirror(db: Session, investor: Investor) -> tuple[object, object, object]:
+    """The last outcome the investor's subscription shows."""
+    subscription = subscription_crud.get_subscription_by_investor(db, investor.id)
+    assert subscription is not None
+    db.refresh(subscription)
+    return (
+        subscription.last_delivery_status,
+        subscription.last_delivery_error_code,
+        subscription.last_delivery_at,
+    )
+
+
+def _budget_used(db: Session) -> int:
+    """Alerts sent and claims held in the last 24 hours, for every investor."""
+    since = func.now() - timedelta(hours=24)
+    return int(
+        db.scalar(
+            select(func.count(AlertDelivery.id)).where(
+                or_(
+                    and_(
+                        AlertDelivery.status == "claimed",
+                        AlertDelivery.claimed_at >= since,
+                    ),
+                    and_(
+                        AlertDelivery.status.in_(("sent", "rollup_sent")),
+                        AlertDelivery.sent_at >= since,
+                    ),
+                )
+            )
+        )
+    )
+
+
+def test_a_fresh_claim_is_held_and_a_stale_one_is_taken_over(
     db_session: Session,
 ) -> None:
     """Fresh leases are protected, while expired claims are safely retried."""
-    investor, _, scrape_run, artifact = _records(db_session)
-    first = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-    assert first is not None
-    stored_delivery = delivery_crud.get_delivery(db_session, first.id)
-    assert stored_delivery is not None
-    assert stored_delivery.id == first.id
-    assert (
-        delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-        is None
+    investor, _, _, artifact = _records(db_session)
+    first = _leased(_claim_alert(db_session, investor, artifact))
+    assert first.kind is DeliveryKind.DIRECT
+
+    def claimed_minutes_ago(minutes: int) -> datetime:
+        claimed_at = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        db_session.execute(
+            update(AlertDelivery)
+            .where(AlertDelivery.id == first.delivery_id)
+            .values(claimed_at=claimed_at)
+        )
+        db_session.commit()
+        return claimed_at
+
+    claimed_minutes_ago(14)
+    assert _claim_alert(
+        db_session, investor, artifact, stale_after=timedelta(minutes=15)
+    ) == ledger.Held(DeliveryStatus.CLAIMED)
+
+    stale_at = claimed_minutes_ago(16)
+    replacement = _leased(
+        _claim_alert(db_session, investor, artifact, stale_after=timedelta(minutes=15))
     )
 
-    stale_at = datetime.now(timezone.utc) - timedelta(minutes=16)
-    db_session.execute(
-        update(AlertDelivery)
-        .where(AlertDelivery.id == first.id)
-        .values(claimed_at=stale_at)
-    )
-    db_session.commit()
-    replacement = delivery_crud.claim(
-        db_session,
-        investor.id,
-        artifact.id,
-        scrape_run.id,
-        stale_after_minutes=15,
-    )
-
-    assert replacement is not None
-    assert replacement.id == first.id
+    assert replacement.delivery_id == first.delivery_id
     assert replacement.claimed_at > stale_at
 
 
-def test_claim_rejects_an_artifact_from_a_different_scrape_run(
+def test_a_claim_refuses_an_artifact_from_another_scrape_run(
     db_session: Session,
 ) -> None:
     """The ledger may not record an artifact against an unrelated run."""
@@ -753,160 +741,244 @@ def test_claim_rejects_an_artifact_from_a_different_scrape_run(
     db_session.flush()
 
     with pytest.raises(ValueError, match="scrape_run_id"):
-        delivery_crud.claim(
+        ledger.claim(
             db_session,
-            investor.id,
-            artifact.id,
-            other_run.id,
+            DeliveryKind.DIRECT,
+            investor_id=investor.id,
+            scrape_run_id=other_run.id,
+            artifact_id=artifact.id,
         )
 
 
-def test_committed_claim_is_detached_but_its_lease_values_are_usable(
+def test_an_outcome_is_recorded_on_the_row_and_the_subscription_together(
     db_session: Session,
 ) -> None:
-    """A mandatory commit returns the IDs and lease timestamp callers need next."""
-    investor, _, scrape_run, artifact = _records(db_session)
-    claim = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
+    """The ledger row and the subscription's last outcome change in one write."""
+    investor, _, _, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    lease = _leased(_claim_alert(db_session, investor, artifact))
+    at = datetime.now(timezone.utc)
 
-    assert claim is not None
-    assert object_session(claim) is None
-    assert claim.id
-    assert claim.claimed_at.tzinfo is not None
-
-    sent = delivery_crud.mark_sent(
+    recorded = ledger.record(
         db_session,
-        claim.id,
-        claim.claimed_at,
-        "detached-message",
-    )
-    assert sent is not None
-    assert sent.status == "sent"
-
-
-def test_lease_protection_blocks_late_outcomes_and_sent_rows_are_final(
-    db_session: Session,
-) -> None:
-    """Only the current lease holder may finish a claim, and sent rows stay final."""
-    investor, _, scrape_run, artifact = _records(db_session)
-    claim = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-    assert claim is not None
-
-    assert (
-        delivery_crud.mark_sent(
-            db_session,
-            claim.id,
-            claim.claimed_at - timedelta(seconds=1),
-            "late-message",
-        )
-        is None
-    )
-    sent = delivery_crud.mark_sent(
-        db_session, claim.id, claim.claimed_at, "message-id"
-    )
-    assert sent is not None and sent.status == "sent"
-    assert sent.provider_message_id == "message-id"
-    assert (
-        delivery_crud.mark_rejected(
-            db_session, sent.id, claim.claimed_at, "invalid_parameter"
-        )
-        is None
-    )
-    assert (
-        delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-        is None
+        lease,
+        ledger.Outcome.rejected("invalid_parameter", "Brevo rejected the destination"),
+        at=at,
     )
 
-
-def test_failed_claims_retry_immediately_and_suppressions_are_terminal(
-    db_session: Session,
-) -> None:
-    """Retryable failures can reclaim immediately, unlike cap and budget outcomes."""
-    investor, ticker, scrape_run, artifact = _records(db_session)
-    failed = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-    assert failed is not None
-    assert delivery_crud.mark_failed(
-        db_session, failed.id, failed.claimed_at, "rate_limit"
-    ) is not None
-    retry = delivery_crud.claim(db_session, investor.id, artifact.id, scrape_run.id)
-    assert retry is not None and retry.id == failed.id
-
-    rejected_artifact = _artifact_for_run(db_session, ticker.id, scrape_run.id)
-    rejected_claim = delivery_crud.claim(
-        db_session,
-        investor.id,
-        rejected_artifact.id,
-        scrape_run.id,
-    )
-    assert rejected_claim is not None
-    rejected = delivery_crud.mark_rejected(
-        db_session,
-        rejected_claim.id,
-        rejected_claim.claimed_at,
+    assert recorded is DeliveryStatus.REJECTED
+    row = _row(db_session, lease)
+    assert (row.status, row.error_code, row.error_detail) == (
+        "rejected",
         "invalid_parameter",
         "Brevo rejected the destination",
     )
-    assert rejected is not None and rejected.status == "rejected"
-    assert rejected.error_code == "invalid_parameter"
-
-    cap_artifact = _artifact_for_run(db_session, ticker.id, scrape_run.id)
-    cap_claim = delivery_crud.claim(
-        db_session, investor.id, cap_artifact.id, scrape_run.id
-    )
-    assert cap_claim is not None
-    capped = delivery_crud.mark_suppressed_cap(
-        db_session, cap_claim.id, cap_claim.claimed_at
-    )
-    assert capped is not None and capped.status == "suppressed_cap"
-    assert capped.error_code == "per_run_cap"
-    assert delivery_crud.claim(
-        db_session, investor.id, cap_artifact.id, scrape_run.id
-    ) is None
-
-    budget_artifact = _artifact_for_run(db_session, ticker.id, scrape_run.id)
-    budget_claim = delivery_crud.claim(
-        db_session, investor.id, budget_artifact.id, scrape_run.id
-    )
-    assert budget_claim is not None
-    budgeted = delivery_crud.mark_suppressed_budget(
-        db_session, budget_claim.id, budget_claim.claimed_at
-    )
-    assert budgeted is not None and budgeted.status == "suppressed_budget"
-    assert budgeted.error_code == "daily_budget"
+    assert _mirror(db_session, investor) == ("rejected", "invalid_parameter", at)
 
 
-def test_run_and_daily_counters_handle_direct_and_rollup_sends(
+def test_an_outcome_without_a_subscription_is_not_recorded(
     db_session: Session,
 ) -> None:
-    """Run caps ignore rollups, while the daily budget counts both sent forms."""
-    sent_before = delivery_crud.count_sent_last_24h(db_session)
-    commitments_before = delivery_crud.count_budget_commitments_last_24h(
-        db_session
+    """Without a subscription to mirror onto, the ledger row keeps its claim."""
+    investor, _, _, artifact = _records(db_session)
+    lease = _leased(_claim_alert(db_session, investor, artifact))
+
+    with pytest.raises(ledger.SubscriptionGone):
+        ledger.record(db_session, lease, ledger.Outcome.sent("message-id"))
+
+    row = _row(db_session, lease)
+    assert (row.status, row.provider_message_id) == ("claimed", None)
+
+
+def test_an_outdated_lease_records_nothing(db_session: Session) -> None:
+    """Only the current lease holder may finish a claim."""
+    investor, _, _, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    lease = _leased(_claim_alert(db_session, investor, artifact))
+    outdated = replace(lease, claimed_at=lease.claimed_at - timedelta(seconds=1))
+
+    with pytest.raises(ledger.LeaseLost):
+        ledger.record(db_session, outdated, ledger.Outcome.sent("late-message"))
+
+    row = _row(db_session, lease)
+    assert (row.status, row.provider_message_id) == ("claimed", None)
+    assert _mirror(db_session, investor) == (None, None, None)
+
+
+def test_a_sent_alert_is_final(db_session: Session) -> None:
+    """A sent row takes no other outcome and no new claim."""
+    investor, _, _, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    lease = _leased(_claim_alert(db_session, investor, artifact))
+
+    assert ledger.record(
+        db_session, lease, ledger.Outcome.sent(" message-id ")
+    ) is DeliveryStatus.SENT
+
+    row = _row(db_session, lease)
+    assert (row.status, row.provider_message_id, row.error_code) == (
+        "sent",
+        "message-id",
+        None,
     )
+    assert row.sent_at is not None
+    with pytest.raises(ledger.LeaseLost):
+        ledger.record(
+            db_session,
+            lease,
+            ledger.Outcome.rejected("invalid_parameter", "Brevo rejected the destination"),
+        )
+    assert _claim_alert(db_session, investor, artifact) == ledger.Held(DeliveryStatus.SENT)
+
+
+def test_a_failed_alert_can_be_claimed_again_at_once(db_session: Session) -> None:
+    """A retry may take over a failed row without waiting for it to go stale."""
+    investor, _, _, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    failed = _leased(_claim_alert(db_session, investor, artifact))
+
+    assert ledger.record(
+        db_session, failed, ledger.Outcome.failed("rate_limit")
+    ) is DeliveryStatus.FAILED
+    row = _row(db_session, failed)
+    assert (row.error_code, row.error_detail) == (
+        "rate_limit",
+        "A temporary notification dependency failed",
+    )
+
+    retry = _leased(_claim_alert(db_session, investor, artifact))
+    assert retry.delivery_id == failed.delivery_id
+    row = _row(db_session, retry)
+    assert (row.status, row.error_code, row.error_detail) == ("claimed", None, None)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "code"),
+    [
+        (
+            ledger.Outcome.rejected("invalid_parameter", "Brevo rejected the destination"),
+            "invalid_parameter",
+        ),
+        (
+            ledger.Outcome.suppressed_by_cap("Investor per-run alert limit reached"),
+            "per_run_cap",
+        ),
+        (
+            ledger.Outcome.suppressed_by_budget("Account daily alert budget reached"),
+            "daily_budget",
+        ),
+    ],
+)
+def test_a_rejected_or_suppressed_alert_is_final(
+    db_session: Session,
+    outcome: ledger.Outcome,
+    code: str,
+) -> None:
+    """Rejections and suppressions keep their code and take no new claim."""
+    investor, _, _, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    lease = _leased(_claim_alert(db_session, investor, artifact))
+
+    assert ledger.record(db_session, lease, outcome) is outcome.status
+
+    assert _row(db_session, lease).error_code == code
+    assert _claim_alert(db_session, investor, artifact) == ledger.Held(outcome.status)
+
+
+def test_the_cap_counts_direct_alerts_and_the_budget_counts_every_send(
+    db_session: Session,
+) -> None:
+    """The per-run cap leaves out rollups and suppressed alerts.
+
+    The daily budget counts direct and rollup sends and held claims alike.
+    """
+    used = _budget_used(db_session)
     investor, ticker, scrape_run, artifact = _records(db_session)
-    direct_claim = delivery_crud.claim(
-        db_session, investor.id, artifact.id, scrape_run.id
+    _subscribe(db_session, investor)
+    sent = _leased(_claim_alert(db_session, investor, artifact))
+    ledger.record(db_session, sent, ledger.Outcome.sent("direct-message"))
+    held = _leased(
+        _claim_alert(
+            db_session,
+            investor,
+            _artifact_for_run(db_session, ticker.id, scrape_run.id),
+        )
     )
-    assert direct_claim is not None
-    direct_sent = delivery_crud.mark_sent(
-        db_session, direct_claim.id, direct_claim.claimed_at, "direct-message"
-    )
-    assert direct_sent is not None and direct_sent.status == "sent"
+    for _ in range(2):
+        capped = _leased(
+            _claim_alert(
+                db_session,
+                investor,
+                _artifact_for_run(db_session, ticker.id, scrape_run.id),
+            )
+        )
+        ledger.record(
+            db_session,
+            capped,
+            ledger.Outcome.suppressed_by_cap("Investor per-run alert limit reached"),
+        )
+    rollup = _leased(_claim_rollup(db_session, investor, scrape_run))
+    assert rollup.kind is DeliveryKind.ROLLUP
 
-    active_artifact = _artifact_for_run(db_session, ticker.id, scrape_run.id)
-    assert delivery_crud.claim(
-        db_session, investor.id, active_artifact.id, scrape_run.id
-    ) is not None
-    rollup = delivery_crud.claim_rollup(db_session, investor.id, scrape_run.id)
-    assert rollup is not None
-    rollup_sent = delivery_crud.mark_sent(
-        db_session, rollup.id, rollup.claimed_at, "rollup-message"
-    )
-    assert rollup_sent is not None and rollup_sent.status == "rollup_sent"
+    assert ledger.record(
+        db_session, rollup, ledger.Outcome.sent("rollup-message")
+    ) is DeliveryStatus.ROLLUP_SENT
 
-    assert delivery_crud.count_for_run(db_session, investor.id, scrape_run.id) == 2
-    assert delivery_crud.count_sent_last_24h(db_session) == sent_before + 2
-    assert (
-        delivery_crud.count_budget_commitments_last_24h(db_session)
-        == commitments_before + 3
+    assert not ledger.over_run_cap(db_session, held, 2)
+    assert ledger.over_run_cap(db_session, held, 1)
+    assert ledger.capped_count(db_session, rollup) == 2
+    assert not ledger.over_daily_budget(db_session, used + 3)
+    assert ledger.over_daily_budget(db_session, used + 2)
+    assert _claim_rollup(db_session, investor, scrape_run) == ledger.Held(
+        DeliveryStatus.ROLLUP_SENT
     )
-    assert delivery_crud.claim_rollup(db_session, investor.id, scrape_run.id) is None
+
+
+def test_every_committed_claim_counts_against_the_cap(db_session: Session) -> None:
+    """Two workers that each claimed an alert each count the other's claim too.
+
+    So with a cap of one, neither sends a second alert in the run, whichever
+    of them checks first.
+    """
+    investor, ticker, scrape_run, artifact = _records(db_session)
+    first = _leased(_claim_alert(db_session, investor, artifact))
+    second = _leased(
+        _claim_alert(
+            db_session,
+            investor,
+            _artifact_for_run(db_session, ticker.id, scrape_run.id),
+        )
+    )
+
+    assert ledger.over_run_cap(db_session, first, 1)
+    assert ledger.over_run_cap(db_session, second, 1)
+
+
+def test_the_subscription_keeps_the_newest_outcome(db_session: Session) -> None:
+    """A delayed outcome cannot replace a newer one on the subscription."""
+    investor, ticker, scrape_run, artifact = _records(db_session)
+    _subscribe(db_session, investor)
+    newer = datetime.now(timezone.utc)
+    ledger.record(
+        db_session,
+        _leased(_claim_alert(db_session, investor, artifact)),
+        ledger.Outcome.sent("newer-message"),
+        at=newer,
+    )
+
+    for at in (newer - timedelta(minutes=1), newer):
+        lease = _leased(
+            _claim_alert(
+                db_session,
+                investor,
+                _artifact_for_run(db_session, ticker.id, scrape_run.id),
+            )
+        )
+        assert ledger.record(
+            db_session,
+            lease,
+            ledger.Outcome.rejected("invalid_parameter", "Brevo rejected the destination"),
+            at=at,
+        ) is DeliveryStatus.REJECTED
+
+    assert _mirror(db_session, investor) == ("sent", None, newer)

@@ -31,6 +31,7 @@ from lambdas.common import (
 load_runtime_configuration()
 
 # pylint: disable=wrong-import-position
+from app.alert_vocabulary import DeliveryStatus  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.messages import NotificationMessage  # noqa: E402
 from app.services import alert_delivery  # noqa: E402
@@ -79,7 +80,7 @@ def _process_record(record: dict[str, Any], sender: email_sender.EmailSender) ->
         open_session=database_session,
     )
     for result in results:
-        if result.recorded == "suppressed_budget":
+        if result.recorded is DeliveryStatus.SUPPRESSED_BUDGET:
             log_event(
                 stage=STAGE,
                 event="suppressed",
