@@ -10,7 +10,7 @@ The daily budget counts every investor's alerts, so the budget tests set it
 from the count already in the database.
 """
 
-# pylint: disable=duplicate-code,not-callable,redefined-outer-name
+# pylint: disable=duplicate-code,not-callable,redefined-outer-name,too-many-lines
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import and_, create_engine, func, inspect, or_, select, update
+from sqlalchemy import and_, create_engine, delete, func, inspect, or_, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -591,6 +591,83 @@ def test_a_temporary_refusal_for_one_investor_still_alerts_the_others(
 
     assert _deliver(refused) == NO_RETRY
     assert [email.to for email in redelivery.sent] == [refused.email]
+
+
+def _sender_raises(_session: SessionFactory, _watched: WatchedArtifact) -> None:
+    raise RuntimeError("The sender raised instead of answering an outcome")
+
+
+def _claim_taken_over(session: SessionFactory, watched: WatchedArtifact) -> None:
+    """Another worker takes the investor's claim over, as it may once the claim is stale."""
+    with session() as db:
+        db.execute(
+            update(AlertDelivery)
+            .where(AlertDelivery.investor_id == watched.investor_id)
+            .values(claimed_at=AlertDelivery.claimed_at + timedelta(seconds=1))
+        )
+        db.commit()
+
+
+def _subscription_deleted(session: SessionFactory, watched: WatchedArtifact) -> None:
+    with session() as db:
+        db.execute(
+            delete(AlertSubscription).where(
+                AlertSubscription.investor_id == watched.investor_id
+            )
+        )
+        db.commit()
+
+
+@pytest.mark.parametrize(
+    ("interrupt", "retry_code"),
+    [
+        pytest.param(_sender_raises, "RuntimeError", id="sender raises"),
+        pytest.param(_claim_taken_over, "delivery_lease_lost", id="claim taken over"),
+        pytest.param(
+            _subscription_deleted,
+            "subscription_state_changed",
+            id="subscription deleted",
+        ),
+    ],
+)
+def test_an_attempt_that_fails_after_its_claim_still_alerts_the_others(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    interrupt: Callable[[SessionFactory, WatchedArtifact], None],
+    retry_code: str,
+) -> None:
+    """The first investor's attempt breaks while their email goes out.
+
+    Whichever investor comes first, the other still gets the alert, and the
+    record is retried with the failed attempt's code.
+    """
+    first = _watched_artifact(session)
+    second = _another_watcher(session, first)
+    watchers = {first.email: first, second.email: second}
+    interrupted: list[WatchedArtifact] = []
+
+    def answer(email: OutgoingEmail) -> SendOutcome:
+        if not interrupted:
+            interrupted.append(watchers[email.to])
+            interrupt(session, watchers[email.to])
+        return Accepted("accepted-1")
+
+    sender = RecordingEmailSender(answer)
+    _send_with(monkeypatch, sender)
+
+    assert _deliver(first) == first.retry
+
+    assert len(interrupted) == 1
+    failed = interrupted[0]
+    other = second if failed is first else first
+    assert sorted(email.to for email in sender.sent) == sorted([first.email, second.email])
+    assert _delivery(session, other).status == "sent"
+    # The failed attempt recorded nothing, so its claim stands until it is stale.
+    assert _ledger(session, failed) == {failed.artifact_id: "claimed"}
+    assert [(event["event"], event["error_code"]) for event in _events(caplog)] == [
+        ("record_retry", retry_code)
+    ]
 
 
 @pytest.mark.parametrize(
