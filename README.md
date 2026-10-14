@@ -207,7 +207,7 @@ they need the LocalStack overlay described in "Local pipeline development".
 | Method | Path | Description |
 |---|---|---|
 | POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
-| POST | `/llm/summarise/ticker/{symbol}` | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` |
+| POST | `/llm/summarise/ticker/{symbol}` | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` (1 to 50, default 50; each request is one LLM call) |
 | POST | `/llm/summarise/artifact/{artifact_id}` | Queues a new summary of one artifact, which replaces its summary |
 
 ### Scraping

@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.models  # noqa: F401
 from app.api.routes import llm, reddit
 from app.core.config import settings
+from app.database.connection import get_db
 from app.messages import SummaryRequestMessage
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
@@ -245,6 +247,26 @@ def test_the_ticker_route_lists_a_request_the_queue_refused_and_sends_the_rest(
     ]
     assert result["queued"] == 1
     assert {*result["artifact_ids"], *refused} == announcements
+
+
+@pytest.mark.parametrize(("limit", "status"), [(0, 422), (51, 422), (50, 202)])
+def test_the_ticker_route_queues_at_most_50_requests(
+    db_session: Session,
+    queue: list[SummaryRequestMessage],
+    limit: int,
+    status: int,
+) -> None:
+    """Each request is one Bedrock call, and the analysis consumer has no concurrency cap."""
+    pending = _announcement(db_session)
+    api = FastAPI()
+    api.include_router(llm.router)
+    api.dependency_overrides[get_db] = lambda: db_session
+    api.dependency_overrides[analysis_queue.analysis_sender] = lambda: queue.append
+
+    response = TestClient(api).post(f"/llm/summarise/ticker/BHP?limit={limit}")
+
+    assert response.status_code == status
+    assert _requested(queue) == ([pending.id] if status == 202 else [])
 
 
 def test_the_ticker_route_answers_404_for_an_unknown_ticker(

@@ -1,7 +1,7 @@
-from typing import TypeVar
+from typing import Annotated, TypeVar
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.crud import artifact as artifact_crud
@@ -67,11 +67,16 @@ def categorise_recent_artifacts(
 @router.post("/summarise/ticker/{symbol}", status_code=202)
 def summarise_ticker_artifacts(
     symbol: str,
-    limit: int = 50,
+    limit: Annotated[
+        int, Query(ge=1, le=analysis_queue.MAX_TICKER_SUMMARIES)
+    ] = analysis_queue.MAX_TICKER_SUMMARIES,
     db: Session = Depends(get_db),
     send: AnalysisSender = Depends(analysis_queue.analysis_sender),
 ):
-    """Queue a new summary of each of a ticker's artifacts without a complete one."""
+    """Queue a new summary of each of a ticker's artifacts without a complete one.
+
+    ``limit`` is capped because each request is one LLM call.
+    """
     try:
         return analysis_queue.request_ticker_summaries(db, symbol, limit=limit, send=send)
     except LookupError as exc:

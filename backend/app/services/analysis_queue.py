@@ -24,6 +24,11 @@ from app.status import ANALYSIS_QUEUED_OR_DONE, AnalysisStatus
 
 AnalysisSender = Callable[[AnalysisRequest], object]
 
+# The most summary requests one ticker request may queue. Each is one LLM
+# call, and the analysis queue's consumer has no concurrency cap, so a
+# larger batch starts that many flex-tier Bedrock calls at once.
+MAX_TICKER_SUMMARIES = 50
+
 # An artifact in one of these is about to be analysed, which writes a summary.
 _ANALYSIS_UNDER_WAY = frozenset({AnalysisStatus.QUEUED, AnalysisStatus.ANALYZING})
 
@@ -122,10 +127,10 @@ def request_ticker_summaries(
     """Queue a new summary of each of a ticker's artifacts without a complete one.
 
     Reads the ticker's ``limit`` newest announcements and news stories that
-    have text. Skips those whose summary is complete, and those whose
-    analysis is queued or running, which writes a summary anyway. A request
-    the queue does not accept is listed in ``errors``, and the rest are
-    still sent.
+    have text; the route keeps ``limit`` from 1 to ``MAX_TICKER_SUMMARIES``.
+    Skips those whose summary is complete, and those whose analysis is
+    queued or running, which writes a summary anyway. A request the queue
+    does not accept is listed in ``errors``, and the rest are still sent.
 
     Raises ``LookupError`` for an unknown ticker and
     ``AnalysisQueueUnavailable`` when the queue is not configured.
