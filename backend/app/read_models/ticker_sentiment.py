@@ -76,13 +76,11 @@ FALLBACK_CATEGORY_KEYWORDS = {
     ),
 }
 
-# Each taxonomy category proposes a sentiment bucket
-# (parsing/classification/taxonomy.py). Until the team agrees that mapping,
-# artifacts are still bucketed by these keywords, so the numbers shown do not
-# change. Keywords match whole words, with plural and simple verb endings. Stored
-# identifiers such as "SecurityNotification" or "security_notification" are
-# single words, so "security" no longer files Appendix 3G/3H share notices
-# under risk.
+# These keywords place what the taxonomy cannot: news, announcements the
+# rules could not classify and rows stored under no category. Keywords match
+# whole words, with plural and simple verb endings. Stored identifiers such
+# as "SecurityNotification" or "security_notification" are single words, so
+# "security" does not file Appendix 3G/3H share notices under risk.
 _CATEGORY_KEYWORD_PATTERNS = {
     category: re.compile(
         r"(?<![a-z0-9_])(?:"
@@ -157,7 +155,7 @@ def read_category_sentiment(
     ticker = find_ticker(db, symbol)
     grouped: dict[str, list[AnalysedRow]] = {key: [] for key in CATEGORY_SENTIMENT_KEYS}
     for artifact, sentiment in analysed_rows(db, ticker.id, days=days, limit=limit):
-        for bucket in keyword_buckets_for(artifact):
+        for bucket in buckets_for(artifact):
             grouped[bucket].append((artifact, sentiment))
 
     categories = {
@@ -227,6 +225,17 @@ def analysed_rows(db: Session, ticker_id: UUID, *, days: int, limit: int) -> lis
     )
 
 
+def buckets_for(artifact: Artifact) -> tuple[str, ...]:
+    """The groups an analysed artifact counts in on the research summary.
+
+    The taxonomy decides where it can: a discussion post counts in
+    ``user_discussion`` and a classified announcement in its category's one
+    bucket, or in none. Keywords place everything else.
+    """
+    placed = taxonomy_buckets_for(artifact)
+    return keyword_buckets_for(artifact) if placed is None else placed
+
+
 def taxonomy_buckets_for(artifact: Artifact) -> tuple[str, ...] | None:
     """The groups the taxonomy puts an analysed artifact in, or None when it cannot place it.
 
@@ -246,7 +255,7 @@ def taxonomy_buckets_for(artifact: Artifact) -> tuple[str, ...] | None:
 
 
 def keyword_buckets_for(artifact: Artifact) -> tuple[str, ...]:
-    """The groups keywords put an analysed artifact in.
+    """The groups keywords put an analysed artifact in, the rule before the taxonomy's.
 
     A public discussion post counts only in ``user_discussion``. Anything
     else counts in every bucket a keyword in its category, type, title or

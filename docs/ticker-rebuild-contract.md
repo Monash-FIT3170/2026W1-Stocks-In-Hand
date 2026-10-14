@@ -40,7 +40,7 @@ Event = `{tag,title,date,detail,sources:Source[]}`. date is a DISPLAY date. deta
 
 ### Categories: fetchTickerCategorySentiment(symbol)
 
-GET /sentiment/{symbol} -> `{ticker,status,model_used,latest_analyzed_at,categories}`. status = available/partial/unavailable. categories keys = revenue,strategy,risk,dividend,organisational,user_discussion.
+GET /sentiment/{symbol} -> `{ticker,status,model_used,latest_analyzed_at,categories}`. status = available/partial/unavailable. categories keys = revenue,strategy,risk,dividend,organisational,user_discussion. A classified announcement counts in its category's one bucket, or in none (security notifications); news and unclassified announcements are placed by keyword, possibly in several buckets; public discussion counts only in user_discussion.
 
 Each result = `{summary,available,sentiment_label,label,score,confidence_score,agreement_score,distribution,model_used,chunks_used,chunks_analyzed,sources_count,sources,latest_analyzed_at}`. Numbers nullable; confidence_score is 0..1, ZERO is valid, null is missing. Full summaries must be readable/expandable, with truthful missing evidence, sentiment text and category citations. Category sources = PublicSource[] `{source_type,title?,url?,author?,published_at?}`. Never attach overview citations to another category as evidence.
 

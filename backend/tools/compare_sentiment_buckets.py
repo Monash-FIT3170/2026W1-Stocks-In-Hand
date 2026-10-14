@@ -1,4 +1,4 @@
-"""Compare the keyword and taxonomy sentiment buckets of each ticker, writing nothing.
+"""Compare the taxonomy sentiment buckets with the keyword ones they replaced, writing nothing.
 
 Run from ``backend/``, best with read-only database credentials::
 
@@ -6,10 +6,11 @@ Run from ``backend/``, best with read-only database credentials::
 
 For each catalogue ticker, or the one given, it reads the analysed
 artifacts the category sentiment view reads. For each bucket it prints how
-many count in it and their dominant label under the keyword rule and under
-the taxonomy rule, and how many of the taxonomy rule's were placed by its
-keyword fallback. Then it lists each artifact whose buckets differ. The
-session runs in a read-only transaction and is rolled back.
+many count in it and their dominant label under the keyword rule the view
+used to follow and under the view's taxonomy rule, and how many of the
+taxonomy rule's were placed by its keyword fallback. Then it lists each
+artifact whose buckets differ. The session runs in a read-only transaction
+and is rolled back.
 """
 
 from __future__ import annotations
@@ -64,13 +65,13 @@ def compare(db: Session, symbol: str, *, days: int, limit: int) -> Comparison:
     moves: list[Move] = []
     for artifact, sentiment in rows:
         keyword = ticker_sentiment.keyword_buckets_for(artifact)
-        placed = ticker_sentiment.taxonomy_buckets_for(artifact)
-        taxonomy = keyword if placed is None else placed
+        taxonomy = ticker_sentiment.buckets_for(artifact)
+        placed_by_keyword = ticker_sentiment.taxonomy_buckets_for(artifact) is None
         for bucket in keyword:
             keyword_rows[bucket].append((artifact, sentiment))
         for bucket in taxonomy:
             taxonomy_rows[bucket].append((artifact, sentiment))
-            if placed is None:
+            if placed_by_keyword:
                 fallback[bucket] += 1
         if set(keyword) != set(taxonomy):
             title = artifact.title or str(artifact.id)

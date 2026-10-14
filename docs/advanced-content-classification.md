@@ -101,12 +101,15 @@ stale when its compatibility category changes.
 
 ## Comparing sentiment buckets
 
-Each definition proposes the sentiment bucket its announcements count in on a
-ticker's research summary. The comparison prints, for each catalogue ticker,
-how many analysed artifacts each bucket holds and their dominant label under
-the keyword rule and under the taxonomy rule, how many of the taxonomy rule's
-came from its keyword fallback, and each artifact whose buckets differ. It runs
-in a read-only transaction and writes nothing.
+Each definition names the one sentiment bucket its announcements count in on a
+ticker's research summary, or none. Keywords still place news, announcements
+the rules could not classify and rows with no category. Changing a definition's
+bucket changes every stored announcement of that category at once, with no
+backfill. The comparison prints, for each catalogue ticker, how many analysed
+artifacts each bucket holds and their dominant label under the keyword rule the
+view used to follow and under the taxonomy rule, how many of the taxonomy
+rule's came from its keyword fallback, and each artifact whose buckets differ.
+It runs in a read-only transaction and writes nothing.
 
 ```bash
 cd backend

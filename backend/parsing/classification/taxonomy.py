@@ -2,7 +2,7 @@
 
 Each definition owns every fact about its category: the rules that find it,
 the names it is stored under, its display label, its metric extractor if it
-has one, and the sentiment bucket proposed for it.
+has one, and the sentiment bucket its announcements count in.
 
 This package and ``parsing.categories`` use only the standard library. The
 API image ships them with no other dependency so the category sentiment
@@ -39,9 +39,8 @@ class CategoryDefinition:
 
     ``compatibility_category`` is stored as the artifact's metadata category
     and ``artifact_type`` as its artifact type, so neither may change.
-    ``sentiment_bucket`` is the bucket proposed for the category sentiment
-    view, which still buckets by keyword until the team agrees the mapping.
-    ``None`` means no bucket is proposed.
+    ``sentiment_bucket`` is the one bucket the category sentiment view counts
+    an announcement of this category in. ``None`` means it counts in none.
     """
     identifier: str
     compatibility_category: str
@@ -350,7 +349,7 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
         identifier="executive_transcript",
         compatibility_category="ExecutiveTranscript",
         label="Executive transcript",
-        sentiment_bucket=None,
+        sentiment_bucket="strategy",
         title_phrases=(
             PatternRule("chief_executive_interview", "CEO interview"),
             PatternRule("briefing_transcript", "briefing transcript"),

@@ -498,6 +498,48 @@ def test_category_sentiment_groups_stored_analysis_by_bucket(db_session: Session
 
 
 @pytest.mark.usefixtures("without_model_runtime")
+def test_classified_announcements_count_once_and_news_by_keyword(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    dividend = _artifact(
+        db_session,
+        ticker,
+        day=3,
+        title="Dividend declared after revenue growth",
+        artifact_metadata={"category": "DividendAnnouncement"},
+    )
+    notice = _artifact(
+        db_session,
+        ticker,
+        day=2,
+        title="Notification of issue of securities",
+        artifact_type="security_notification",
+        artifact_metadata={"category": "SecurityNotification"},
+    )
+    news = _artifact(
+        db_session,
+        ticker,
+        day=1,
+        source_type="news",
+        artifact_type="news_article",
+        title="Profit rises",
+        artifact_metadata={"category": "news_article"},
+    )
+    for artifact in (dividend, notice, news):
+        _analyse(db_session, artifact, "positive")
+
+    categories = ticker_sentiment.read_category_sentiment(db_session, ticker.symbol).categories
+
+    assert {
+        bucket: [source.title for source in result.sources]
+        for bucket, result in categories.items()
+        if result.available
+    } == {
+        "dividend": ["Dividend declared after revenue growth"],
+        "revenue": ["Profit rises"],
+    }
+
+
+@pytest.mark.usefixtures("without_model_runtime")
 def test_without_stored_analysis_every_bucket_is_unavailable(db_session: Session) -> None:
     ticker = _ticker(db_session)
     _artifact(db_session, ticker)
@@ -704,8 +746,7 @@ def test_public_discussion_has_a_bucket_of_its_own(source_type: str) -> None:
         category="user_discussion",
     )
 
-    assert ticker_sentiment.keyword_buckets_for(post) == ("user_discussion",)
-    assert ticker_sentiment.taxonomy_buckets_for(post) == ("user_discussion",)
+    assert ticker_sentiment.buckets_for(post) == ("user_discussion",)
 
 
 @pytest.mark.parametrize(
@@ -714,17 +755,20 @@ def test_public_discussion_has_a_bucket_of_its_own(source_type: str) -> None:
         ("DividendAnnouncement", ("dividend",)),
         ("HalfYearResults", ("revenue",)),
         ("CorporateAction", ("strategy",)),
+        ("ExecutiveTranscript", ("strategy",)),
+        ("RegulatoryLegal", ("risk",)),
+        ("LeadershipChange", ("organisational",)),
         ("SecurityNotification", ()),
-        ("ExecutiveTranscript", ()),
     ],
 )
-def test_the_taxonomy_files_a_classified_announcement_under_one_bucket(
+def test_a_classified_announcement_counts_in_its_categorys_bucket_alone(
     category: str,
     buckets: tuple[str, ...],
 ) -> None:
+    # The keywords would file this title under three buckets.
     announcement = _unsaved("Dividend, revenue and director update", category=category)
 
-    assert ticker_sentiment.taxonomy_buckets_for(announcement) == buckets
+    assert ticker_sentiment.buckets_for(announcement) == buckets
 
 
 @pytest.mark.parametrize(
@@ -737,18 +781,11 @@ def test_the_taxonomy_files_a_classified_announcement_under_one_bucket(
     ],
     ids=["news", "unclassified", "no category", "a name no definition has"],
 )
-def test_the_taxonomy_cannot_place_news_or_unclassified_announcements(values: dict) -> None:
-    assert ticker_sentiment.taxonomy_buckets_for(_unsaved("Profit rises", **values)) is None
+def test_keywords_place_what_the_taxonomy_cannot(values: dict) -> None:
+    artifact = _unsaved("Profit rises", **values)
 
-
-def test_security_notifications_are_not_filed_under_risk() -> None:
-    notice = _unsaved(
-        "Notification regarding unquoted securities - CSL",
-        artifact_type="security_notification",
-        category="SecurityNotification",
-    )
-
-    assert "risk" not in ticker_sentiment.keyword_buckets_for(notice)
+    assert ticker_sentiment.taxonomy_buckets_for(artifact) is None
+    assert ticker_sentiment.buckets_for(artifact) == ("revenue",)
 
 
 @pytest.mark.parametrize(
@@ -763,13 +800,13 @@ def test_security_notifications_are_not_filed_under_risk() -> None:
     ],
 )
 def test_keywords_match_whole_words_and_their_inflections(title: str, bucket: str) -> None:
-    assert bucket in ticker_sentiment.keyword_buckets_for(_unsaved(title))
+    assert bucket in ticker_sentiment.buckets_for(_unsaved(title, category="UNKNOWN"))
 
 
 def test_keywords_do_not_match_inside_other_words() -> None:
-    preview = _unsaved("Investor day preview and asterisked notes")
+    preview = _unsaved("Investor day preview and asterisked notes", category="UNKNOWN")
 
-    assert ticker_sentiment.keyword_buckets_for(preview) == ("strategy",)
+    assert ticker_sentiment.buckets_for(preview) == ("strategy",)
 
 
 def test_missing_or_zero_confidence_adds_no_weight() -> None:
