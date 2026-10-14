@@ -4,7 +4,8 @@ The market feed (``/announcements``) and a ticker's news feed show each
 artifact as the same card: a tag, a title, where it came from with a link to
 the original, and the about, changed and matters lines of its summary. A
 line the summary does not have is None. A card never shows placeholder text
-or the artifact's raw text in place of a summary.
+or the artifact's raw text in place of a summary. A ticker's brief and deep
+dive show an artifact's tag and sources the same way.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def artifact_card(artifact: Artifact) -> ArtifactCard:
     source_name, source_label = _origin(artifact, source_type, metadata)
     summary = artifact_summary.read(artifact)
     return ArtifactCard(
-        tag=label(metadata.get("category"), artifact.artifact_type),
+        tag=tag(artifact),
         title=_clean_text(artifact.title) or f"Untitled {label(source_type, 'market update')}",
         source_type=source_type,
         source_name=source_name,
@@ -55,6 +56,12 @@ def artifact_card(artifact: Artifact) -> ArtifactCard:
         changed=_clean_text(summary.changed) if summary else None,
         matters=_clean_text(summary.matters) if summary else None,
     )
+
+
+def tag(artifact: Artifact) -> str:
+    """The display name of the artifact's category, else of its artifact type."""
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    return label(metadata.get("category"), artifact.artifact_type)
 
 
 def sources(artifact: Artifact) -> list[dict[str, Any]]:

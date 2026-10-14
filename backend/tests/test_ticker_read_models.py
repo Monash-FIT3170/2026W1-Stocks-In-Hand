@@ -21,25 +21,29 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
+import main
 from app.api.routes import category_sentiment
 from app.api.routes import ticker as ticker_route
 from app.core.config import settings
+from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
-from app.read_models import ticker_sentiment
+from app.read_models import ticker_brief, ticker_sentiment
 from app.read_models.ticker_records import TickerNotFound
 from app.schemas.public_discussion import PublicDiscussionSource
+from app.schemas.ticker_brief import KeyNumber, TickerBrief, TickerOverview
 from app.services import artifact_summary
 from app.services.artifact_summary import Summary
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
-from app.services.quotes import FixedQuotes
+from app.services.quotes import FixedQuotes, Quote, QuoteSource, live_quotes
 
 ANNOUNCEMENT_ANSWER = {
     "summary": "ANZ confirmed its first-half profit.",
@@ -180,9 +184,59 @@ def _record(db: Session, artifact: Artifact, answer: dict) -> Summary:
     return summary
 
 
-def _overview(db: Session, ticker: Ticker) -> dict:
-    brief = ticker_route.get_ticker_brief(ticker.symbol.lower(), db=db, quotes=FixedQuotes())
-    return brief["overview"]
+def _brief(db: Session, ticker: Ticker, quotes: QuoteSource | None = None) -> TickerBrief:
+    return ticker_brief.read_ticker_brief(
+        db, ticker.symbol.lower(), quotes=quotes or FixedQuotes()
+    )
+
+
+def _overview(db: Session, ticker: Ticker) -> TickerOverview:
+    return _brief(db, ticker).overview
+
+
+@contextmanager
+def _api(db: Session, quotes: QuoteSource | None = None) -> Iterator[TestClient]:
+    """The app, reading through the test's session and a fixed quote source."""
+    main.app.dependency_overrides[get_db] = lambda: db
+    main.app.dependency_overrides[live_quotes] = lambda: quotes or FixedQuotes()
+    try:
+        yield TestClient(main.app)
+    finally:
+        main.app.dependency_overrides.pop(get_db, None)
+        main.app.dependency_overrides.pop(live_quotes, None)
+
+
+@pytest.mark.usefixtures("without_model_runtime")
+def test_a_ticker_with_no_records_has_an_empty_brief(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+
+    brief = _brief(db_session, ticker)
+
+    overview = brief.overview
+    assert (overview.current_price, overview.day_change) == ("N/A", "N/A")
+    assert overview.last_updated == "No updates yet"
+    assert overview.story is None
+    assert (overview.sources, overview.sources_count) == ([], 0)
+    assert (overview.sentiment_status, overview.sentiment_label) == ("unavailable", "Unavailable")
+    assert overview.latest_signal_confidence_pct == "N/A"
+    assert brief.aside.key_numbers == [
+        KeyNumber(label="Latest filing", value="No filings yet"),
+        KeyNumber(label="Latest type", value="No filings yet"),
+    ]
+    assert brief.aside.themes == []
+
+
+def test_the_brief_formats_the_quote_it_asks_for_once(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    quotes = FixedQuotes({ticker.symbol: Quote(price=31.25, previous_close=30.0)})
+
+    overview = _brief(db_session, ticker, quotes).overview
+
+    assert (overview.current_price, overview.day_change) == ("$31.25", "+4.17%")
+    assert quotes.requested == [ticker.symbol]
+    unchanged = FixedQuotes({ticker.symbol: Quote(price=5.0, previous_close=0.0)})
+    no_close = _brief(db_session, ticker, unchanged).overview
+    assert (no_close.current_price, no_close.day_change) == ("$5.00", "N/A")
 
 
 def test_the_brief_tells_the_latest_summary_and_its_clarity(db_session: Session) -> None:
@@ -191,8 +245,8 @@ def test_the_brief_tells_the_latest_summary_and_its_clarity(db_session: Session)
 
     overview = _overview(db_session, ticker)
 
-    assert overview["story"] == ANNOUNCEMENT_ANSWER["about"]
-    assert overview["clarity"] == {
+    assert overview.story == ANNOUNCEMENT_ANSWER["about"]
+    assert overview.clarity.model_dump() == {
         "is_classified": True,
         "confirmed_facts": ANNOUNCEMENT_ANSWER["confirmed_facts"],
         "speculation": ANNOUNCEMENT_ANSWER["speculation"],
@@ -210,8 +264,8 @@ def test_the_brief_has_no_story_and_no_clarity_without_a_summary(
     latest_unsummarised = _overview(db_session, ticker)
 
     for overview in (no_records, latest_unsummarised):
-        assert overview["story"] is None
-        assert overview["clarity"] == UNCLASSIFIED
+        assert overview.story is None
+        assert overview.clarity.model_dump() == UNCLASSIFIED
 
 
 @pytest.mark.usefixtures("without_model_runtime")
@@ -221,13 +275,68 @@ def test_the_brief_shows_the_latest_signal(db_session: Session) -> None:
 
     overview = _overview(db_session, ticker)
 
-    assert overview["sentiment_status"] == "available"
-    assert overview["sentiment_label"] == "Generally Positive"
-    assert overview["latest_signal_confidence_pct"] == "91%"
-    assert overview["latest_signal_model"] == "ProsusAI/finbert"
-    assert datetime.fromisoformat(overview["latest_signal_analyzed_at"]) == datetime(
+    assert overview.sentiment_status == "available"
+    assert overview.sentiment_label == "Generally Positive"
+    assert overview.latest_signal_confidence_pct == "91%"
+    assert overview.latest_signal_model == "ProsusAI/finbert"
+    assert datetime.fromisoformat(overview.latest_signal_analyzed_at) == datetime(
         2040, 2, 4, tzinfo=timezone.utc
     )
+
+
+def test_the_aside_names_the_latest_filing_and_the_kinds_of_record(
+    db_session: Session,
+) -> None:
+    ticker = _ticker(db_session)
+    _artifact(db_session, ticker, day=1, artifact_metadata={"category": "DividendAnnouncement"})
+    _artifact(db_session, ticker, day=2, source_type="news", artifact_type="news_article")
+    _artifact(db_session, ticker, day=3, artifact_metadata={"category": "HalfYearResults"})
+    _artifact(db_session, ticker, day=4, artifact_metadata={"category": "HalfYearResults"})
+
+    aside = _brief(db_session, ticker).aside
+
+    assert aside.key_numbers == [
+        KeyNumber(label="Latest filing", value="Jan 2040"),
+        KeyNumber(label="Latest type", value="Half Year Results"),
+    ]
+    assert aside.themes == [
+        "Half Year Results activity",
+        "News Article activity",
+        "Dividend Announcement activity",
+    ]
+
+
+def test_the_brief_finds_the_ticker_with_its_exchange_suffix(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    quotes = FixedQuotes()
+
+    brief = ticker_brief.read_ticker_brief(db_session, f"{ticker.symbol}.AX", quotes=quotes)
+
+    assert brief.overview.symbol == ticker.symbol
+    assert quotes.requested == [ticker.symbol]
+    with pytest.raises(TickerNotFound):
+        ticker_brief.read_ticker_brief(db_session, "NOT-A-TICKER", quotes=quotes)
+
+
+def test_the_brief_route_answers_the_brief_schema(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    _record(db_session, _artifact(db_session, ticker, url="https://example.test/a"), NEWS_ANSWER)
+    quotes = FixedQuotes({ticker.symbol: Quote(price=31.25, previous_close=30.0)})
+
+    with _api(db_session, quotes) as client:
+        response = client.get(f"/tickers/symbol/{ticker.symbol}/brief")
+        missing = client.get("/tickers/symbol/NOT-A-TICKER/brief")
+
+    assert response.status_code == 200
+    brief = response.json()
+    assert set(brief["overview"]) == set(TickerOverview.model_fields)
+    assert brief["overview"]["current_price"] == "$31.25"
+    assert [source["url"] for source in brief["overview"]["sources"]] == ["https://example.test/a"]
+    assert [number["label"] for number in brief["aside"]["key_numbers"]] == [
+        "Latest filing",
+        "Latest type",
+    ]
+    assert missing.status_code == 404
 
 
 def test_the_deep_dive_detail_is_the_recorded_summary_text(db_session: Session) -> None:

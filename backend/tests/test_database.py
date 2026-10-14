@@ -48,7 +48,6 @@ from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 from app.services.artifact_summary import Summary
-from app.services.quotes import FixedQuotes, Quote
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
 # Every application table at the current Alembic head. Kept as an exact set so a
@@ -841,69 +840,6 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     trend = next(item for item in trending if item.symbol == symbol)
 
     assert trend.count == 3
-
-
-def test_ticker_brief_aside_returns_empty_database_state(
-    db_session: Session,
-) -> None:
-    """The ticker sidebar API should not fall back to mocked values."""
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"E{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Empty Sidebar Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    result = ticker_route.get_ticker_brief(
-        symbol.lower(), db=db_session, quotes=FixedQuotes()
-    )["aside"]
-
-    assert result["key_numbers"] == [
-        {"label": "Current price", "value": "N/A"},
-        {"label": "Day change", "value": "N/A"},
-        {"label": "Latest filing", "value": "No filings yet"},
-        {"label": "Latest type", "value": "No filings yet"},
-    ]
-    assert result["themes"] == []
-
-
-def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
-    """The overview API should format the live quote it is given.
-
-    The quote is fetched from Yahoo at request time rather than stored, so a
-    fixed quote source stands in for it and only the formatting and failure
-    handling are under test.
-    """
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"Q{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Quote Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    quotes = FixedQuotes({symbol: Quote(price=31.25, previous_close=30.0)})
-    result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session, quotes=quotes)[
-        "overview"
-    ]
-
-    assert result["current_price"] == "$31.25"
-    assert result["day_change"] == "+4.17%"
-    assert quotes.requested == [symbol]
-
-    unavailable = ticker_route.get_ticker_brief(
-        symbol.lower(), db=db_session, quotes=FixedQuotes()
-    )["overview"]
-
-    assert unavailable["current_price"] == "N/A"
-    assert unavailable["day_change"] == "N/A"
 
 
 def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:

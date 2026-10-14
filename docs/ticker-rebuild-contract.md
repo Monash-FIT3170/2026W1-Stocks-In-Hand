@@ -12,17 +12,17 @@ Read components/layout/AppFrame.jsx and AppFrame.module.css for nav/tokens/fonts
 
 ## API reads
 
-Frontend /api proxies to localhost:8000. Both servers and Supabase are running. Use existing fetch helpers only. The authoritative backend contracts are backend/app/api/routes/ticker.py, schemas/category_sentiment.py, schemas/public_discussion.py. GET brief initializes supported ticker records; other requests may wait for brief on a fresh DB. 404, empty arrays, nulls and request failures need independent honest handling. Do not run POST scrape/generate routes.
+Frontend /api proxies to localhost:8000. Both servers and Supabase are running. Use existing fetch helpers only. The authoritative backend contracts are the response schemas in backend/app/schemas (ticker_brief.py, category_sentiment.py, public_discussion.py) and, for records and history, backend/app/api/routes/ticker.py. A migrated database already holds every supported ticker. 404, empty arrays, nulls and request failures need independent honest handling. Do not run POST scrape/generate routes.
 
 ### Brief: fetchTickerBrief(symbol)
 
 GET /tickers/symbol/{symbol}/brief -> `{overview,aside}`.
 
-overview = `{symbol,company_name,sector,current_price,day_change,last_updated,story,sources_count,sources,clarity,sentiment_status,sentiment_label,latest_signal_confidence_pct,latest_signal_model,latest_signal_analyzed_at}`. Price/day change are formatted strings, N/A when quote fails. last_updated is source display date, not quote time. story is the latest record's stored summary (its about line, else its summary line), or null when that record has no summary. sources_count counts this brief's links, not all records. Sentiment label = Generally Positive/Generally Negative/Neutral/Unavailable; status = available/unavailable. Confidence is formatted percentage or N/A and describes the latest filing model classification, NOT public sentiment, return probability or investment advice. Do NOT use deprecated public_sentiment_pct. Model and analysis ISO timestamp may be null.
+overview = `{symbol,company_name,sector,current_price,day_change,last_updated,story,sources_count,sources,clarity,sentiment_status,sentiment_label,latest_signal_confidence_pct,latest_signal_model,latest_signal_analyzed_at}`. Price/day change are formatted strings, N/A when quote fails. last_updated is source display date, not quote time. story is the latest record's stored summary (its about line, else its summary line), or null when that record has no summary. sources_count counts this brief's links, not all records. Sentiment label = Generally Positive/Generally Negative/Neutral/Unavailable; status = available/unavailable. Confidence is formatted percentage or N/A and describes the latest filing model classification, NOT public sentiment, return probability or investment advice. Model and analysis ISO timestamp may be null.
 
 clarity = `{is_classified:boolean,confirmed_facts:string[],speculation:string[]}`. Keep factual claims distinct from interpretation; explicit unclassified state and AI-assisted attribution. Never infer facts/interpretations from prose when arrays are missing.
 
-aside = `{key_numbers:{label,value}[],themes:string[]}`. Key numbers include price, day change, latest filing date and type. Themes are filing category activity, not financial conclusions.
+aside = `{key_numbers:{label,value}[],themes:string[]}`. Key numbers are the latest filing's date and type; price and day change are in the overview only. Themes are filing category activity, not financial conclusions.
 
 Source = `{label,title,url,published_at:ISO|null,evidence_text:string|null}`. Keep original links meaningful, validate HTTP(S) URLs and dates, external rel noreferrer/noopener. Missing source links remain visibly missing.
 
