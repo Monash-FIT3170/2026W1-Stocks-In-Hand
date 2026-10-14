@@ -15,7 +15,6 @@ from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -47,6 +46,7 @@ from lambdas.artifact_analysis import (
     SentimentScorer,
     Summarised,
     SummaryUnavailable,
+    analyse_downloaded_document,
     analyse_stored_document,
     analyse_stored_text,
     deployed_ports,
@@ -56,9 +56,8 @@ from lambdas.artifact_analysis import (
 )
 from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from lambdas.common import PermanentDocumentError
-from lambdas.download_validation import validated_document
+from lambdas.download_validation import DownloadedDocument, validated_document
 from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
-from parsing import storage
 
 BACKEND = Path(__file__).resolve().parents[1]
 HALF_YEAR_REPORT = "Half year report for the six months ended 31 December 2025."
@@ -193,16 +192,30 @@ def _pipeline_announcement(db: Session, *, title: str = "CSL half year results")
     return run, artifact
 
 
+def _document(artifact: Artifact, text: str = HALF_YEAR_REPORT) -> DownloadedDocument:
+    return validated_document(
+        text.encode(),
+        declared_content_type="text/plain",
+        final_url=artifact.document_url,
+        max_bytes=4096,
+    )
+
+
 def _put(store: RawDocumentStore, artifact: Artifact, text: str = HALF_YEAR_REPORT):
-    return store.put(
-        ticker="CSL",
-        artifact_id=artifact.id,
-        document=validated_document(
-            text.encode(),
-            declared_content_type="text/plain",
-            final_url=artifact.document_url,
-            max_bytes=4096,
-        ),
+    return store.put(ticker="CSL", artifact_id=artifact.id, document=_document(artifact, text))
+
+
+def _local_announcement(db: Session, document_url: str) -> Artifact:
+    """An announcement the local loader found, with no scrape run."""
+    return _artifact(
+        db,
+        source_type="asx_announcement",
+        artifact_type="asx_announcement_other",
+        source_adapter="csl",
+        title="CSL half year results",
+        raw_text="",
+        document_url=document_url,
+        artifact_metadata={},
     )
 
 
@@ -931,6 +944,54 @@ def test_the_repair_refuses_a_provider_that_is_not_bedrock(db_session: Session) 
         repair_missing_summaries(apply=True, limit=1, ports=_ports(db_session))
 
 
+def test_a_downloaded_document_is_recorded_as_the_worker_records_the_same_bytes(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    """The local loader read PDFs with pypdf only, kept four summary fields,
+    dropped the clarity lists and the prompt version, and set no status."""
+    run, stored_copy, stored = _stored_document(db_session, store)
+    local = _local_announcement(db_session, stored_copy.document_url)
+    worker_ports = _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store)
+    alerts: list[NotificationMessage] = []
+    loader_ports = _ports(db_session, ANNOUNCEMENT_ANSWER, alerts=alerts.append)
+
+    analyse_stored_document(stored.location, worker_ports)
+    outcome = analyse_downloaded_document(local.id, _document(local), loader_ports)
+
+    db_session.refresh(stored_copy)
+    db_session.refresh(local)
+    db_session.refresh(run)
+    assert isinstance(outcome, Analysed)
+    assert local.artifact_metadata == stored_copy.artifact_metadata
+    assert (local.raw_text, local.artifact_type) == (
+        stored_copy.raw_text,
+        stored_copy.artifact_type,
+    )
+    assert artifact_summary.read(local) == artifact_summary.read(stored_copy)
+    assert loader_ports.scorer.scored == worker_ports.scorer.scored
+    assert loader_ports.provider.calls == worker_ports.provider.calls
+    assert (local.analysis_status, local.download_status) == (
+        AnalysisStatus.COMPLETED,
+        DownloadStatus.PENDING,
+    )
+    assert run.items_analyzed == 1
+    assert alerts == []
+
+
+def test_a_downloaded_document_already_analysed_is_not_analysed_again(
+    db_session: Session,
+) -> None:
+    local = _local_announcement(db_session, "https://investors.csl.com/pdf/report.pdf")
+    analyse_downloaded_document(local.id, _document(local), _ports(db_session, ANNOUNCEMENT_ANSWER))
+    ports = _ports(db_session)
+
+    outcome = analyse_downloaded_document(local.id, _document(local), ports)
+
+    assert outcome == AlreadyAnalysed(artifact_id=local.id, run_id=None)
+    assert ports.scorer.scored == []
+
+
 def test_every_path_gives_finbert_the_title_and_text(
     db_session: Session,
     store: RawDocumentStore,
@@ -955,10 +1016,12 @@ def test_every_path_gives_finbert_the_title_and_text(
         raw_text=raw_text,
         artifact_metadata={"summary": "A generated summary that must not be scored."},
     )
-    _run, _announcement, stored = _stored_document(db_session, store)
+    _run, announcement, stored = _stored_document(db_session, store)
+    local = _local_announcement(db_session, announcement.document_url)
     ports = _ports(
         db_session,
         NEWS_ANSWER,
+        ANNOUNCEMENT_ANSWER,
         ANNOUNCEMENT_ANSWER,
         scorer=FinBertScorer(),
         documents=store,
@@ -966,16 +1029,14 @@ def test_every_path_gives_finbert_the_title_and_text(
 
     analyse_stored_text(story.id, ports)
     analyse_stored_document(stored.location, ports)
-    local_input = storage._artifact_sentiment_text(
-        SimpleNamespace(title=title, raw_text=raw_text),
-        raw_text,
-    )
+    analyse_downloaded_document(local.id, _document(local), ports)
 
+    report = f"CSL half year results\n\n{HALF_YEAR_REPORT}"
     assert [call.args[0] for call in finbert.call_args_list] == [
         f"{title}\n\n{raw_text}",
-        f"CSL half year results\n\n{HALF_YEAR_REPORT}",
+        report,
+        report,
     ]
-    assert local_input == f"{title}\n\n{raw_text}"
     [sentiment] = _rows(db_session, ArtifactSentiment, story)
     assert (sentiment.sentiment_label, sentiment.stance, sentiment.model_used) == (
         "positive",

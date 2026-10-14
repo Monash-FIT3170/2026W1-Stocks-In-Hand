@@ -26,8 +26,8 @@ RUN HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python -c "import torch; from transf
 COPY app ${LAMBDA_TASK_ROOT}/app
 COPY lambdas ${LAMBDA_TASK_ROOT}/lambdas
 
-# Only the modules the analysis handler actually imports. parsing/env.py and
-# parsing/print_artifacts.py are local CLI-only tools and are deliberately not
+# Only the modules the analysis handler actually imports.
+# parsing/print_artifacts.py is a local CLI-only tool and is deliberately not
 # shipped into the Lambda image.
 COPY parsing/__init__.py parsing/analysis.py parsing/classification_metadata.py \
     ${LAMBDA_TASK_ROOT}/parsing/

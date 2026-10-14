@@ -1,13 +1,14 @@
 """Artifact analysis: analyse one artifact and record the result.
 
-An announcement is read from its stored document and classified by the
-rules, which extract its category's fields, and it is stored under the
-category's artifact type. News and public discussion are analysed from the
-text their collector stored and keep the type their collector set. Either
-way FinBERT scores the artifact's title and text, the LLM summarises it
-with the prompt for its kind, and the records store the text, the summary
-and the sentiment and complete the analysis. A scrape run's announcement
-with an alertable sentiment is then sent to alert delivery.
+An announcement is read from its stored document, or from one the local
+loader downloaded, and classified by the rules, which extract its
+category's fields; it is stored under the category's artifact type. News
+and public discussion are analysed from the text their collector stored and
+keep the type their collector set. Either way FinBERT scores the artifact's
+title and text, the LLM summarises it with the prompt for its kind, and the
+records store the text, the summary and the sentiment and complete the
+analysis. A scrape run's announcement with an alertable sentiment is then
+sent to alert delivery.
 
 ``summarise`` writes a new summary from the stored text and changes nothing
 else, and ``repair_missing_summaries`` uses it to complete the summaries of
@@ -16,7 +17,8 @@ analysed announcements.
 The module reaches outside code only through ``AnalysisPorts``: the
 records, whose one adapter is ``PostgresAnalysisRecords``, the sentiment
 scorer, the LLM provider, the raw document store and the alert sender.
-``deployed_ports`` builds them for the analysis Lambda.
+``deployed_ports`` builds them for the analysis Lambda and ``local_ports``
+for the local loader.
 
 A ``PermanentDocumentError`` means a retry cannot help. Any other exception,
 including generation's ``RuntimeError`` and ``ValueError``, is worth
@@ -47,7 +49,7 @@ from lambdas.common import (
     database_session,
     load_runtime_configuration,
 )
-from lambdas.download_validation import DocumentFormat
+from lambdas.download_validation import DocumentFormat, DownloadedDocument
 from lambdas.raw_documents import (
     DocumentLocation,
     RawDocumentStore,
@@ -332,6 +334,32 @@ def analyse_stored_document(
     )
 
 
+def analyse_downloaded_document(
+    artifact_id: UUID,
+    document: DownloadedDocument,
+    ports: AnalysisPorts,
+) -> Analysed | AlreadyAnalysed:
+    """Analyse a document the caller downloaded itself, as the local loader does.
+
+    The document is read, classified and recorded exactly as a stored one.
+    There is no stored copy to check, and an artifact with no scrape run
+    sends no alert. Raises ``PermanentDocumentError`` with
+    ``artifact_not_found`` when the artifact does not exist.
+    """
+    facts = _facts(artifact_id, ports)
+    if facts.completed:
+        return AlreadyAnalysed(artifact_id=artifact_id, run_id=facts.run_id)
+
+    ports.records.start(artifact_id)
+    return _analyse_document(
+        facts,
+        document.content,
+        document.document_format,
+        ports,
+        fallback_filename=None,
+    )
+
+
 def analyse_stored_text(
     artifact_id: UUID,
     ports: AnalysisPorts,
@@ -517,6 +545,17 @@ def deployed_ports() -> AnalysisPorts:
             if notifications_enabled
             else None
         ),
+    )
+
+
+def local_ports() -> AnalysisPorts:
+    """The ports the local loader runs with: no raw document store and no alerts."""
+    # Imported on use, as in deployed_ports.
+    from lambdas.artifact_analysis_records import PostgresAnalysisRecords
+
+    return AnalysisPorts(
+        records=PostgresAnalysisRecords(database_session),
+        scorer=FinBertScorer(),
     )
 
 

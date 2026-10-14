@@ -244,14 +244,17 @@ docker compose down -v     # stop + wipe the database
 `docker-compose-dev.yml` includes a one-shot `content-bootstrap` service. After
 the backend is healthy it checks the official company sources for the supported
 tickers, processes at most three announcements per ticker from the last year,
-and exits. Existing documents and complete summaries are retained, so the job
-is safe to run again on later Docker starts.
+and exits. It analyses each document in its own process through the same
+artifact analysis module as the AWS analysis worker, so the document is read
+with the OCR fallback, classified, scored by FinBERT and summarised, and needs
+no queues. A document already analysed is not analysed again, so the job is
+safe to run again on later Docker starts.
 
 Local Docker uses the Groq fallback by default. Add `GROQ_API_KEY` to the
 untracked `backend/.env` to generate structured summaries. Without a key, the
-website still starts and collected announcements remain available, but summary
-generation is skipped. The bootstrap is development-only and is not used by
-the AWS deployment.
+website still starts and collected announcements are analysed without a
+summary; a later run with a key summarises them. The bootstrap is
+development-only and is not used by the AWS deployment.
 
 To start the application without running collection, name only the long-running
 services:

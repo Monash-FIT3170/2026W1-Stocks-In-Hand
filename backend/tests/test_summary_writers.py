@@ -7,13 +7,14 @@ title. The repair operation had its own rule for an incomplete summary.
 Here each writer summarises one artifact from the same scripted answer, and
 every one must read back the same summary from one row. The worker's
 document path is covered in test_pipeline_stages.py. The admin summary
-routes now queue a summary request, the writer here.
+routes now queue a summary request, and the local loader analyses through
+the artifact analysis module, so those are the writers here.
 """
 
 import json
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -33,12 +34,10 @@ from app.services import artifact_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.status import AnalysisStatus
-from lambdas import analysis, pipeline_stage
+from lambdas import analysis, artifact_analysis, pipeline_stage
 from lambdas.artifact_analysis import AnalysisPorts, FinBertScorer
 from lambdas.artifact_analysis_records import PostgresAnalysisRecords
-from parsing import storage
-from parsing.classification import ClassificationInput, classify_document
-from scrapers.base import Announcement
+from lambdas.download_validation import validated_document
 
 MODEL = "bedrock:test-model"
 ANNOUNCEMENT_ANSWER = {
@@ -115,20 +114,17 @@ def bedrock(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    @contextmanager
-    def test_session():
-        yield db
-
-    monkeypatch.setattr(pipeline_stage, "database_session", test_session)
-    monkeypatch.setattr(
-        analysis,
-        "deployed_ports",
-        lambda: AnalysisPorts(
-            records=PostgresAnalysisRecords(test_session),
-            scorer=FinBertScorer(),
-        ),
+def _ports(db: Session) -> AnalysisPorts:
+    """The ports the analysis worker and the local loader use, over the test session."""
+    return AnalysisPorts(
+        records=PostgresAnalysisRecords(lambda: nullcontext(db)),
+        scorer=FinBertScorer(),
     )
+
+
+def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline_stage, "database_session", lambda: nullcontext(db))
+    monkeypatch.setattr(analysis, "deployed_ports", lambda: _ports(db))
 
 
 def _artifact(db: Session, **values) -> Artifact:
@@ -166,34 +162,27 @@ def _news(db: Session) -> Artifact:
     )
 
 
-def _local_loader(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    monkeypatch.setattr(storage, "SessionLocal", lambda: db)
-    monkeypatch.setattr(storage.time, "sleep", lambda _seconds: None)
-    raw_text = f"{ANNOUNCEMENT_TEXT} {uuid.uuid4()}"
-    announcement = Announcement(
-        ticker="CSL",
+def _local_loader(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
+    artifact = _artifact(
+        db,
+        source_type="asx_announcement",
+        artifact_type="asx_announcement_other",
+        source_adapter="csl",
         title="Half Year Results",
-        date=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        pdf_url=f"https://investors.csl.com/pdf/{uuid.uuid4()}.pdf",
-        source_url="https://investors.csl.com/investors/asx-announcements",
+        raw_text="",
+        document_url=f"https://investors.csl.com/pdf/{uuid.uuid4()}.pdf",
     )
-    storage.store(
-        announcement,
-        classification=classify_document(
-            ClassificationInput(
-                title=announcement.title,
-                text=raw_text,
-                filename="report.pdf",
-                source_type="asx_announcement",
-                source_adapter="csl",
-            )
+    artifact_analysis.analyse_downloaded_document(
+        artifact.id,
+        validated_document(
+            ANNOUNCEMENT_TEXT.encode(),
+            declared_content_type="text/plain",
+            final_url=artifact.document_url,
+            max_bytes=4096,
         ),
-        extracted_data={},
-        raw_text=raw_text,
+        _ports(db),
     )
-    return db.scalars(
-        select(Artifact).where(Artifact.content_hash == storage.compute_content_hash(raw_text))
-    ).one()
+    return artifact
 
 
 def _analysed_announcement(db: Session, created_day: int, answer: dict) -> Artifact:
