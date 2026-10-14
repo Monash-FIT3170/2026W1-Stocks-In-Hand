@@ -561,6 +561,27 @@ def test_emails_link_to_the_live_frontend_url_without_a_custom_domain() -> None:
     assert planned.parameters["FrontendBaseUrl"] == Value("https://d111.cloudfront.net", "derived")
 
 
+def test_only_a_reviewed_change_set_removes_the_custom_domain() -> None:
+    """SAM refused the old unquoted SiteDomainName=, so an unset variable failed the deploy."""
+    aws = FakeAws(live_stack(**CUSTOM_DOMAIN))
+    removed = dict.fromkeys(CUSTOM_DOMAIN, "")
+
+    plan(aws, **CUSTOM_DOMAIN)
+    change_set = plan(aws, execute=False, **removed)
+    with pytest.raises(ReleaseError) as error:
+        plan(aws, **removed)
+
+    assert change_set.parameters["SiteDomainName"] == Value("", "set")
+    assert change_set.parameters["FrontendBaseUrl"] == Value(
+        "https://d111.cloudfront.net", "derived"
+    )
+    assert problems(error) == [
+        "SiteDomainName is empty, so this release would remove the custom domain "
+        "app.example.com. Set it, or remove the domain through a reviewed change set "
+        "(--no-execute)."
+    ]
+
+
 def test_a_live_stack_without_a_frontend_url_output_is_refused() -> None:
     stack = live_stack()
     stack.outputs.pop("FrontendUrl")

@@ -364,8 +364,9 @@ def plan_release(
 ) -> ReleasePlan:
     """Plan a deploy of the images built from ``release_sha``.
 
-    ``execute`` needs a live stack: a new stack is only ever created through
-    a change set someone has reviewed.
+    ``execute`` needs a live stack and never removes its custom domain: a
+    new stack is only ever created, and a custom domain only removed,
+    through a change set someone has reviewed.
     """
     return _plan(
         aws,
@@ -459,6 +460,12 @@ def _plan(
         problems.append(
             "The live ApiImageUri is not tagged with a full release SHA, so a failed "
             "health check could not prepare a rollback"
+        )
+    domain = live.get("SiteDomainName", "")
+    if execute and domain and not values["SiteDomainName"].value:
+        problems.append(
+            f"SiteDomainName is empty, so this release would remove the custom domain {domain}. "
+            "Set it, or remove the domain through a reviewed change set (--no-execute)."
         )
     if rollback:
         problems += _missing_images(aws, release_sha)

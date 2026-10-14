@@ -438,9 +438,12 @@ In GitHub:
 8. remove the environment reviewer after the branch restriction is active; and
 9. merge an approved pull request to start **Deploy staging release**.
 
-Every release passes these five variables as they are set, so removing
-`ALERT_SENDER_EMAIL` or a `SITE_*` variable clears that parameter on the next
-release, and the plan refuses an empty `OPERATIONS_EMAIL`.
+Every release passes these five variables as they are set, and the plan
+refuses an empty `OPERATIONS_EMAIL`. Removing `ALERT_SENDER_EMAIL` clears the
+sender on the next release, which the plan refuses while notifications are on.
+Removing `SITE_DOMAIN_NAME` stops the next automatic release, because only a
+reviewed change set may remove the custom domain: run **Deploy staging
+release** by hand and have Person 1 review its change set.
 
 The custom domain needs all three `SITE_*` variables. Deploy `infra/domain.yaml`
 in `us-east-1` and copy its `SiteDomainName`, `CertificateArn` and

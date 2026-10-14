@@ -217,7 +217,9 @@ jobs:
           DEPLOY_MODE: ${{ github.event_name == 'workflow_dispatch' && '--no-execute' || '--execute' }}
         # The plan checks every value against the template's constraints and
         # rules, and checks the Brevo and Marketaux secrets when their switch
-        # is on, before any image is built.
+        # is on, before any image is built. A push refuses to remove the
+        # custom domain, so an unset SITE_DOMAIN_NAME clears it only in a
+        # manual run's reviewed change set.
         run: |
           python -m tools.release plan "$DEPLOY_MODE" \
             --stack-name "$STACK_NAME" \
