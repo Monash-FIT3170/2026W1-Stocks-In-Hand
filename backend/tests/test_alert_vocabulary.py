@@ -1,8 +1,10 @@
-"""Every alert layer accepts the same sentiment labels.
+"""Every alert layer uses the same alert vocabulary.
 
 Neutral-only rules used to be accepted by the settings page, the preferences
 schema and rule validation, then dropped by the analysis producer and rejected
-by NotificationMessage, so they never fired.
+by NotificationMessage, so they never fired. The settings page is checked
+against the vocabulary's labels, verification statuses and delivery problem
+statuses.
 """
 
 import re
@@ -16,7 +18,12 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.alert_vocabulary import ALERT_SENTIMENT_LABELS, DEFAULT_ALERT_MIN_CONFIDENCE
+from app.alert_vocabulary import (
+    ALERT_SENTIMENT_LABELS,
+    DEFAULT_ALERT_MIN_CONFIDENCE,
+    DELIVERY_PROBLEM_STATUSES,
+    VerificationStatus,
+)
 from app.crud.alert_rule import KNOWN_SENTIMENT_LABELS
 from app.messages import NotificationMessage
 from app.models.alert_rule import AlertRule
@@ -89,8 +96,8 @@ def test_a_new_rule_wants_the_vocabulary_threshold() -> None:
     assert AlertRule.__table__.c.min_confidence.default.arg == DEFAULT_ALERT_MIN_CONFIDENCE
 
 
-def test_settings_page_offers_exactly_the_alertable_labels() -> None:
-    page = (
+def _settings_page() -> str:
+    return (
         REPOSITORY_ROOT
         / "frontend"
         / "src"
@@ -99,6 +106,25 @@ def test_settings_page_offers_exactly_the_alertable_labels() -> None:
         / "notifications"
         / "page.jsx"
     ).read_text(encoding="utf-8")
-    options = page.split("const SENTIMENT_OPTIONS = [", 1)[1].split("]", 1)[0]
+
+
+def test_settings_page_offers_exactly_the_alertable_labels() -> None:
+    options = _settings_page().split("const SENTIMENT_OPTIONS = [", 1)[1].split("]", 1)[0]
 
     assert set(re.findall(r'value: "([a-z]+)"', options)) == ALERT_SENTIMENT_LABELS
+
+
+def test_settings_page_has_copy_for_exactly_the_verification_statuses() -> None:
+    copy = _settings_page().split("const VERIFICATION_COPY = {", 1)[1].split("\n}\n", 1)[0]
+
+    assert set(re.findall(r"^  ([a-z_]+): \{", copy, re.MULTILINE)) == set(
+        VerificationStatus
+    )
+
+
+def test_settings_page_reports_exactly_the_delivery_problem_statuses() -> None:
+    statuses = _settings_page().split("const DELIVERY_PROBLEM_STATUSES = [", 1)[1]
+
+    assert set(re.findall(r'"([a-z_]+)"', statuses.split("]", 1)[0])) == (
+        DELIVERY_PROBLEM_STATUSES
+    )

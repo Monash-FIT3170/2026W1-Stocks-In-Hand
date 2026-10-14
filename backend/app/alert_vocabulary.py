@@ -58,3 +58,9 @@ class VerificationStatus(StrEnum):
     PENDING = "pending"
     VERIFIED = "verified"
     FAILED = "failed"
+
+
+# The last delivery statuses the alert settings page reports as a problem.
+DELIVERY_PROBLEM_STATUSES: frozenset[DeliveryStatus] = frozenset(
+    {DeliveryStatus.FAILED, DeliveryStatus.REJECTED}
+)
