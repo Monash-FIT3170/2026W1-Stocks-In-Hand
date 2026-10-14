@@ -44,7 +44,7 @@ from app.services.title_normalization import normalise_title
 from app.sources import source_for_ticker
 from lambdas import artifact_analysis
 from lambdas.artifact_analysis import AlreadyAnalysed, Analysed, AnalysisPorts
-from lambdas.download_validation import DownloadedDocument, document_size_limit
+from lambdas.download_validation import DownloadedDocument
 from scrapers.adapter import DocumentRequest
 from scrapers.base import Announcement
 from scrapers.registry import adapter_for
@@ -103,7 +103,7 @@ async def download_announcement(
             title=announcement.title,
             metadata=announcement.metadata,
         ),
-        max_bytes=document_size_limit(),
+        max_bytes=settings.MAX_DOCUMENT_BYTES,
     )
     clean_title = "".join(
         character if character.isalnum() or character in "._-" else "_"

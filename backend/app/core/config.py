@@ -382,6 +382,11 @@ class Settings:
     DISCOVERY_LOOKBACK_DAYS: int = integer(30, minimum=1)
     MAX_DOCUMENTS_PER_RUN: int = integer(3, minimum=1)
     DOWNLOAD_QUEUE_URL: str = text()
+    # The largest document download and analysis accept, and the most a DOCX
+    # may expand to when unzipped.
+    MAX_DOCUMENT_BYTES: int = integer(25 * 1024 * 1024, minimum=1)
+    MAX_DOCX_UNCOMPRESSED_BYTES: int = integer(20 * 1024 * 1024, minimum=1)
+    RAW_DOCUMENT_BUCKET: str = text()
 
     @classmethod
     def from_environment(

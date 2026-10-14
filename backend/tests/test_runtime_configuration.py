@@ -102,6 +102,17 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert defaults.PUBLIC_DISCUSSION_SEARCH_QUERY == "ASX"
     assert (defaults.DISCOVERY_LOOKBACK_DAYS, defaults.MAX_DOCUMENTS_PER_RUN) == (30, 3)
     assert defaults.DOWNLOAD_QUEUE_URL == ""
+    assert defaults.MAX_DOCUMENT_BYTES == 25 * 1024 * 1024
+    assert defaults.MAX_DOCX_UNCOMPRESSED_BYTES == 20 * 1024 * 1024
+    assert defaults.RAW_DOCUMENT_BUCKET == ""
+
+
+def test_the_environment_overrides_the_document_size_limits() -> None:
+    read = Settings.from_environment(
+        {"MAX_DOCUMENT_BYTES": "1024", "MAX_DOCX_UNCOMPRESSED_BYTES": "2048"}
+    )
+
+    assert (read.MAX_DOCUMENT_BYTES, read.MAX_DOCX_UNCOMPRESSED_BYTES) == (1024, 2048)
 
 
 def test_values_are_read_as_the_backend_always_read_them() -> None:
@@ -188,6 +199,8 @@ def test_a_required_setting_must_be_set() -> None:
         ("DISCOVERY_LOOKBACK_DAYS", "abc", "must be a whole number"),
         ("MAX_DOCUMENTS_PER_RUN", "0", "must be at least 1"),
         ("MAX_DOCUMENTS_PER_RUN", "abc", "must be a whole number"),
+        ("MAX_DOCUMENT_BYTES", "0", "must be at least 1"),
+        ("MAX_DOCX_UNCOMPRESSED_BYTES", "20MiB", "must be a whole number"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:

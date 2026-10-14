@@ -685,7 +685,7 @@ def test_the_lambda_sends_alerts_only_when_notifications_are_enabled(
 ) -> None:
     monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
     monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")
+    monkeypatch.setattr(settings, "RAW_DOCUMENT_BUCKET", "raw-documents")
 
     ports = deployed_ports()
 

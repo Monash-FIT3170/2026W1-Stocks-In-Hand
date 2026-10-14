@@ -42,6 +42,7 @@ from uuid import UUID
 import boto3
 
 from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
+from app.core.config import settings
 from app.messages import NotificationMessage
 from app.services import generation
 from app.services import sentiment as sentiment_service
@@ -540,7 +541,7 @@ def deployed_ports() -> AnalysisPorts:
     return AnalysisPorts(
         records=PostgresAnalysisRecords(database_session),
         scorer=FinBertScorer(),
-        documents=raw_document_store() if os.getenv("RAW_DOCUMENT_BUCKET") else None,
+        documents=raw_document_store() if settings.RAW_DOCUMENT_BUCKET else None,
         alerts=(
             sqs_alert_sender(os.getenv("NOTIFICATION_QUEUE_URL", "").strip())
             if notifications_enabled
