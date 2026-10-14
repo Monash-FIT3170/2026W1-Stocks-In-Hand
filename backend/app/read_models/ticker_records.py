@@ -3,11 +3,13 @@
 A ticker's records are the artifacts stored against it, newest published
 first. Its news feed shows each as its artifact card, and its deep dive as
 an entry of its research history with the summary's text. Both read the
-summaries loaded with the records, so neither runs a query per record.
+summaries loaded with the records, so neither runs a query per record. The
+newest record is the one the ticker's brief and watchlist card tell.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy.orm import Session, selectinload
@@ -20,6 +22,9 @@ from app.services import artifact_card, artifact_summary
 
 # How many records the news feed and the deep dive show.
 PAGE_RECORDS = 10
+# Latest published first. Records with no publication date come after the
+# dated ones, newest collected first.
+_NEWEST_FIRST = (Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
 
 
 class TickerNotFound(LookupError):
@@ -77,20 +82,38 @@ def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
 
 
 def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifact]:
-    """The newest artifacts stored against a ticker, latest published first.
+    """A ticker's newest records.
 
-    Artifacts with no publication date come after the dated ones, newest
-    collected first. Each comes with its summary and platform, so reading
-    their cards and summaries runs no query per artifact.
+    Each comes with its summary and platform, so reading their cards and
+    summaries runs no query per artifact.
     """
     return (
         db.query(Artifact)
         .options(artifact_summary.WITH_SUMMARY, selectinload(Artifact.platform))
         .filter(Artifact.ticker_id == ticker_id)
-        .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
+        .order_by(*_NEWEST_FIRST)
         .limit(limit)
         .all()
     )
+
+
+def latest_artifacts(db: Session, ticker_ids: Iterable[UUID]) -> dict[UUID, Artifact]:
+    """Each ticker's newest record, with its summary, in one query for any number of tickers.
+
+    A ticker with no records is left out.
+    """
+    ids = list(ticker_ids)
+    if not ids:
+        return {}
+    artifacts = (
+        db.query(Artifact)
+        .options(artifact_summary.WITH_SUMMARY)
+        .filter(Artifact.ticker_id.in_(ids))
+        .order_by(Artifact.ticker_id, *_NEWEST_FIRST)
+        .distinct(Artifact.ticker_id)
+        .all()
+    )
+    return {artifact.ticker_id: artifact for artifact in artifacts}
 
 
 def record_date(artifact: Artifact) -> str:

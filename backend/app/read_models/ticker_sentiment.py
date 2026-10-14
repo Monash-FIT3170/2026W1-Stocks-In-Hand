@@ -1,10 +1,11 @@
 """Ticker sentiment: the one definition of a ticker's analysed sentiment.
 
 Two read-models share it. The latest signal is the headline sentiment the
-brief shows. Category sentiment breaks a ticker's analysed artifacts down
-by sentiment bucket, with public discussion as a sixth group, for its
-research summary. Both read the sentiment the analysis worker stored and
-never run FinBERT, so the API needs no model runtime.
+brief and the watchlist cards show. Category sentiment breaks a ticker's
+analysed artifacts down by sentiment bucket, with public discussion as a
+sixth group, for its research summary. Both read the sentiment the
+analysis worker stored and never run FinBERT, so the API needs no model
+runtime.
 """
 
 from __future__ import annotations
@@ -336,7 +337,8 @@ def _summary_text(artifact: Artifact) -> str:
     An artifact with neither gives the start of its raw text.
     """
     summary = artifact_summary.read(artifact)
-    parts = [artifact.title, *((summary.about, summary.changed, summary.matters) if summary else ())]
+    lines = (summary.about, summary.changed, summary.matters) if summary else ()
+    parts = [artifact.title, *lines]
     if not any(parts):
         parts.append((artifact.raw_text or "")[:600])
     return " ".join(str(part).strip() for part in parts if part).strip()

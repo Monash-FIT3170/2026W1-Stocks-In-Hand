@@ -89,7 +89,10 @@ Investor and watchlist routes:
 
 - `investor.py`: create, read, update, and delete investors.
 - `auth.py`: sign up, sign in, sign out, and current-identity lookup.
-- `watchlist.py`: create, read, update, and delete watchlists.
+- `watchlist.py`: create, read, update, and delete watchlists, plus
+  `/watchlists/me/summary`, the watchlist page's one read
+  (`app/read_models/watchlist_summary.py`): the investor's oldest watchlist
+  and each company's latest signal and brief line.
 - `watchlist_ticker.py`: add/list/remove tickers in a watchlist.
 
 Ticker routes:

@@ -5,7 +5,9 @@ from uuid import UUID
 from app.api.deps import get_current_investor
 from app.database.connection import get_db
 from app.models.investor import Investor
+from app.read_models import watchlist_summary
 from app.schemas.watchlist import WatchlistCreate, WatchlistResponse
+from app.schemas.watchlist_summary import WatchlistSummary
 from app.crud import watchlist as crud
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
@@ -29,6 +31,15 @@ def get_my_watchlists(
     current_investor: Investor = Depends(get_current_investor),
 ):
     return crud.get_watchlists_by_investor(db, investor_id=current_investor.id) or []
+
+
+@router.get("/me/summary", response_model=WatchlistSummary)
+def get_my_watchlist_summary(
+    db: Session = Depends(get_db),
+    current_investor: Investor = Depends(get_current_investor),
+):
+    """The signed-in investor's watchlist page in one read."""
+    return watchlist_summary.read_watchlist_summary(db, current_investor.id)
 
 
 @router.get("/investor/{investor_id}", response_model=list[WatchlistResponse])
