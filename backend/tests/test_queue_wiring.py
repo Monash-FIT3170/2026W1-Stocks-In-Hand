@@ -18,10 +18,12 @@ Companion checks:
 """
 
 import copy
+import re
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools import verify_queue_wiring
 from tools.template_model import (
@@ -420,11 +422,28 @@ def test_staging_workflow_runs_the_model_based_verification() -> None:
 # CI and the staging role
 # ---------------------------------------------------------------------------
 
-def test_queue_ci_runs_when_verification_or_oidc_permissions_change() -> None:
-    workflow = QUEUE_CI_WORKFLOW.read_text(encoding="utf-8")
+def test_queue_ci_lints_every_template_and_runs_when_one_changes() -> None:
+    """A template the job does not lint, or a file it does not watch, goes unchecked.
 
-    assert "infra/github-oidc.yaml" in workflow
-    assert ".github/workflows/verify-staging-queue-wiring.yml" in workflow
+    The job runs when an infrastructure template, one of its test files or
+    the staging verification workflow those tests read changes.
+    """
+    workflow = yaml.safe_load(QUEUE_CI_WORKFLOW.read_text(encoding="utf-8"))
+    templates = {
+        path.relative_to(REPOSITORY_ROOT).as_posix()
+        for path in (REPOSITORY_ROOT / "infra").glob("*.yaml")
+    }
+    steps = [step for job in workflow["jobs"].values() for step in job["steps"]]
+    [lint] = [step["run"].split() for step in steps if step.get("run", "").startswith("cfn-lint")]
+    [tests] = [step["run"] for step in steps if "python -m pytest" in step.get("run", "")]
+    # PyYAML reads the "on" key as True.
+    push, pull_request = (workflow[True][event]["paths"] for event in ("push", "pull_request"))
+
+    assert set(lint[1:]) == templates
+    assert push == pull_request
+    assert templates <= set(push)
+    assert {f"backend/{test}" for test in re.findall(r"tests/\w+\.py", tests)} <= set(push)
+    assert ".github/workflows/verify-staging-queue-wiring.yml" in push
 
 
 def test_staging_github_role_can_read_only_application_queue_attributes() -> None:

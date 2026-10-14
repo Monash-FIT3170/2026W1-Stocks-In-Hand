@@ -227,7 +227,7 @@ cd ..
 
 ```bash
 sam validate --lint --template-file infra/template.yaml
-cfn-lint infra/template.yaml infra/bootstrap.yaml infra/github-oidc.yaml
+cfn-lint infra/template.yaml infra/github-oidc.yaml infra/bootstrap.yaml infra/domain.yaml
 
 cd backend
 python -m tools.release plan --no-execute --no-execution-role \
