@@ -9,7 +9,7 @@ together: the parameters, the image repositories and the checks.
 A parameter's value comes from the first of:
 
 1. ``--set K=V``, even when V is empty;
-2. ``--set-unless-empty K=V``, when V is not empty;
+2. ``--set-unless-empty K=V``, when V is neither empty nor ``keep``;
 3. the live stack;
 4. the template default.
 
@@ -60,6 +60,9 @@ CLOUDFORMATION_ROLE_NAME = "stocks-in-hand-cloudformation-execution"
 # sam deploy needs an S3 bucket for a larger template, and the GitHub deploy
 # role has no grant for one.
 INLINE_TEMPLATE_LIMIT = 51200
+# What a manual deploy's inputs default to. --set-unless-empty reads it like an
+# empty value, so a change set changes only what someone chose.
+KEEP = "keep"
 
 FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -316,7 +319,7 @@ def resolve(
             continue
         if name in explicit:
             values[name] = Value(explicit[name], "set")
-        elif unless_empty.get(name):
+        elif unless_empty.get(name, "") not in ("", KEEP):
             values[name] = Value(unless_empty[name], "set")
         elif name in live:
             values[name] = Value(live[name], "live")
@@ -747,7 +750,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="use this value unless it is empty",
+        help=f"use this value unless it is empty or {KEEP}",
     )
     plan.add_argument("--out", required=True, help="where to write the plan")
 

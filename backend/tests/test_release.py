@@ -278,6 +278,20 @@ def test_a_value_comes_from_set_then_set_unless_empty_then_live_then_default() -
     assert set(values) == set(model.parameters) - set(IMAGE_REPOSITORIES)
 
 
+def test_keep_leaves_a_value_to_the_live_stack_or_the_default() -> None:
+    """A manual deploy's inputs default to keep, so only a value someone chose changes."""
+    values = resolve(
+        template_model(),
+        {"OperationsEmail": "ops@example.com", "AuthProvider": "dual"},
+        {},
+        {"AuthProvider": "keep", "BedrockEnabled": "keep", "ScheduleEnabled": "true"},
+    )
+
+    assert values["AuthProvider"] == Value("dual", "live")
+    assert values["BedrockEnabled"] == Value("false", "default")
+    assert values["ScheduleEnabled"] == Value("true", "set")
+
+
 def test_an_explicitly_empty_value_replaces_the_live_one() -> None:
     values = resolve(
         template_model(),

@@ -5,83 +5,94 @@ on:
     branches:
       - main
   workflow_dispatch:
+    # Every input defaults to keep. The release module reads keep like an
+    # empty value, so the live stack's value stays and a manual change set
+    # changes only what someone chose. Keep these choice or string inputs: a
+    # boolean input's false would fall through "inputs.x || vars.X" below.
     inputs:
       auth_provider:
         description: Backend authentication provider for this change set
         required: true
-        default: legacy
+        default: keep
         type: choice
         options:
+          - keep
           - legacy
           - dual
           - cognito
       enable_schedule:
         description: Enable the weekly scrape in the reviewed change set
         required: true
-        default: "false"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       enable_public_discussion_schedule:
         description: Enable bounded weekday public discussion collection
         required: true
-        default: "false"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       enable_marketaux:
         description: Enable Marketaux API access and weekly news collection
         required: true
-        default: "false"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       enable_analysis:
         description: Allow Queue C to start analysis work
         required: true
-        default: "true"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       enable_notifications:
         description: Enable user-facing Brevo watchlist alerts
         required: true
-        default: "false"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       enable_bedrock:
         description: Grant API and analysis access to Bedrock GPT-OSS 120B
         required: true
-        default: "false"
+        default: keep
         type: choice
         options:
+          - keep
           - "false"
           - "true"
       scheduled_tickers:
-        description: Comma-separated tickers for the weekly schedule
+        description: Comma-separated tickers for the weekly schedule, or keep
         required: true
-        default: "ANZ,BHP,CBA,CSL,WES"
+        default: keep
         type: string
       scheduled_public_discussion_sources:
-        description: Comma-separated public sources to collect
+        description: Comma-separated public sources to collect, or keep
         required: true
-        default: "bluesky,mastodon"
+        default: keep
         type: string
       public_discussion_per_source_limit:
-        description: Maximum items collected from each public source
+        description: Maximum items collected from each public source, or keep
         required: true
-        default: "10"
+        default: keep
         type: string
       marketaux_per_ticker_limit:
-        description: Maximum Marketaux articles collected for each ticker
+        description: Maximum Marketaux articles collected for each ticker, or keep
         required: true
-        default: "10"
+        default: keep
         type: string
 
 permissions:
@@ -187,9 +198,10 @@ jobs:
           SITE_DOMAIN_NAME: ${{ vars.SITE_DOMAIN_NAME }}
           SITE_CERTIFICATE_ARN: ${{ vars.SITE_CERTIFICATE_ARN }}
           SITE_HOSTED_ZONE_ID: ${{ vars.SITE_HOSTED_ZONE_ID }}
-          # A manual run's choice wins. A push has no inputs, so the
-          # AUTO_DEPLOY_* variable applies when it is set, then the live
-          # stack's value, then the template default.
+          # A manual run's choice wins. Its default, keep, falls back to the
+          # live stack's value, then the template default. A push has no
+          # inputs, so the AUTO_DEPLOY_* variable applies when it is set, then
+          # the live stack's value, then the template default.
           AUTH_PROVIDER: ${{ inputs.auth_provider || vars.AUTO_DEPLOY_AUTH_PROVIDER }}
           ENABLE_SCHEDULE: ${{ inputs.enable_schedule || vars.AUTO_DEPLOY_ENABLE_SCHEDULE }}
           ENABLE_PUBLIC_DISCUSSION_SCHEDULE: ${{ inputs.enable_public_discussion_schedule || vars.AUTO_DEPLOY_ENABLE_PUBLIC_DISCUSSION_SCHEDULE }}

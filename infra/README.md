@@ -92,7 +92,7 @@ Verify one sender address in Brevo. Add that address as the protected GitHub
 environment variable `ALERT_SENDER_EMAIL`. A custom sending domain is not
 required for the first controlled staging test.
 
-When `enable_notifications=true`, the staging preparation workflow checks that
+When a release turns notifications on or keeps them on, its plan checks that
 the sender variable is non-empty and that the Brevo parameter exists as a
 `SecureString`. The check reads parameter metadata only. It does not decrypt or
 print the API key. Deploy the current `infra/github-oidc.yaml` first so the
@@ -112,11 +112,11 @@ aws ssm put-parameter \
 unset MARKETAUX_API_TOKEN
 ```
 
-When `enable_marketaux=true`, the deployment checks the parameter type before
-building the change set. The weekly schedule collects at most five tickers per
-run and 25 articles per ticker. `ScheduleEnabled` must also be `true` for this
-automatic collection to run. The API can still fetch Marketaux news on demand
-when Marketaux is enabled and the weekly schedule is disabled.
+When a release turns Marketaux on or keeps it on, its plan checks the parameter
+type before any image is built. The weekly schedule collects at most five
+tickers per run and 25 articles per ticker. `ScheduleEnabled` must also be
+`true` for this automatic collection to run. The API can still fetch Marketaux
+news on demand when Marketaux is enabled and the weekly schedule is disabled.
 
 Scheduled Marketaux records are stored first, then sent to the analysis queue.
 The analysis worker uses the news-specific Bedrock prompt and stores the four
@@ -470,8 +470,10 @@ AUTO_DEPLOY_MARKETAUX_PER_TICKER_LIMIT
 
 Leave notifications, schedules, and Bedrock disabled until their smoke tests
 pass. A manual run of **Deploy staging release** still creates an unexecuted
-change set. **Execute approved staging change set** and **Publish staging
-frontend** remain available for reviewed recovery work.
+change set. Its inputs default to `keep`, which keeps the live value, so the
+change set changes only the inputs you choose. **Execute approved staging
+change set** and **Publish staging frontend** remain available for reviewed
+recovery work.
 
 The workflows request short-lived AWS tokens through OIDC. Automatic main
 deployments execute only after the same workflow passes backend tests, security

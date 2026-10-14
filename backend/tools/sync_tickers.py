@@ -1,7 +1,7 @@
 """Keep every copy of the ticker list outside Python in step with the catalogue.
 
 The frontend's static ticker pages, the CloudFront route function and the
-weekly schedule defaults cannot import ``app.sources``, so they hold copies.
+weekly schedule's default cannot import ``app.sources``, so they hold copies.
 This tool rewrites those copies from the catalogue, and the deployment
 contract tests fail when one is out of date.
 
@@ -26,7 +26,6 @@ from app.sources import SOURCES, scheduled_tickers
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_TICKERS = Path("frontend/src/app/ticker/tickers.json")
 TEMPLATE = Path("infra/template.yaml")
-DEPLOY_WORKFLOW = Path(".github/workflows/deploy-staging.yml")
 
 
 @dataclass(frozen=True)
@@ -63,16 +62,6 @@ def _copies() -> list[TickerCopy]:
             "ScheduledTickers default",
             re.compile(
                 r"^  ScheduledTickers:\n    Type: String\n    Default: (?P<value>\S+)$",
-                re.MULTILINE,
-            ),
-            scheduled,
-        ),
-        TickerCopy(
-            DEPLOY_WORKFLOW,
-            "manual deploy scheduled_tickers default",
-            re.compile(
-                r"^      scheduled_tickers:\n(?:        .*\n)*?"
-                r"        default: \"(?P<value>[^\"]*)\"$",
                 re.MULTILINE,
             ),
             scheduled,

@@ -12,7 +12,7 @@ WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 
 
 def test_ticker_list_copies_match_the_catalogue() -> None:
-    """The frontend pages, CloudFront route and schedule defaults follow app.sources."""
+    """The frontend pages, CloudFront route and schedule default follow app.sources."""
     stale = sync_tickers.stale_copies()
 
     assert not stale, (
@@ -21,11 +21,7 @@ def test_ticker_list_copies_match_the_catalogue() -> None:
 
 
 def test_ticker_sync_rewrites_a_stale_copy(tmp_path: Path) -> None:
-    for relative in (
-        sync_tickers.FRONTEND_TICKERS,
-        sync_tickers.TEMPLATE,
-        sync_tickers.DEPLOY_WORKFLOW,
-    ):
+    for relative in (sync_tickers.FRONTEND_TICKERS, sync_tickers.TEMPLATE):
         (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / relative).write_text(
             (REPOSITORY_ROOT / relative).read_text(encoding="utf-8"),
@@ -382,13 +378,25 @@ def test_approved_main_merges_plan_build_deploy_and_check_health_in_order() -> N
 def test_every_manual_deploy_input_reaches_the_release_plan() -> None:
     workflow = _workflow("deploy-staging.yml")
     [plan] = [step for step in _steps("deploy-staging.yml") if step.get("id") == "release"]
+    # Only --set-unless-empty reads "keep" and an empty value as not given.
+    variables = re.findall(r'--set-unless-empty "\w+=\$(\w+)"', plan["run"])
     passed = {
         name
         for name in workflow[True]["workflow_dispatch"]["inputs"]
-        if any(f"inputs.{name} ||" in value for value in plan["env"].values())
+        if any(f"inputs.{name} ||" in plan["env"][variable] for variable in variables)
     }
 
     assert passed == set(workflow[True]["workflow_dispatch"]["inputs"])
+
+
+def test_manual_deploy_inputs_keep_the_live_value_unless_one_is_chosen() -> None:
+    """#59 stopped the rollback resetting switches nobody chose. A manual deploy keeps them too."""
+    inputs = _workflow("deploy-staging.yml")[True]["workflow_dispatch"]["inputs"]
+
+    assert {name: spec["default"] for name, spec in inputs.items()} == dict.fromkeys(inputs, "keep")
+    assert all(spec["options"][0] == "keep" for spec in inputs.values() if spec["type"] == "choice")
+    # A boolean input's false would fall through "inputs.x || vars.X" to the variable.
+    assert {spec["type"] for spec in inputs.values()} <= {"choice", "string"}
 
 
 def test_rollback_plans_through_the_release_module_then_applies() -> None:
