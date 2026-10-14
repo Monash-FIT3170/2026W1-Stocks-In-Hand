@@ -218,7 +218,7 @@ queue previously stored items that still have pending summaries.
 5. Build and push immutable API, scraper, and analysis images tagged with the
    full Git commit SHA.
 6. Verify the sender in Brevo, store the Brevo API key in SSM, set the protected
-   GitHub `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
+   GitHub `ALERT_SENDER_EMAIL` variable, and leave notifications off.
 7. Complete the first reviewed SAM deployment with both schedule flags and
    notifications disabled.
 8. Keep the `ProtectMain` approval ruleset active, restrict the GitHub
