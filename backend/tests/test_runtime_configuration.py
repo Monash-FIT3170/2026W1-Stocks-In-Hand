@@ -52,8 +52,8 @@ AWS_RUNTIME_READS = {
     "app/database/connection.py": {"AWS_LAMBDA_FUNCTION_NAME"},
     "scrapers/browser.py": {"AWS_LAMBDA_RUNTIME_API", "os.environ"},
 }
-REQUIRED_SECRETS = [secret for secret in SECRETS if not secret.optional]
-OPTIONAL_SECRETS = [secret for secret in SECRETS if secret.optional]
+SECRETS_THAT_MUST_EXIST = [secret for secret in SECRETS if not secret.may_be_missing]
+SECRETS_THAT_MAY_BE_MISSING = [secret for secret in SECRETS if secret.may_be_missing]
 # The Lambda handlers that import the database layer only where they use it.
 WORKER_HANDLERS = (
     "lambdas.discovery",
@@ -396,15 +396,21 @@ def test_a_secret_that_is_set_is_not_read_from_its_parameter(secret: Secret, val
     assert parameters.requested == []
 
 
-@pytest.mark.parametrize("secret", OPTIONAL_SECRETS, ids=lambda secret: secret.setting)
-def test_a_missing_optional_secret_reads_as_empty(secret: Secret) -> None:
+@pytest.mark.parametrize(
+    "secret", SECRETS_THAT_MAY_BE_MISSING, ids=lambda secret: secret.setting
+)
+def test_a_secret_that_may_be_missing_reads_as_empty_without_its_parameter(
+    secret: Secret,
+) -> None:
     read = _setting(secret, {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({}))
 
     assert read == _setting(secret, {secret.setting: ""})
 
 
-@pytest.mark.parametrize("secret", REQUIRED_SECRETS, ids=lambda secret: secret.setting)
-def test_a_missing_required_secret_is_a_configuration_error(secret: Secret) -> None:
+@pytest.mark.parametrize("secret", SECRETS_THAT_MUST_EXIST, ids=lambda secret: secret.setting)
+def test_a_missing_parameter_is_a_configuration_error_for_a_secret_that_must_exist(
+    secret: Secret,
+) -> None:
     with pytest.raises(ConfigurationError) as rejected:
         Settings.from_environment(
             {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({})
@@ -413,8 +419,9 @@ def test_a_missing_required_secret_is_a_configuration_error(secret: Secret) -> N
     assert rejected.value.problems == (f"{secret.variable} names a parameter that does not exist",)
 
 
-def test_the_database_url_and_the_marketaux_token_are_the_required_secrets() -> None:
-    assert [secret.setting for secret in REQUIRED_SECRETS] == [
+def test_only_the_database_url_and_the_marketaux_token_must_exist() -> None:
+    """Gating is separate: the Marketaux token and the Brevo key are both gated."""
+    assert [secret.setting for secret in SECRETS_THAT_MUST_EXIST] == [
         "DATABASE_URL",
         "MARKETAUX_API_TOKEN",
     ]

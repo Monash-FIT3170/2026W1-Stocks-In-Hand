@@ -48,9 +48,12 @@ parameter and the setting itself is not set, the first read gets the value
 through `SsmParameterStore`, in whatever process makes it. The value stays in
 `settings` and is never copied into `os.environ`.
 
-A missing optional secret, such as the Reddit credentials, reads as empty and
-switches its feature off. A missing required secret (`DATABASE_URL` or
-`MARKETAUX_API_TOKEN`) is a `ConfigurationError`. Tests use
+A secret registered with `may_be_missing=True`, such as the Reddit
+credentials, reads as empty when its parameter does not exist, which switches
+its feature off. For `DATABASE_URL` and `MARKETAUX_API_TOKEN` a missing
+parameter is a `ConfigurationError`. That is separate from whether a secret is
+gated, read only while a stack switch is on: the Marketaux token is gated but
+must exist whenever its variable names it. Tests use
 `InMemoryParameterStore`. `tests/test_queue_wiring.py` checks that every
 `*_PARAMETER` variable in `infra/template.yaml` names a registered secret's
 parameter.

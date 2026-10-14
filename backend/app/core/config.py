@@ -78,13 +78,17 @@ class Secret:
     """A setting AWS keeps in SSM Parameter Store.
 
     A function in infra/template.yaml names the parameter in ``variable`` as
-    ``${ParameterPathPrefix}/<parameter>``. A missing optional secret reads as
-    empty, which switches off the feature that needs it.
+    ``${ParameterPathPrefix}/<parameter>``. When ``may_be_missing`` is set, a
+    parameter that does not exist reads as empty, which switches off the
+    feature that needs it; otherwise it is a ConfigurationError. That is not
+    whether the secret is gated, read only while a stack switch is on: the
+    Marketaux token is gated but must exist whenever its variable names it,
+    and the Reddit credentials may be missing although no switch gates them.
     """
 
     setting: str
     parameter: str
-    optional: bool = False
+    may_be_missing: bool = False
 
     @property
     def variable(self) -> str:
@@ -94,11 +98,11 @@ class Secret:
 
 SECRETS = (
     Secret("DATABASE_URL", "database-url"),
-    Secret("BREVO_API_KEY", "brevo-api-key", optional=True),
+    Secret("BREVO_API_KEY", "brevo-api-key", may_be_missing=True),
     Secret("MARKETAUX_API_TOKEN", "marketaux-api-token"),
-    Secret("REDDIT_CLIENT_ID", "reddit-client-id", optional=True),
-    Secret("REDDIT_CLIENT_SECRET", "reddit-client-secret", optional=True),
-    Secret("PUBLIC_DISCUSSION_FEED_URLS", "public-discussion-feed-urls", optional=True),
+    Secret("REDDIT_CLIENT_ID", "reddit-client-id", may_be_missing=True),
+    Secret("REDDIT_CLIENT_SECRET", "reddit-client-secret", may_be_missing=True),
+    Secret("PUBLIC_DISCUSSION_FEED_URLS", "public-discussion-feed-urls", may_be_missing=True),
 )
 
 
@@ -163,7 +167,7 @@ def _with_secrets(
             problems.append(f"{secret.variable} is set, but no parameter store was given")
             continue
         value = parameters.get(name)
-        if value is None and not secret.optional:
+        if value is None and not secret.may_be_missing:
             problems.append(f"{secret.variable} names a parameter that does not exist")
             continue
         resolved[secret.setting] = value or ""
