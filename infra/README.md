@@ -247,8 +247,9 @@ constraints and rules before anything changes. A value comes from `--set`, then
 the live stack, then the template default, so this first change set starts
 with the schedules, Marketaux, notifications and Bedrock off and analysis on.
 The image parameters always point at `$RELEASE_SHA`. `plan` prints a table of
-every value and where it came from. `apply` checks that the three images are in
-ECR, then creates the change set.
+every value and where it came from. `apply` checks that the stack has not
+changed since the plan and that the three images are in ECR, then creates the
+change set.
 
 A new stack is only created through a reviewed change set, so `plan` refuses
 `--execute` here. `--no-execution-role` deploys with your own credentials,

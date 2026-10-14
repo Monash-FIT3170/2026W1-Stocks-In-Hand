@@ -646,8 +646,9 @@ def packaged_template_size(text: str) -> int:
 def apply(plan: ReleasePlan, aws: Aws, run: Run = _stream, *, dry_run: bool = False) -> list[str]:
     """Run the plan's sam deploy and return the command, or only print it with ``dry_run``.
 
-    The template must be the one the plan was made from, and the release
-    images must be in ECR. A dry run makes no AWS call.
+    The template must be the one the plan was made from, the stack must be
+    as the plan found it, and the release images must be in ECR. A dry run
+    makes no AWS call.
     """
     template = Path(plan.template)
     if (
@@ -659,9 +660,17 @@ def apply(plan: ReleasePlan, aws: Aws, run: Run = _stream, *, dry_run: bool = Fa
     if dry_run:
         print(shlex.join(command))
         return command
-    missing = _missing_images(aws, plan.release_sha)
-    if missing:
-        raise ReleaseError(missing)
+    # A change set executed while the images built would otherwise be undone
+    # by the plan's older values, and the rollback would target the wrong release.
+    stack = aws.stack(plan.stack_name)
+    live = None if stack is None else stack.parameters
+    planned = None if plan.stack_status is None else plan.live_parameters
+    problems = []
+    if live != planned:
+        problems.append(f"{plan.stack_name} has changed since the plan was made. Plan again.")
+    problems += _missing_images(aws, plan.release_sha)
+    if problems:
+        raise ReleaseError(problems)
     exit_code = run(command)
     if exit_code:
         raise ReleaseError([f"sam deploy exited with {exit_code}"])

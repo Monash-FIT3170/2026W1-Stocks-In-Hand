@@ -855,14 +855,42 @@ def test_rollback_refuses_a_release_whose_images_are_gone() -> None:
 def test_apply_runs_sam_deploy_once_the_release_images_exist() -> None:
     aws = FakeAws(live_stack())
     planned = plan(aws)
+    calls_after_plan = len(aws.calls)
     sam = SamRecorder()
 
     command = apply(planned, aws, sam)
 
     assert sam.commands == [command] == [planned.sam_deploy_command()]
-    assert [call for call in aws.calls if call[0] == "image_exists"] == [
-        ("image_exists", repository, NEW_SHA) for repository in IMAGE_REPOSITORIES.values()
+    assert aws.calls[calls_after_plan:] == [
+        ("stack", STACK),
+        *(("image_exists", repository, NEW_SHA) for repository in IMAGE_REPOSITORIES.values()),
     ]
+
+
+@pytest.mark.parametrize(
+    ("planned_on", "applied_on"),
+    [
+        (live_stack(), live_stack(AlertDailyBudget="200")),
+        (live_stack(), live_stack(ApiImageUri=f"{REGISTRY}/stocks-in-hand-api:{NEW_SHA}")),
+        (live_stack(), None),
+        (None, live_stack()),
+    ],
+    ids=["value-changed", "release-changed", "stack-deleted", "stack-created"],
+)
+def test_apply_refuses_a_stack_that_changed_since_the_plan(
+    planned_on: LiveStack | None, applied_on: LiveStack | None
+) -> None:
+    """Executing a change set while the images build must not be undone by the older plan."""
+    aws = FakeAws(planned_on)
+    planned = plan(aws, execute=planned_on is not None, OperationsEmail="ops@example.com")
+    aws.live = applied_on
+    sam = SamRecorder()
+
+    with pytest.raises(ReleaseError) as error:
+        apply(planned, aws, sam)
+
+    assert problems(error) == [f"{STACK} has changed since the plan was made. Plan again."]
+    assert sam.commands == []
 
 
 def test_apply_refuses_a_release_image_that_was_never_pushed() -> None:

@@ -320,7 +320,8 @@ jobs:
       - name: Create or execute the SAM change set
         working-directory: backend
         shell: bash
-        # Checks that the release images exist, then runs the planned sam deploy.
+        # Checks that the stack has not changed since the plan and that the
+        # release images exist, then runs the planned sam deploy.
         run: python -m tools.release apply "$RUNNER_TEMP/release-plan.json"
 
       - name: Export the change set for Person 1 review
