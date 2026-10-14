@@ -108,7 +108,7 @@ def check_message(
         return Misconfigured(_INVALID_MESSAGE)
     unsubscribe_url = None
     if email.unsubscribe_url is not None:
-        unsubscribe_url = _web_link(email.unsubscribe_url, require_https=require_https)
+        unsubscribe_url = web_link(email.unsubscribe_url, require_https=require_https)
         if unsubscribe_url is None:
             return Misconfigured(_INVALID_MESSAGE)
     return replace(email, to=recipient, subject=subject, unsubscribe_url=unsubscribe_url)
@@ -143,8 +143,12 @@ def _single_line(value: str) -> str | None:
     return text
 
 
-def _web_link(value: str, *, require_https: bool) -> str | None:
-    """``value`` trimmed, or None unless it is an absolute link safe in a header."""
+def web_link(value: str, *, require_https: bool) -> str | None:
+    """``value`` trimmed, or None unless it is one absolute HTTP or HTTPS link.
+
+    The link must fit on one line and have no angle brackets, so it is safe in
+    a header. With ``require_https`` only an HTTPS link passes.
+    """
     text = _single_line(value)
     if text is None or "<" in text or ">" in text:
         return None

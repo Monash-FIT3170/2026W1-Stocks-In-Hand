@@ -27,6 +27,7 @@ from app.services.email_sender import (
     Unavailable,
     check_message,
     mailbox,
+    web_link,
 )
 
 
@@ -52,13 +53,18 @@ def _response_error_code(response: httpx.Response) -> str:
     return (normalized or f"brevo_http_{response.status_code}")[:128]
 
 
-def _send_endpoint(base_url: str) -> str | None:
-    """Brevo's send endpoint under ``base_url``, or None unless that is HTTPS."""
-    base = base_url.strip().rstrip("/")
-    parts = urlsplit(base)
-    if parts.scheme != "https" or not parts.netloc:
-        return None
-    return f"{base}/smtp/email"
+def _send_endpoint(base_url: str) -> str | Misconfigured:
+    """Brevo's send endpoint under ``base_url``, or what is wrong with that setting.
+
+    A value that is not one absolute web link is malformed. An HTTP link is a
+    Brevo setting to fix, because every request carries the API key.
+    """
+    base = web_link(base_url, require_https=False)
+    if base is None:
+        return Misconfigured("invalid_notification_configuration")
+    if urlsplit(base).scheme != "https":
+        return Misconfigured("brevo_configuration_error")
+    return f"{base.rstrip('/')}/smtp/email"
 
 
 def _outcome(response: httpx.Response) -> SendOutcome:
@@ -89,6 +95,11 @@ def _outcome(response: httpx.Response) -> SendOutcome:
 class BrevoEmailSender:
     """Sends through Brevo's transactional email API.
 
+    Before any request it checks the email, then its own settings. A missing
+    key or sender, or an HTTP base URL, is ``brevo_configuration_error``. A
+    sender, sender name or base URL that is not well formed is
+    ``invalid_notification_configuration``.
+
     Brevo answers 400, 404 or 422 when it will never take the recipient or the
     message, and 408, 429 or 5xx when a retry may succeed. Any other refusal,
     such as a bad key or no credit, means our account or settings need fixing.
@@ -113,17 +124,22 @@ class BrevoEmailSender:
             pacer=pacer,
         )
 
-    def send(self, email: OutgoingEmail) -> SendOutcome:
+    def send(  # pylint: disable=too-many-return-statements
+        self,
+        email: OutgoingEmail,
+    ) -> SendOutcome:
         checked = check_message(email, require_https=True)
         if not isinstance(checked, OutgoingEmail):
             return checked
-        endpoint = _send_endpoint(self.base_url)
-        if not self.api_key.strip() or not self.sender_email.strip() or endpoint is None:
+        if not self.api_key.strip() or not self.sender_email.strip():
             return Misconfigured("brevo_configuration_error")
         sender = mailbox(self.sender_email)
         sender_name = self.sender_name.strip()
         if sender is None or not sender_name or "\r" in sender_name or "\n" in sender_name:
             return Misconfigured("invalid_notification_configuration")
+        endpoint = _send_endpoint(self.base_url)
+        if isinstance(endpoint, Misconfigured):
+            return endpoint
 
         payload: dict[str, Any] = {
             "sender": {"email": sender, "name": sender_name},

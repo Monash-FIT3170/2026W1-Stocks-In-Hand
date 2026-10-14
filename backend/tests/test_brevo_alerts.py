@@ -162,6 +162,22 @@ def test_a_success_without_a_message_id_is_unavailable(
             ALERT,
             Misconfigured("brevo_configuration_error"),
         ),
+        ({"base_url": ""}, ALERT, Misconfigured("invalid_notification_configuration")),
+        (
+            {"base_url": "api.brevo.com/v3"},
+            ALERT,
+            Misconfigured("invalid_notification_configuration"),
+        ),
+        (
+            {"base_url": "https://api.brevo.com/v3<x>"},
+            ALERT,
+            Misconfigured("invalid_notification_configuration"),
+        ),
+        (
+            {"base_url": "https://api.brevo.com/v3\r\nX-Extra: 1"},
+            ALERT,
+            Misconfigured("invalid_notification_configuration"),
+        ),
         (
             {"sender_email": "not-an-email"},
             ALERT,
