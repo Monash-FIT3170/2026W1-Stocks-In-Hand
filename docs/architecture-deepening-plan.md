@@ -23,7 +23,7 @@
 
 Where #56 leaves these points:
 - Met: 1 (Phase 0), 3 (#61 and 04), 4 (06, 07 and 08), 6 (12, 13 and 14) and 7 (15, 16 and 18).
-- Point 2 is close. Besides the catalogue entry and the source adapter, a new ticker needs a line in `ADAPTER_TYPES`, its recorded pages pinned in a test, and its own seed migration (see 01).
+- Point 2 is close. Besides the catalogue entry and the source adapter, a new ticker needs its adapter name in `AdapterName`, a line in `ADAPTER_TYPES`, its recorded pages pinned in a test, and its own seed migration (see 01).
 - Point 5 is met for access (11). The brief, news feed, deep dive, category sentiment and watchlist summary routes now only call a read-model (10), and each alert settings route makes one call (14). `POST /llm/categorise/recent` and `GET /reddit/ticker-sentiment/{t}` still generate inside their routes (see 08's Left over).
 - Point 8 is mostly met. A few tests still patch a private seam: the queue modules' `_sqs_client`, `parsing.analysis._ocr_pdf` and `crud.scrape_run._lock_run`.
 
@@ -190,7 +190,7 @@ Done in #56
 5. `backend/tools/sync_tickers.py` rewrites the copies that cannot import Python: `frontend/src/app/ticker/tickers.json` (read by `generateStaticParams`), the CloudFront `tickerRoute` pattern and the `ScheduledTickers` default. Candidate 16 removed both `deploy-staging.yml` copies. The push fallback went with the bash resolution, and the manual input now defaults to `keep`. `test_ticker_list_copies_match_the_catalogue` fails when a copy is stale, and the queue-wiring CI job now runs on catalogue changes. The ApiFunction's `SUPPORTED_TICKERS` variable is removed because `Settings` already defaults to the catalogue.
 6. The ticker list in `docker-compose-dev.yml` and the ticker and source-URL lines in `backend/.env.example` are removed.
 
-To add an ASX ticker now: add a catalogue entry, write its source adapter (candidate 02) and add it to `ADAPTER_TYPES` in `backend/scrapers/registry.py`, record its pages with `python -m tools.record_source_pages <TICKER>` and pin them in `test_source_adapter_fixtures.py`, write a seed migration for the row, update `test_migration_seeds_the_catalogue_facts` to read it, and run `python -m tools.sync_tickers` in `backend/`.
+To add an ASX ticker now: add a catalogue entry and its adapter name to `AdapterName` in `backend/app/sources.py`, write its source adapter (candidate 02) and add it to `ADAPTER_TYPES` in `backend/scrapers/registry.py`, record its pages with `python -m tools.record_source_pages <TICKER>` and pin them in `test_source_adapter_fixtures.py`, write a seed migration for the row, update `test_migration_seeds_the_catalogue_facts` to read it, and run `python -m tools.sync_tickers` in `backend/`.
 
 Tests
 - `test_ticker_catalogue.py`: normalisation, and Postgres tests for `ensure_ticker` (seeded row, catalogue facts, a repeat call, unknown symbol, placeholders filled and curated values kept).
