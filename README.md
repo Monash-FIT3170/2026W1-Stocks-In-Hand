@@ -336,8 +336,10 @@ same dependency versions that actually ship to Lambda — see
 
 You'll also need Playwright's browser binaries (`playwright install
 chromium`) and a running Postgres instance — `DATABASE_URL` in `backend/.env`
-should point at it. See `backend/.env.example` for every variable the backend
-reads, including which ones are optional/Lambda-only.
+should point at it. `backend/.env.example` holds the variables a local backend
+commonly sets. `backend/app/core/config.py` declares every variable the
+backend reads, with its default and limits, and
+[Environment variables](#environment-variables) describes the main ones.
 
 ### Running the pipeline locally (discovery -> download -> analysis)
 
