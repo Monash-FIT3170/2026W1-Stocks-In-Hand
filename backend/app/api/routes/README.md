@@ -96,7 +96,9 @@ Ticker routes:
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
   endpoints the frontend reads (`/brief`, `/news-feed`,
   `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
-  stored, so there is no market data route.
+  stored, so there is no market data route. Each news-feed item is the
+  artifact's card (`app/services/artifact_card.py`), and the brief and deep
+  dive read summaries through the artifact summary module.
 
 Source content routes:
 

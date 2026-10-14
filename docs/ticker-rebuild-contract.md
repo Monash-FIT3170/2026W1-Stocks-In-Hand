@@ -18,7 +18,7 @@ Frontend /api proxies to localhost:8000. Both servers and Supabase are running. 
 
 GET /tickers/symbol/{symbol}/brief -> `{overview,aside}`.
 
-overview = `{symbol,company_name,sector,current_price,day_change,last_updated,story,sources_count,sources,clarity,sentiment_status,sentiment_label,latest_signal_confidence_pct,latest_signal_model,latest_signal_analyzed_at}`. Price/day change are formatted strings, N/A when quote fails. last_updated is source display date, not quote time. story is stored summary/description or literal backend missing-data message. sources_count counts this brief's links, not all records. Sentiment label = Generally Positive/Generally Negative/Neutral/Unavailable; status = available/unavailable. Confidence is formatted percentage or N/A and describes the latest filing model classification, NOT public sentiment, return probability or investment advice. Do NOT use deprecated public_sentiment_pct. Model and analysis ISO timestamp may be null.
+overview = `{symbol,company_name,sector,current_price,day_change,last_updated,story,sources_count,sources,clarity,sentiment_status,sentiment_label,latest_signal_confidence_pct,latest_signal_model,latest_signal_analyzed_at}`. Price/day change are formatted strings, N/A when quote fails. last_updated is source display date, not quote time. story is the latest record's stored summary (its about line, else its summary line), or null when that record has no summary. sources_count counts this brief's links, not all records. Sentiment label = Generally Positive/Generally Negative/Neutral/Unavailable; status = available/unavailable. Confidence is formatted percentage or N/A and describes the latest filing model classification, NOT public sentiment, return probability or investment advice. Do NOT use deprecated public_sentiment_pct. Model and analysis ISO timestamp may be null.
 
 clarity = `{is_classified:boolean,confirmed_facts:string[],speculation:string[]}`. Keep factual claims distinct from interpretation; explicit unclassified state and AI-assisted attribution. Never infer facts/interpretations from prose when arrays are missing.
 
@@ -30,13 +30,13 @@ Source = `{label,title,url,published_at:ISO|null,evidence_text:string|null}`. Ke
 
 GET /tickers/symbol/{symbol}/news-feed -> Record[] (up to ten persisted records, newest first; not exhaustive, no server pagination).
 
-Record = `{ticker,tag,time,title,about,changed,matters,url,source_type,source_name,source_label,sources:Source[]}`. time is DISPLAY date, no stable id/ISO date supplied. Preserve context, change, research angle, provenance and original-source link. Distinguish official filings, publisher news, public discussion. Literal pending strings (Summary pending, No change summary available yet, No investment impact summary available yet) must not become invented summaries. Client-side search/filter/reader selection welcome; start fresh rather than copying announcement-card composition.
+Record = `{ticker,tag,time,title,about,changed,matters,url,source_type,source_name,source_label,sources:Source[]}`. time is DISPLAY date, no stable id/ISO date supplied. Preserve context, change, research angle, provenance and original-source link. Distinguish official filings, publisher news, public discussion. about, changed and matters are null until the record's summary has that line; never put raw text or invented summaries in their place. source_name is ASX for filings, the platform for Reddit posts, else the publisher or provider, or null. Client-side search/filter/reader selection welcome; start fresh rather than copying announcement-card composition.
 
 ### History: fetchTickerDeepDive(symbol)
 
 GET /tickers/symbol/{symbol}/deep-dive-timeline -> Event[] (up to ten persisted events, newest first).
 
-Event = `{month,tag,title,date,detail,metrics:string[],tone,sources:Source[]}`. detail is persisted summary or raw-text excerpt/No detail available yet. metrics currently describes source type, not numeric performance. tone is hardcoded green: DO NOT display it as positive sentiment. Chronology, long readable detail, source provenance and links remain accessible. Do not claim an entire company history or generated cross-record conclusions.
+Event = `{month,tag,title,date,detail,metrics:string[],tone,sources:Source[]}`. detail is the persisted summary text, or null when the record has no summary. metrics currently describes source type, not numeric performance. tone is hardcoded green: DO NOT display it as positive sentiment. Chronology, long readable detail, source provenance and links remain accessible. Do not claim an entire company history or generated cross-record conclusions.
 
 ### Categories: fetchTickerCategorySentiment(symbol)
 

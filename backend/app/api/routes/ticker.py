@@ -1,4 +1,3 @@
-import re
 import time
 from uuid import UUID
 
@@ -10,12 +9,10 @@ from app.crud import ticker as crud
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
-from app.models.artifact_summary import ArtifactSummary
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
+from app.services import artifact_card, artifact_summary
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
-
-_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
 QUOTE_CACHE_TTL_SECONDS = 300
 QUOTE_FAILURE_TTL_SECONDS = 60
@@ -100,63 +97,9 @@ def _clean_text(value):
     return cleaned or None
 
 
-def _preview(value, max_length=220):
-    cleaned = _clean_text(value)
-    if not cleaned:
-        return None
-    if len(cleaned) <= max_length:
-        return cleaned
-    return f"{cleaned[:max_length].rstrip()}..."
-
-
 def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
     metadata = artifact.artifact_metadata or {}
     return _clean_text(metadata.get(key)) or fallback
-
-
-def _metadata_source_name(artifact: Artifact) -> str | None:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    return _clean_text(metadata.get("source_name"))
-
-
-def _source_action_label(artifact: Artifact) -> str:
-    source_type = (artifact.source_type or "").lower()
-    if source_type == "asx_announcement":
-        return "View original ASX filing"
-    if source_type == "news":
-        source_name = _metadata_source_name(artifact)
-        if source_name:
-            return f"View original at {source_name}"
-    return "View original source"
-
-
-def _metadata_text_list(metadata: dict, key: str) -> list[str]:
-    values = metadata.get(key)
-    if not isinstance(values, list):
-        return []
-
-    cleaned_values = []
-    seen = set()
-    for value in values:
-        cleaned = _clean_text(value)
-        if cleaned and cleaned not in seen:
-            cleaned_values.append(cleaned)
-            seen.add(cleaned)
-    return cleaned_values
-
-
-def _clarity_for_artifact(artifact: Artifact | None) -> dict:
-    metadata = (
-        artifact.artifact_metadata
-        if artifact and isinstance(artifact.artifact_metadata, dict)
-        else {}
-    )
-    clarity_keys = ("confirmed_facts", "speculation")
-    return {
-        "is_classified": all(isinstance(metadata.get(key), list) for key in clarity_keys),
-        "confirmed_facts": _metadata_text_list(metadata, "confirmed_facts"),
-        "speculation": _metadata_text_list(metadata, "speculation"),
-    }
 
 
 def _format_announcement_time(artifact: Artifact) -> str:
@@ -171,53 +114,16 @@ def _format_month(value):
     return value.strftime("%b %Y")
 
 
-def _format_label(value, fallback):
-    cleaned = _clean_text(value)
-    if not cleaned or cleaned.upper() == "UNKNOWN":
-        cleaned = _clean_text(fallback) or "Announcement"
-    label = cleaned.replace("_", " ").replace("-", " ")
-    # Split CamelCase category names such as "DividendAnnouncement", but leave
-    # all-caps words alone so acronyms do not come back as "U N K N O W N".
-    label = " ".join(
-        word if word.isupper() else _CAMEL_BOUNDARY.sub(" ", word)
-        for word in label.split()
-    )
-    return label.title()
-
-
 def _format_key_date(value):
     if not value:
         return "No filings yet"
     return value.strftime("%b %Y")
 
 
-def _source_from_values(label, title, url, published_at=None, evidence_text=None):
-    cleaned_url = _clean_text(url)
-    if not cleaned_url:
-        return None
-    return {
-        "label": label,
-        "title": _clean_text(title) or label,
-        "url": cleaned_url,
-        "published_at": published_at.isoformat() if published_at else None,
-        "evidence_text": _preview(evidence_text, 180),
-    }
-
-
-def _sources_for_artifact(artifact: Artifact):
-    source = _source_from_values(
-        label=_format_label(artifact.source_type, "Source"),
-        title=artifact.title,
-        url=artifact.url,
-        published_at=artifact.published_at or artifact.created_at,
-        evidence_text=artifact.raw_text,
-    )
-    return [source] if source else []
-
-
 def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Artifact]:
     return (
         db.query(Artifact)
+        .options(artifact_summary.WITH_SUMMARY)
         .filter(Artifact.ticker_id == ticker_id)
         .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
         .limit(limit)
@@ -241,9 +147,9 @@ def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[st
 
     for artifact in artifacts:
         metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        label = _format_label(metadata.get("category"), artifact.artifact_type)
+        label = artifact_card.label(metadata.get("category"), artifact.artifact_type)
         if label.lower() == "unknown":
-            label = _format_label(artifact.artifact_type, "Announcement")
+            label = artifact_card.label(artifact.artifact_type, "Announcement")
         theme = f"{label} activity"
         key = theme.lower()
         if key not in seen:
@@ -264,19 +170,12 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
     latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
-    sources = _sources_for_artifact(latest_artifact) if latest_artifact else []
+    latest_summary = artifact_summary.read(latest_artifact) if latest_artifact else None
+    sources = artifact_card.sources(latest_artifact) if latest_artifact else []
     confidence_pct = (
         f"{round(float(latest_sentiment.confidence_score) * 100)}%"
         if latest_sentiment and latest_sentiment.confidence_score is not None
         else "N/A"
-    )
-    story = (
-        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
-        if latest_artifact and latest_artifact.raw_text
-        else (
-            f"{ticker.symbol} is tracked from the StonksInHand database. "
-            "Add announcements and analysis data to enrich this brief."
-        )
     )
 
     overview = {
@@ -294,7 +193,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
         ),
         "current_price": _money(quote[0] if quote else None),
         "day_change": _day_change(quote),
-        "story": story,
+        "story": artifact_summary.brief(latest_summary),
         "sources_count": len(sources),
         "latest_signal_confidence_pct": confidence_pct,
         "latest_signal_model": latest_sentiment.model_used if latest_sentiment else None,
@@ -306,7 +205,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
         # Deprecated compatibility field. New consumers must use the accurately
         # named latest-signal field above.
         "public_sentiment_pct": confidence_pct,
-        "clarity": _clarity_for_artifact(latest_artifact),
+        "clarity": artifact_summary.clarity(latest_summary),
         "sources": sources,
     }
     aside = {
@@ -322,7 +221,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
             {
                 "label": "Latest type",
                 "value": (
-                    _format_label(
+                    artifact_card.label(
                         _metadata_value(
                             latest_artifact,
                             "category",
@@ -405,40 +304,9 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
         {
             "id": str(artifact.id),
             "ticker": ticker.symbol,
-            "tag": _format_label(
-                _metadata_value(
-                    artifact,
-                    "category",
-                    artifact.source_type or artifact.artifact_type,
-                ),
-                artifact.artifact_type,
-            ),
             "time": _format_announcement_time(artifact),
-            "title": artifact.title or f"{ticker.symbol} announcement",
-            "about": _metadata_value(
-                artifact,
-                "about",
-                _metadata_value(
-                    artifact,
-                    "summary",
-                    "Summary pending.",
-                ),
-            ),
-            "changed": _metadata_value(
-                artifact,
-                "changed",
-                "No change summary available yet.",
-            ),
-            "matters": _metadata_value(
-                artifact,
-                "matters",
-                "No investment impact summary available yet.",
-            ),
-            "url": artifact.url,
-            "source_type": artifact.source_type,
-            "source_name": _metadata_source_name(artifact),
-            "source_label": _source_action_label(artifact),
-            "sources": _sources_for_artifact(artifact),
+            **artifact_card.artifact_card(artifact).fields(),
+            "sources": artifact_card.sources(artifact),
         }
         for artifact in artifacts
     ]
@@ -454,33 +322,20 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
     artifacts = _ticker_artifacts(db, ticker.id)
     timeline = []
     for artifact in artifacts:
-        summary = (
-            db.query(ArtifactSummary)
-            .filter(ArtifactSummary.artifact_id == artifact.id)
-            .order_by(ArtifactSummary.created_at.desc())
-            .first()
-        )
+        summary = artifact_summary.read(artifact)
         timeline.append(
             {
                 "month": _format_month(artifact.published_at),
-                "tag": _format_label(
+                "tag": artifact_card.label(
                     _metadata_value(artifact, "category", artifact.artifact_type),
                     artifact.artifact_type,
                 ),
                 "title": artifact.title or f"{ticker.symbol} update",
                 "date": _format_announcement_time(artifact),
-                "detail": (
-                    summary.summary_text
-                    if summary
-                    else (
-                        _preview(artifact.raw_text, 240)
-                        if artifact.raw_text
-                        else "No detail available yet."
-                    )
-                ),
+                "detail": summary.text if summary else None,
                 "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
                 "tone": "green",
-                "sources": _sources_for_artifact(artifact),
+                "sources": artifact_card.sources(artifact),
             }
         )
 
