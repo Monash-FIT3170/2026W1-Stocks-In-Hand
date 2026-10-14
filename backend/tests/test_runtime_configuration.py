@@ -105,6 +105,7 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert defaults.MAX_DOCUMENT_BYTES == 25 * 1024 * 1024
     assert defaults.MAX_DOCX_UNCOMPRESSED_BYTES == 20 * 1024 * 1024
     assert defaults.RAW_DOCUMENT_BUCKET == ""
+    assert defaults.MAX_ANALYSIS_CHARS == 50000
 
 
 def test_the_environment_overrides_the_document_size_limits() -> None:
@@ -201,6 +202,7 @@ def test_a_required_setting_must_be_set() -> None:
         ("MAX_DOCUMENTS_PER_RUN", "abc", "must be a whole number"),
         ("MAX_DOCUMENT_BYTES", "0", "must be at least 1"),
         ("MAX_DOCX_UNCOMPRESSED_BYTES", "20MiB", "must be a whole number"),
+        ("MAX_ANALYSIS_CHARS", "0", "must be at least 1"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:

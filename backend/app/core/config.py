@@ -387,6 +387,8 @@ class Settings:
     MAX_DOCUMENT_BYTES: int = integer(25 * 1024 * 1024, minimum=1)
     MAX_DOCX_UNCOMPRESSED_BYTES: int = integer(20 * 1024 * 1024, minimum=1)
     RAW_DOCUMENT_BUCKET: str = text()
+    # The most of an artifact's title and text FinBERT scores.
+    MAX_ANALYSIS_CHARS: int = integer(50000, minimum=1)
 
     @classmethod
     def from_environment(
