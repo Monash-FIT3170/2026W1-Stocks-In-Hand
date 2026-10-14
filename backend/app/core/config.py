@@ -389,6 +389,13 @@ class Settings:
     RAW_DOCUMENT_BUCKET: str = text()
     # The most of an artifact's title and text FinBERT scores.
     MAX_ANALYSIS_CHARS: int = integer(50000, minimum=1)
+    # The analysis worker refuses a PDF of more than MAX_PDF_PAGES pages, and
+    # a scanned PDF it would read by OCR of more than MAX_OCR_PAGES pages.
+    MAX_PDF_PAGES: int = integer(500, minimum=1)
+    MAX_OCR_PAGES: int = integer(5, minimum=0)
+    MAX_OCR_PIXELS_PER_PAGE: int = integer(8_000_000, minimum=1)
+    # Where the analysis worker sends alerts while NOTIFICATIONS_ENABLED is on.
+    NOTIFICATION_QUEUE_URL: str = text(strip=True)
 
     @classmethod
     def from_environment(

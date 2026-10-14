@@ -106,6 +106,18 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert defaults.MAX_DOCX_UNCOMPRESSED_BYTES == 20 * 1024 * 1024
     assert defaults.RAW_DOCUMENT_BUCKET == ""
     assert defaults.MAX_ANALYSIS_CHARS == 50000
+    assert (defaults.MAX_PDF_PAGES, defaults.MAX_OCR_PAGES) == (500, 5)
+    assert defaults.MAX_OCR_PIXELS_PER_PAGE == 8_000_000
+    assert defaults.NOTIFICATION_QUEUE_URL == ""
+
+
+def test_the_notification_queue_url_is_trimmed_and_the_ocr_limit_may_be_zero() -> None:
+    read = Settings.from_environment(
+        {"NOTIFICATION_QUEUE_URL": " https://sqs.example/notifications ", "MAX_OCR_PAGES": "0"}
+    )
+
+    assert read.NOTIFICATION_QUEUE_URL == "https://sqs.example/notifications"
+    assert read.MAX_OCR_PAGES == 0
 
 
 def test_the_environment_overrides_the_document_size_limits() -> None:
@@ -203,6 +215,9 @@ def test_a_required_setting_must_be_set() -> None:
         ("MAX_DOCUMENT_BYTES", "0", "must be at least 1"),
         ("MAX_DOCX_UNCOMPRESSED_BYTES", "20MiB", "must be a whole number"),
         ("MAX_ANALYSIS_CHARS", "0", "must be at least 1"),
+        ("MAX_PDF_PAGES", "0", "must be at least 1"),
+        ("MAX_OCR_PAGES", "-1", "must be at least 0"),
+        ("MAX_OCR_PIXELS_PER_PAGE", "8e6", "must be a whole number"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:

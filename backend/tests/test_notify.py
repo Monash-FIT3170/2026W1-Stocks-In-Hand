@@ -27,7 +27,6 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 def _enable_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the enabled worker unless a test explicitly selects dark mode."""
     monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
 
 
 def _message_body(**overrides: object) -> dict[str, object]:

@@ -32,7 +32,6 @@ module imports this one.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -533,18 +532,17 @@ def sqs_alert_sender(queue_url: str, client: Any | None = None) -> AlertSender:
 
 
 def deployed_ports() -> AnalysisPorts:
-    """The ports the analysis Lambda runs with, from its environment."""
+    """The ports the analysis Lambda runs with, from its settings."""
     # Imported on use: the records module imports this one and the database layer.
     from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 
-    notifications_enabled = os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
     return AnalysisPorts(
         records=PostgresAnalysisRecords(database_session),
         scorer=FinBertScorer(),
         documents=raw_document_store() if settings.RAW_DOCUMENT_BUCKET else None,
         alerts=(
-            sqs_alert_sender(os.getenv("NOTIFICATION_QUEUE_URL", "").strip())
-            if notifications_enabled
+            sqs_alert_sender(settings.NOTIFICATION_QUEUE_URL)
+            if settings.NOTIFICATIONS_ENABLED
             else None
         ),
     )
@@ -587,9 +585,9 @@ def _analyse_document(
         extract_document(
             content,
             document_format=document_format,
-            max_pages=int(os.getenv("MAX_PDF_PAGES", "100")),
-            max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
-            max_ocr_pixels_per_page=int(os.getenv("MAX_OCR_PIXELS_PER_PAGE", "8000000")),
+            max_pages=settings.MAX_PDF_PAGES,
+            max_ocr_pages=settings.MAX_OCR_PAGES,
+            max_ocr_pixels_per_page=settings.MAX_OCR_PIXELS_PER_PAGE,
         ),
         title=title,
         filename=facts.filename or fallback_filename,

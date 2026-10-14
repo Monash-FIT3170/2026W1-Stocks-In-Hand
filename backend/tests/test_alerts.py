@@ -25,7 +25,6 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture(autouse=True)
 def _enabled_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
 
 
 def test_compose_files_keep_brevo_delivery_in_dry_run_by_default() -> None:

@@ -347,7 +347,12 @@ def test_pdf_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=1,
+            max_ocr_pages=5,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "too_many_pages"
 
 
@@ -397,7 +402,12 @@ def test_scanned_pdf_over_ocr_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=10, max_ocr_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=10,
+            max_ocr_pages=1,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "ocr_page_limit"
 
 
