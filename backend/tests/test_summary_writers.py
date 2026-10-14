@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -120,8 +120,7 @@ def _workers_use(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     def test_session():
         yield db
 
-    for module in (analysis, pipeline_stage):
-        monkeypatch.setattr(module, "database_session", test_session)
+    monkeypatch.setattr(pipeline_stage, "database_session", test_session)
     monkeypatch.setattr(
         analysis,
         "deployed_ports",
@@ -348,61 +347,3 @@ def test_the_local_loader_stores_sentiment_for_an_answer_without_text(
         select(ArtifactSentiment).where(ArtifactSentiment.artifact_id == artifact.id)
     ).all()
     assert [sentiment.model_used for sentiment in sentiments] == ["test-finbert"]
-
-
-def test_the_repair_operation_completes_only_incomplete_announcement_summaries(
-    db_session: Session,
-    bedrock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    incomplete = _analysed_announcement(db_session, 1, _lines_only(ANNOUNCEMENT_ANSWER))
-    unrepaired = _analysed_announcement(db_session, 2, _lines_only(ANNOUNCEMENT_ANSWER))
-    complete = _analysed_announcement(db_session, 1, ANNOUNCEMENT_ANSWER)
-    _workers_use(db_session, monkeypatch)
-    bedrock(ANNOUNCEMENT_ANSWER, {**ANNOUNCEMENT_ANSWER, "matters": ""})
-
-    result = _repair(limit=5)
-
-    assert artifact_summary.read(incomplete) == artifact_summary.from_answer(
-        ANNOUNCEMENT_ANSWER,
-        model=MODEL,
-        prompt_version="llm-announcement-summary-v3",
-    )
-    assert artifact_summary.read(complete).model == "bedrock:earlier-model"
-    assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"
-    assert {
-        "artifact_id": str(unrepaired.id),
-        "error": "RuntimeError: Bedrock response omitted structured summary fields",
-    } in result["failed"]
-    assert result["missing_after"] == result["missing_before"] - 1
-
-
-def test_the_repair_operation_lists_an_announcement_removed_while_it_was_summarised(
-    db_session: Session,
-    bedrock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    removed = _analysed_announcement(db_session, 1, _lines_only(ANNOUNCEMENT_ANSWER))
-    removed_id = removed.id
-    _workers_use(db_session, monkeypatch)
-    provider = bedrock(ANNOUNCEMENT_ANSWER)
-    answer = provider.complete
-
-    def remove_then_answer(prompt: str, **options) -> str:
-        db_session.execute(
-            delete(ArtifactSummary).where(ArtifactSummary.artifact_id == removed_id)
-        )
-        db_session.execute(delete(Artifact).where(Artifact.id == removed_id))
-        return answer(prompt, **options)
-
-    monkeypatch.setattr(provider, "complete", remove_then_answer)
-
-    result = _repair(limit=1)
-
-    assert result["updated"] == 0
-    assert result["failed"] == [
-        {
-            "artifact_id": str(removed_id),
-            "error": "RuntimeError: Completed artifact is no longer available",
-        }
-    ]

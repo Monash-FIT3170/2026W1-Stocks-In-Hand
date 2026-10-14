@@ -12,12 +12,14 @@ import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import nullcontext
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -43,10 +45,14 @@ from lambdas.artifact_analysis import (
     FinBertScorer,
     FixedSentiment,
     SentimentScorer,
+    Summarised,
+    SummaryUnavailable,
     analyse_stored_document,
     analyse_stored_text,
     deployed_ports,
+    repair_missing_summaries,
     sqs_alert_sender,
+    summarise,
 )
 from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 from lambdas.common import PermanentDocumentError
@@ -677,6 +683,252 @@ def test_the_lambda_sends_alerts_only_when_notifications_are_enabled(
 
     assert (ports.alerts is not None) is alerts
     assert ports.documents.name == "raw-documents"
+
+
+def _analysed_announcement(db: Session, *, created_day: int = 1, answer: dict | None = None):
+    """An analysed dividend announcement, with its sentiment and, if given, a summary."""
+    artifact = _artifact(
+        db,
+        source_type="asx_announcement",
+        artifact_type="dividend_announcement",
+        title="Interim Dividend",
+        raw_text=DIVIDEND_NOTICE,
+        artifact_metadata={
+            "category": "DividendAnnouncement",
+            "extracted_data": {"payment_date": "2026-04-02"},
+        },
+        analysis_status=AnalysisStatus.COMPLETED,
+        created_at=datetime(2000, 1, created_day, tzinfo=timezone.utc),
+    )
+    db.add(
+        ArtifactSentiment(
+            artifact_id=artifact.id,
+            sentiment_label="neutral",
+            model_used="earlier-finbert",
+        )
+    )
+    if answer is not None:
+        artifact_summary.record(
+            db,
+            artifact,
+            artifact_summary.from_answer(
+                answer,
+                model="bedrock:earlier-model",
+                prompt_version="llm-announcement-summary-v2",
+            ),
+        )
+    db.commit()
+    return artifact
+
+
+def _lines_only(answer: dict) -> dict:
+    return {key: answer[key] for key in artifact_summary.TEXT_LINES}
+
+
+def _bedrock(db: Session, *answers: dict) -> AnalysisPorts:
+    """Ports whose scripted LLM is named as Bedrock, which the summary repair needs."""
+    return replace(
+        _ports(db),
+        provider=ScriptedProvider(
+            [json.dumps(answer) for answer in answers],
+            name="bedrock:test-model",
+        ),
+    )
+
+
+def test_an_announcement_is_summarised_again_from_its_stored_category_and_fields(
+    db_session: Session,
+) -> None:
+    announcement = _analysed_announcement(db_session)
+    ports = _ports(db_session, ANNOUNCEMENT_ANSWER)
+
+    outcome = summarise(announcement.id, ports)
+
+    db_session.refresh(announcement)
+    assert outcome == Summarised(
+        artifact_id=announcement.id,
+        model="scripted:test-model",
+        prompt_version="llm-announcement-summary-v3",
+        complete=True,
+    )
+    [call] = ports.provider.calls
+    assert "Detected category:\nDividendAnnouncement" in call.prompt
+    assert '"payment_date": "2026-04-02"' in call.prompt
+    assert artifact_summary.read(announcement) == artifact_summary.from_answer(
+        ANNOUNCEMENT_ANSWER,
+        model="scripted:test-model",
+        prompt_version="llm-announcement-summary-v3",
+    )
+    [sentiment] = _rows(db_session, ArtifactSentiment, announcement)
+    assert (sentiment.sentiment_label, sentiment.model_used) == ("neutral", "earlier-finbert")
+    assert announcement.analysis_status == AnalysisStatus.COMPLETED
+    assert announcement.artifact_metadata["extracted_data"] == {"payment_date": "2026-04-02"}
+    assert ports.scorer.scored == []
+
+
+@pytest.mark.parametrize(
+    ("make", "answer", "opening"),
+    [
+        (_news, NEWS_ANSWER, "You are summarising a financial news story"),
+        (_post, DISCUSSION_ANSWER, "You are summarising one public discussion post"),
+    ],
+    ids=["news", "discussion"],
+)
+def test_stored_text_is_summarised_again_with_its_own_prompt(
+    db_session: Session,
+    make,
+    answer: dict,
+    opening: str,
+) -> None:
+    artifact = make(db_session)
+    ports = _ports(db_session, answer)
+
+    outcome = summarise(artifact.id, ports)
+
+    db_session.refresh(artifact)
+    [call] = ports.provider.calls
+    assert call.prompt.startswith(opening)
+    assert outcome.complete is True
+    assert artifact.analysis_status == AnalysisStatus.PENDING
+    assert artifact_summary.read(artifact).about == answer["about"]
+
+
+def test_with_no_llm_switched_on_nothing_is_summarised(db_session: Session) -> None:
+    announcement = _analysed_announcement(db_session)
+
+    outcome = summarise(
+        announcement.id,
+        _ports(db_session, LLMUnavailableError("Amazon Bedrock is disabled")),
+    )
+
+    assert outcome == SummaryUnavailable(
+        artifact_id=announcement.id,
+        reason="Amazon Bedrock is disabled",
+    )
+    assert _rows(db_session, ArtifactSummary, announcement) == []
+
+
+def test_an_answer_without_text_is_not_recorded(db_session: Session) -> None:
+    story = _news(db_session)
+
+    with pytest.raises(artifact_summary.EmptySummary):
+        summarise(
+            story.id,
+            _ports(db_session, {key: "" for key in artifact_summary.TEXT_LINES}),
+        )
+
+    assert _rows(db_session, ArtifactSummary, story) == []
+
+
+def test_an_artifact_without_text_cannot_be_summarised(db_session: Session) -> None:
+    story = _news(db_session, raw_text=None)
+
+    with pytest.raises(PermanentDocumentError) as error:
+        summarise(story.id, _ports(db_session))
+
+    assert error.value.code == "no_extractable_text"
+
+
+def test_the_repair_dry_run_lists_the_incomplete_announcements_and_changes_nothing(
+    db_session: Session,
+) -> None:
+    incomplete = _analysed_announcement(db_session, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+    _analysed_announcement(db_session, answer=ANNOUNCEMENT_ANSWER)
+    ports = _bedrock(db_session)
+
+    result = repair_missing_summaries(apply=False, limit=5, ports=ports)
+
+    assert str(incomplete.id) in result["artifact_ids"]
+    assert (result["apply"], result["selected"], result["updated"]) == (
+        False,
+        len(result["artifact_ids"]),
+        0,
+    )
+    assert artifact_summary.read(incomplete).model == "bedrock:earlier-model"
+    assert ports.provider.calls == []
+
+
+def test_the_repair_summarises_at_most_its_limit_and_reports_what_is_left(
+    db_session: Session,
+) -> None:
+    oldest = [
+        _analysed_announcement(db_session, created_day=day, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+        for day in (1, 2, 3)
+    ]
+    ports = _bedrock(db_session, ANNOUNCEMENT_ANSWER, ANNOUNCEMENT_ANSWER)
+
+    result = repair_missing_summaries(apply=True, limit=2, ports=ports)
+
+    assert (result["selected"], result["updated"], result["failed"]) == (2, 2, [])
+    assert result["missing_after"] == result["missing_before"] - 2
+    assert [artifact_summary.read(artifact).model for artifact in oldest] == [
+        "bedrock:test-model",
+        "bedrock:test-model",
+        "bedrock:earlier-model",
+    ]
+
+
+def test_the_repair_records_only_complete_summaries(db_session: Session) -> None:
+    incomplete = _analysed_announcement(db_session, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+    unrepaired = _analysed_announcement(
+        db_session,
+        created_day=2,
+        answer=_lines_only(ANNOUNCEMENT_ANSWER),
+    )
+    complete = _analysed_announcement(db_session, answer=ANNOUNCEMENT_ANSWER)
+
+    result = repair_missing_summaries(
+        apply=True,
+        limit=5,
+        ports=_bedrock(db_session, ANNOUNCEMENT_ANSWER, {**ANNOUNCEMENT_ANSWER, "matters": ""}),
+    )
+
+    assert artifact_summary.read(incomplete) == artifact_summary.from_answer(
+        ANNOUNCEMENT_ANSWER,
+        model="bedrock:test-model",
+        prompt_version="llm-announcement-summary-v3",
+    )
+    assert artifact_summary.read(complete).model == "bedrock:earlier-model"
+    assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"
+    assert {
+        "artifact_id": str(unrepaired.id),
+        "error": "RuntimeError: The generated summary omitted structured summary fields",
+    } in result["failed"]
+    assert result["missing_after"] == result["missing_before"] - 1
+
+
+def test_the_repair_lists_an_announcement_removed_while_it_was_summarised(
+    db_session: Session,
+) -> None:
+    removed = _analysed_announcement(db_session, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+    removed_id = removed.id
+    ports = _bedrock(db_session, ANNOUNCEMENT_ANSWER)
+    answer = ports.provider.complete
+
+    def remove_then_answer(prompt: str, **options) -> str:
+        for model in (ArtifactSentiment, ArtifactSummary):
+            db_session.execute(delete(model).where(model.artifact_id == removed_id))
+        db_session.execute(delete(Artifact).where(Artifact.id == removed_id))
+        return answer(prompt, **options)
+
+    ports.provider.complete = remove_then_answer
+
+    result = repair_missing_summaries(apply=True, limit=1, ports=ports)
+
+    assert result["updated"] == 0
+    assert result["failed"] == [
+        {
+            "artifact_id": str(removed_id),
+            "error": "PermanentDocumentError: Artifact does not exist",
+        }
+    ]
+
+
+def test_the_repair_refuses_a_provider_that_is_not_bedrock(db_session: Session) -> None:
+    _analysed_announcement(db_session, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+
+    with pytest.raises(RuntimeError, match="requires Amazon Bedrock"):
+        repair_missing_summaries(apply=True, limit=1, ports=_ports(db_session))
 
 
 def test_every_path_gives_finbert_the_title_and_text(

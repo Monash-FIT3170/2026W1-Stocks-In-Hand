@@ -10,6 +10,10 @@ Starting and finishing an analysis picks its transition from the row at the
 moment it writes, by the rule ``crud.scrape_run.fail_abandoned_work`` uses:
 a stored document moves its scrape run's counters, and any other artifact
 is analysed without touching them.
+
+Every summary goes through the artifact summary module. One recorded with
+an analysis joins ``crud.artifact.store_artifact_analysis``'s transaction
+with the text and sentiment; one recorded on its own commits by itself.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from app.crud import artifact as artifact_crud
 from app.crud import scrape_run as scrape_run_crud
 from app.models.artifact import Artifact
 from app.services import artifact_summary
-from app.services.generation import Unavailable
+from app.services.generation import Generated, Unavailable
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
 from app.status import AnalysisStatus, DownloadStatus
 from lambdas.artifact_analysis import (
@@ -36,6 +40,7 @@ from lambdas.artifact_analysis import (
     ArtifactKind,
     RecordedDocument,
 )
+from lambdas.common import PermanentDocumentError
 from lambdas.raw_documents import StoredDocument
 
 SessionScope = Callable[[], AbstractContextManager[Session]]
@@ -99,6 +104,28 @@ class PostgresAnalysisRecords:
                 scrape_run_crud.mark_inline_artifact_analysis_completed(db, artifact_id)
         return summary is not None
 
+    def record_summary(
+        self,
+        artifact_id: UUID,
+        generated: Generated[dict[str, object]],
+        *,
+        complete_only: bool = False,
+    ) -> bool:
+        summary = artifact_summary.from_generated(generated)
+        with self._session_scope() as db:
+            artifact = artifact_crud.get_artifact(db, artifact_id)
+            if artifact is None:
+                raise PermanentDocumentError("Artifact does not exist", code="artifact_not_found")
+            complete = artifact_summary.is_complete(summary, source_type=artifact.source_type)
+            if complete or not complete_only:
+                artifact_summary.record(db, artifact, summary)
+                db.commit()
+        return complete
+
+    def missing_summaries(self, limit: int) -> tuple[list[UUID], int]:
+        with self._session_scope() as db:
+            return artifact_summary.incomplete_announcements(db, limit=limit)
+
 
 def _is_stored_document(db: Session, artifact_id: UUID) -> bool:
     status = db.query(Artifact.download_status).filter(Artifact.id == artifact_id).scalar()
@@ -129,6 +156,8 @@ def _filename(artifact: Artifact, metadata: dict[str, Any]) -> str | None:
 
 def _facts(artifact: Artifact) -> ArtifactFacts:
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    category = metadata.get("category")
+    extracted_data = metadata.get("extracted_data")
     source_name = metadata.get("source_name") or metadata.get("provider")
     return ArtifactFacts(
         artifact_id=artifact.id,
@@ -139,6 +168,9 @@ def _facts(artifact: Artifact) -> ArtifactFacts:
         run_id=artifact.scrape_run_id,
         title=artifact.title,
         raw_text=artifact.raw_text,
+        artifact_type=artifact.artifact_type,
+        category=str(category) if category else None,
+        extracted_data=extracted_data if isinstance(extracted_data, dict) else {},
         source_name=source_name if isinstance(source_name, str) else None,
         filename=_filename(artifact, metadata),
         completed=artifact.analysis_status == AnalysisStatus.COMPLETED,

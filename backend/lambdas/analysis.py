@@ -3,15 +3,13 @@ from __future__ import annotations
 import json
 import logging
 from urllib.parse import unquote_plus
-from uuid import UUID
 
 from pydantic import ValidationError
 
 from app.messages import PublicDiscussionAnalysisMessage
-from app.status import AnalysisStatus
 from lambdas import artifact_analysis
 from lambdas.artifact_analysis import AlreadyAnalysed, deployed_ports
-from lambdas.common import PermanentDocumentError, database_session
+from lambdas.common import PermanentDocumentError
 from lambdas.pipeline_stage import (
     StageRecord,
     analysed_document,
@@ -79,96 +77,6 @@ def parse_s3_notifications(record: dict) -> list[DocumentLocation]:
     return locations
 
 
-def _incomplete_announcements(limit: int) -> tuple[list[UUID], int]:
-    """Analysed announcements whose summary is incomplete, and how many there are."""
-    with database_session() as db:
-        from app.services import artifact_summary
-
-        return artifact_summary.incomplete_announcements(db, limit=limit)
-
-
-def _summary_input(artifact_id: UUID) -> dict:
-    with database_session() as db:
-        from app.crud.artifact import get_artifact
-
-        artifact = get_artifact(db, artifact_id)
-        if artifact is None or artifact.analysis_status != AnalysisStatus.COMPLETED:
-            raise RuntimeError("Completed artifact is no longer available")
-        metadata = (
-            artifact.artifact_metadata
-            if isinstance(artifact.artifact_metadata, dict)
-            else {}
-        )
-        return {
-            "title": artifact.title or "Untitled ASX announcement",
-            "category": str(
-                metadata.get("category") or artifact.artifact_type or "UNKNOWN"
-            ),
-            "extracted_data": metadata.get("extracted_data")
-            if isinstance(metadata.get("extracted_data"), dict)
-            else {},
-            "raw_text": artifact.raw_text or "",
-        }
-
-
-def _resummarise_missing_fields(  # pylint: disable=too-many-locals
-    *,
-    apply: bool,
-    limit: int,
-) -> dict:
-    """Boundedly regenerate incomplete announcement summaries through Bedrock."""
-    capped_limit = max(min(limit, 20), 1)
-    artifact_ids, total_missing = _incomplete_announcements(capped_limit)
-    result: dict[str, object] = {
-        "apply": apply,
-        "selected": len(artifact_ids),
-        "missing_before": total_missing,
-        "updated": 0,
-        "failed": [],
-    }
-    if not apply:
-        result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
-        return result
-
-    from app.services import artifact_summary, generation
-    from app.crud.artifact import get_artifact
-
-    provider = generation.providers.configured_provider()
-    if not provider.name.startswith("bedrock:"):
-        raise RuntimeError("Structured summary repair requires Amazon Bedrock")
-
-    for artifact_id in artifact_ids:
-        try:
-            generated = generation.generate(
-                generation.AnnouncementSummary(**_summary_input(artifact_id)),
-                provider=provider,
-            )
-            if isinstance(generated, generation.Unavailable):
-                raise RuntimeError(generated.reason)
-            summary = artifact_summary.from_generated(generated)
-            if not artifact_summary.is_complete(summary, source_type="asx_announcement"):
-                raise RuntimeError("Bedrock response omitted structured summary fields")
-            with database_session() as db:
-                artifact = get_artifact(db, artifact_id)
-                if artifact is None:
-                    raise RuntimeError("Completed artifact is no longer available")
-                artifact_summary.record(db, artifact, summary)
-                db.commit()
-            result["updated"] = int(result["updated"]) + 1
-        # Continue so one malformed model response cannot block the batch.
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            result["failed"].append(
-                {
-                    "artifact_id": str(artifact_id),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-
-    _remaining_ids, remaining = _incomplete_announcements(1)
-    result["missing_after"] = remaining
-    return result
-
-
 def _analyse(current: StageRecord) -> None:
     stored_text_message = parse_public_discussion_message(current.record)
     if stored_text_message is not None:
@@ -219,9 +127,10 @@ def handler(event: dict, _context) -> dict:
         apply = event.get("apply") is True
         if apply and event.get("confirmation") != "RESUMMARISE_MISSING_FIELDS":
             raise ValueError("Summary repair apply mode requires confirmation")
-        return _resummarise_missing_fields(
+        return artifact_analysis.repair_missing_summaries(
             apply=apply,
             limit=int(event.get("limit", 10)),
+            ports=deployed_ports(),
         )
     for record in event.get("Records", []):
         run_stage(STAGE, record, _analyse)

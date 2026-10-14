@@ -243,8 +243,10 @@ The analysis Lambda also supports an IAM-only structured-summary repair event.
 Invoke it without `apply` first to inspect the bounded candidate count. Apply
 mode requires the exact `RESUMMARISE_MISSING_FIELDS` confirmation string and
 processes at most 20 completed ASX artifacts per invocation. This operation
-regenerates missing display and clarity fields through the active Bedrock model;
-it is not exposed through the public API.
+regenerates missing display and clarity fields through the active Bedrock model,
+with the same summary step as every other summary
+(`lambdas/artifact_analysis.py`), and keeps an artifact's old summary when the
+new one is still incomplete. It is not exposed through the public API.
 
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.

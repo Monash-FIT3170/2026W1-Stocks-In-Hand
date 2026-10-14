@@ -9,6 +9,10 @@ with the prompt for its kind, and the records store the text, the summary
 and the sentiment and complete the analysis. A scrape run's announcement
 with an alertable sentiment is then sent to alert delivery.
 
+``summarise`` writes a new summary from the stored text and changes nothing
+else, and ``repair_missing_summaries`` uses it to complete the summaries of
+analysed announcements.
+
 The module reaches outside code only through ``AnalysisPorts``: the
 records, whose one adapter is ``PostgresAnalysisRecords``, the sentiment
 scorer, the LLM provider, the raw document store and the alert sender.
@@ -28,7 +32,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import UUID
@@ -68,6 +72,8 @@ AlertSender = Callable[[NotificationMessage], object]
 _STORED_TEXT_CATEGORIES = {"news": "news_article", "discussion": "user_discussion"}
 _UNTITLED = {"news": "Untitled news article", "discussion": "Untitled public discussion"}
 _UNTITLED_ANNOUNCEMENT = "Untitled ASX announcement"
+# The most announcements one summary repair asks Bedrock to summarise.
+REPAIR_LIMIT = 20
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,10 @@ class ArtifactFacts:
     run_id: UUID | None
     title: str | None
     raw_text: str | None
+    artifact_type: str | None
+    # An announcement's metadata category and the fields extracted for it.
+    category: str | None
+    extracted_data: dict[str, Any]
     # The publisher a news story names.
     source_name: str | None
     # A document's file name, from its metadata or the end of its URL.
@@ -146,6 +156,25 @@ class AlreadyAnalysed:
 
     artifact_id: UUID
     run_id: UUID | None
+
+
+@dataclass(frozen=True)
+class Summarised:
+    """A new summary of an artifact, recorded by this call."""
+
+    artifact_id: UUID
+    model: str
+    prompt_version: str
+    # Whether it has every field a summary of its kind should have.
+    complete: bool
+
+
+@dataclass(frozen=True)
+class SummaryUnavailable:
+    """No LLM is switched on, so nothing was summarised or recorded."""
+
+    artifact_id: UUID
+    reason: str
 
 
 class SentimentScorer(Protocol):
@@ -207,6 +236,25 @@ class AnalysisRecords(Protocol):
         """Record the result and complete the analysis.
 
         Returns whether a summary was recorded with it.
+        """
+
+    def record_summary(
+        self,
+        artifact_id: UUID,
+        generated: Generated[dict[str, object]],
+        *,
+        complete_only: bool = False,
+    ) -> bool:
+        """Record a new summary of the artifact, on its own.
+
+        Returns whether the summary has every field its kind should have.
+        With ``complete_only`` an incomplete summary is not recorded.
+        """
+
+    def missing_summaries(self, limit: int) -> tuple[list[UUID], int]:
+        """Analysed announcements whose summary is incomplete, oldest first.
+
+        Returns at most ``limit`` of them and how many there are in all.
         """
 
 
@@ -331,6 +379,108 @@ def analyse_stored_text(
         classification=None,
         summarised=ports.records.finish(artifact_id, result),
     )
+
+
+def summarise(
+    artifact_id: UUID,
+    ports: AnalysisPorts,
+    *,
+    complete_only: bool = False,
+) -> Summarised | SummaryUnavailable:
+    """Summarise an artifact again from its stored text, and record only the summary.
+
+    An announcement is summarised with the category and fields its analysis
+    stored. Its sentiment, classification and analysis status are left
+    alone. With ``complete_only``, an answer that lacks a field its kind
+    needs is not recorded and raises ``RuntimeError``.
+
+    Raises ``PermanentDocumentError`` with ``artifact_not_found`` when the
+    artifact does not exist and ``no_extractable_text`` when it has no text.
+    """
+    facts = _facts(artifact_id, ports)
+    text = (facts.raw_text or "").strip()
+    if not text:
+        raise PermanentDocumentError(
+            "Artifact has no text to summarise",
+            code="no_extractable_text",
+        )
+    generation = _generation()
+    generated = generation.generate(
+        _summary_request(
+            facts,
+            _title(facts),
+            text,
+            category=facts.category or facts.artifact_type or "UNKNOWN",
+            extracted_data=facts.extracted_data,
+        ),
+        provider=ports.provider,
+    )
+    if isinstance(generated, generation.Unavailable):
+        return SummaryUnavailable(artifact_id=artifact_id, reason=generated.reason)
+    complete = ports.records.record_summary(
+        artifact_id,
+        generated,
+        complete_only=complete_only,
+    )
+    if complete_only and not complete:
+        raise RuntimeError("The generated summary omitted structured summary fields")
+    return Summarised(
+        artifact_id=artifact_id,
+        model=generated.model,
+        prompt_version=generated.prompt_version,
+        complete=complete,
+    )
+
+
+def repair_missing_summaries(
+    *,
+    apply: bool,
+    limit: int,
+    ports: AnalysisPorts,
+) -> dict[str, object]:
+    """Summarise again, through Bedrock, analysed announcements with an incomplete summary.
+
+    At most ``REPAIR_LIMIT`` announcements are selected, oldest first, and a
+    dry run only lists them. Applying records each new summary only when it
+    is complete and lists each announcement it could not repair, so one
+    malformed answer cannot block the batch.
+    """
+    artifact_ids, missing_before = ports.records.missing_summaries(
+        max(min(limit, REPAIR_LIMIT), 1)
+    )
+    result: dict[str, object] = {
+        "apply": apply,
+        "selected": len(artifact_ids),
+        "missing_before": missing_before,
+    }
+    if not apply:
+        return {
+            **result,
+            "updated": 0,
+            "failed": [],
+            "artifact_ids": [str(artifact_id) for artifact_id in artifact_ids],
+        }
+
+    provider = ports.provider or _generation().providers.configured_provider()
+    if not provider.name.startswith("bedrock:"):
+        raise RuntimeError("Structured summary repair requires Amazon Bedrock")
+    bedrock = replace(ports, provider=provider)
+    updated = 0
+    failed: list[dict[str, str]] = []
+    for artifact_id in artifact_ids:
+        try:
+            outcome = summarise(artifact_id, bedrock, complete_only=True)
+            if isinstance(outcome, SummaryUnavailable):
+                raise RuntimeError(outcome.reason)
+        # Continue so one malformed model response cannot block the batch.
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            failed.append(
+                {"artifact_id": str(artifact_id), "error": f"{type(exc).__name__}: {exc}"}
+            )
+            continue
+        updated += 1
+    _artifact_ids, missing_after = ports.records.missing_summaries(1)
+    return {**result, "updated": updated, "failed": failed, "missing_after": missing_after}
 
 
 def sqs_alert_sender(queue_url: str, client: Any | None = None) -> AlertSender:
