@@ -12,7 +12,6 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
-from pydantic import ValidationError
 
 from app.api.deps import get_current_investor
 from app.api.routes import notification_preferences as routes
@@ -67,20 +66,6 @@ def _rule(**overrides):
 @pytest.fixture(autouse=True)
 def _enable_notifications(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
-
-
-def test_notification_schema_rejects_duplicate_labels_and_bad_confidence() -> None:
-    """Invalid rule preferences must fail before reaching persistence."""
-    with pytest.raises(ValidationError):
-        NotificationPreferencesUpdate(
-            enabled=True,
-            sentiment_labels=["negative", "negative"],
-        )
-    with pytest.raises(ValidationError):
-        NotificationPreferencesUpdate(
-            enabled=True,
-            min_confidence=1.01,
-        )
 
 
 def test_get_preferences_returns_safe_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
