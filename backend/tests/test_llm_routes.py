@@ -45,6 +45,12 @@ NEWS_SUMMARY = {
     "changed": "Reported production increased.",
     "matters": "The increase may affect revenue expectations.",
 }
+# A well-formed answer the model left empty.
+EMPTY_SUMMARY = {
+    **{key: "" for key in artifact_summary.TEXT_LINES},
+    "confirmed_facts": [],
+    "speculation": [],
+}
 
 
 @pytest.fixture()
@@ -173,15 +179,7 @@ def test_an_answer_without_text_is_refused_with_502(
     scripted,
 ) -> None:
     artifact = _announcement(db_session)
-    scripted(
-        json.dumps(
-            {
-                **{key: "" for key in artifact_summary.TEXT_LINES},
-                "confirmed_facts": [],
-                "speculation": [],
-            }
-        )
-    )
+    scripted(json.dumps(EMPTY_SUMMARY))
 
     with pytest.raises(HTTPException) as error:
         llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
@@ -233,6 +231,31 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
 
     assert (result["processed"], result["skipped"], result["errors"]) == (1, 1, [])
     assert _summary_row(db_session, pending).model_used == "scripted:test-model"
+
+
+def test_ticker_summaries_list_an_answer_without_text_and_go_on(
+    db_session: Session,
+    scripted,
+) -> None:
+    announcements = [_announcement(db_session), _announcement(db_session)]
+    provider = scripted(json.dumps(EMPTY_SUMMARY), json.dumps(ANNOUNCEMENT_SUMMARY))
+
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+
+    [unsummarised] = [a for a in announcements if artifact_summary.read(a) is None]
+    [summarised] = [a for a in announcements if a is not unsummarised]
+    assert (result["processed"], result["skipped"]) == (1, 0)
+    assert result["errors"] == [
+        {
+            "artifact_id": str(unsummarised.id),
+            "error": f"The summary of artifact {unsummarised.id} has no text",
+        }
+    ]
+    assert artifact_summary.is_complete(
+        artifact_summary.read(summarised),
+        source_type="asx_announcement",
+    )
+    assert len(provider.calls) == 2
 
 
 def test_ticker_summaries_skip_news_that_has_all_four_lines(

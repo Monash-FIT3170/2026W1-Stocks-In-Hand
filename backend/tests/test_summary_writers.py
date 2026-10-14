@@ -26,6 +26,7 @@ from app.api.routes import llm
 from app.core.config import settings
 from app.messages import PublicDiscussionAnalysisMessage
 from app.models.artifact import Artifact
+from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
 from app.services import artifact_summary, news_summary
@@ -53,6 +54,12 @@ NEWS_ANSWER = {
     "matters": "The increase may affect revenue expectations.",
 }
 ANNOUNCEMENT_TEXT = "Half year report for the six months ended 31 December 2025."
+# A well-formed announcement answer the model left empty.
+EMPTY_ANSWER = {
+    **{key: "" for key in artifact_summary.TEXT_LINES},
+    "confirmed_facts": [],
+    "speculation": [],
+}
 
 Writer = Callable[[Session, pytest.MonkeyPatch], Artifact]
 
@@ -313,6 +320,24 @@ def test_every_news_writer_records_the_same_summary(
         prompt_version="llm-news-summary-v2",
     )
     assert len(_summary_rows(db_session, artifact)) == 1
+
+
+def test_the_local_loader_stores_sentiment_for_an_answer_without_text(
+    db_session: Session,
+    bedrock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = bedrock(EMPTY_ANSWER)
+
+    artifact = _local_loader(db_session, monkeypatch)
+
+    assert len(provider.calls) == 1
+    assert artifact_summary.read(artifact) is None
+    assert _summary_rows(db_session, artifact) == []
+    sentiments = db_session.scalars(
+        select(ArtifactSentiment).where(ArtifactSentiment.artifact_id == artifact.id)
+    ).all()
+    assert [sentiment.model_used for sentiment in sentiments] == ["test-finbert"]
 
 
 def test_the_repair_operation_completes_only_incomplete_announcement_summaries(
