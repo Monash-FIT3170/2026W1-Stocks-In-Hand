@@ -1090,6 +1090,41 @@ def test_a_summary_request_with_no_llm_is_logged_and_records_nothing(
     assert (story.analysis_status, story.last_error) == (AnalysisStatus.PENDING, None)
 
 
+def test_a_summary_request_whose_answer_has_no_text_is_acknowledged_and_keeps_the_summary(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The repair prompt asks for empty strings when nothing can be recovered.
+
+    Raising on such an answer retried the request every 72 minutes until it
+    reached the dead-letter queue, with no artifact in its log lines.
+    """
+    _run, artifact, stored = _stored_document(workers_use, store)
+    _analysis_ports(workers_use, monkeypatch, ANNOUNCEMENT_SUMMARY, documents=store)
+    _analyse(_s3_event(stored.location))
+    empty = {
+        **{key: "" for key in artifact_summary.TEXT_LINES},
+        **{key: [] for key in artifact_summary.CLARITY_LISTS},
+    }
+    _analysis_ports(workers_use, monkeypatch, empty)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        _analyse(SummaryRequestMessage(artifact_id=artifact.id).model_dump_json())
+
+    workers_use.refresh(artifact)
+    [unavailable] = _pipeline_events(caplog)
+    assert {key: unavailable[key] for key in ("event", "artifact_id", "reason")} == {
+        "event": "summary_unavailable",
+        "artifact_id": str(artifact.id),
+        "reason": "The answer from scripted:test-model has no text",
+    }
+    assert artifact_summary.read(artifact).about == ANNOUNCEMENT_SUMMARY["about"]
+    assert (artifact.analysis_status, artifact.last_error) == (AnalysisStatus.COMPLETED, None)
+
+
 # Abandoned work: a Lambda that times out on the final receive records nothing.
 
 

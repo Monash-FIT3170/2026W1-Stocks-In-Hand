@@ -27,7 +27,8 @@ a final failure.
 
 The Lambda imports this module before it loads its configuration from SSM,
 so nothing imported at the top of this file builds ``Settings``. Generation,
-FinBERT and the Postgres records are imported where they are used.
+the artifact summary rules, FinBERT and the Postgres records are imported
+where they are used.
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ class Summarised:
 
 @dataclass(frozen=True)
 class SummaryUnavailable:
-    """No LLM is switched on, so nothing was summarised or recorded."""
+    """No summary was recorded: no LLM is switched on, or its answer has no text."""
 
     artifact_id: UUID
     reason: str
@@ -419,8 +420,10 @@ def summarise(
 
     An announcement is summarised with the category and fields its analysis
     stored. Its sentiment, classification and analysis status are left
-    alone. With ``complete_only``, an answer that lacks a field its kind
-    needs is not recorded and raises ``RuntimeError``.
+    alone. With no LLM switched on, or an answer with no text, nothing is
+    recorded and the artifact keeps the summary it has. With
+    ``complete_only``, an answer that lacks a field its kind needs is not
+    recorded either, and raises ``RuntimeError``.
 
     Raises ``PermanentDocumentError`` with ``artifact_not_found`` when the
     artifact does not exist and ``no_extractable_text`` when it has no text.
@@ -445,6 +448,13 @@ def summarise(
     )
     if isinstance(generated, generation.Unavailable):
         return SummaryUnavailable(artifact_id=artifact_id, reason=generated.reason)
+    if not _has_text(generated):
+        # An outcome, not a failure to retry: the repair prompt asks for
+        # empty strings when nothing can be recovered.
+        return SummaryUnavailable(
+            artifact_id=artifact_id,
+            reason=f"The answer from {generated.model} has no text",
+        )
     complete = ports.records.record_summary(
         artifact_id,
         generated,
@@ -725,6 +735,14 @@ def _sentiment_input(title: str, text: str) -> str:
     from app.services import sentiment
 
     return sentiment.sentiment_input(title, text)
+
+
+def _has_text(generated: Generated[dict[str, object]]) -> bool:
+    """Whether a summary answer has a text line; one without is never recorded."""
+    # Imported on use: the artifact summary module imports generation.
+    from app.services import artifact_summary
+
+    return bool(artifact_summary.from_generated(generated).lines)
 
 
 def _generation():

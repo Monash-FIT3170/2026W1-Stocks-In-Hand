@@ -198,10 +198,11 @@ signed email link, so they do not need to be added to Brevo first. See the
 ### LLM routes
 Admin only. The category route asks the LLM while you wait and answers 503 when
 no LLM provider is switched on. The summary routes queue a summary request for
-the analysis worker and answer 202; the worker writes the summary shortly after,
-or logs `summary_unavailable` when no LLM is switched on. They answer 503 when
-`ANALYSIS_QUEUE_URL` is not set, so locally they need the LocalStack overlay
-described in "Local pipeline development".
+the analysis worker and answer 202; the worker writes the summary shortly after.
+When no LLM is switched on, or the LLM's answer has no text, it logs
+`summary_unavailable` with the artifact and the reason, and the artifact keeps
+its summary. They answer 503 when `ANALYSIS_QUEUE_URL` is not set, so locally
+they need the LocalStack overlay described in "Local pipeline development".
 
 | Method | Path | Description |
 |---|---|---|

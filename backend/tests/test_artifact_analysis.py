@@ -824,12 +824,15 @@ def test_with_no_llm_switched_on_nothing_is_summarised(db_session: Session) -> N
 def test_an_answer_without_text_is_not_recorded(db_session: Session) -> None:
     story = _news(db_session)
 
-    with pytest.raises(artifact_summary.EmptySummary):
-        summarise(
-            story.id,
-            _ports(db_session, {key: "" for key in artifact_summary.TEXT_LINES}),
-        )
+    outcome = summarise(
+        story.id,
+        _ports(db_session, {key: "" for key in artifact_summary.TEXT_LINES}),
+    )
 
+    assert outcome == SummaryUnavailable(
+        artifact_id=story.id,
+        reason="The answer from scripted:test-model has no text",
+    )
     assert _rows(db_session, ArtifactSummary, story) == []
 
 
@@ -908,6 +911,29 @@ def test_the_repair_records_only_complete_summaries(db_session: Session) -> None
         "error": "RuntimeError: The generated summary omitted structured summary fields",
     } in result["failed"]
     assert result["missing_after"] == result["missing_before"] - 1
+
+
+def test_the_repair_lists_an_announcement_whose_answer_has_no_text(
+    db_session: Session,
+) -> None:
+    unrepaired = _analysed_announcement(db_session, answer=_lines_only(ANNOUNCEMENT_ANSWER))
+    empty = {
+        **{key: "" for key in artifact_summary.TEXT_LINES},
+        **{key: [] for key in artifact_summary.CLARITY_LISTS},
+    }
+
+    result = repair_missing_summaries(apply=True, limit=1, ports=_bedrock(db_session, empty))
+
+    assert (result["updated"], result["failed"]) == (
+        0,
+        [
+            {
+                "artifact_id": str(unrepaired.id),
+                "error": "RuntimeError: The answer from bedrock:test-model has no text",
+            }
+        ],
+    )
+    assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"
 
 
 def test_the_repair_lists_an_announcement_removed_while_it_was_summarised(
