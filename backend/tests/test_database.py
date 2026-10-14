@@ -20,7 +20,6 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi import Request
@@ -49,6 +48,7 @@ from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 from app.services.artifact_summary import Summary
+from app.services.quotes import FixedQuotes, Quote
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
 # Every application table at the current Alembic head. Kept as an exact set so a
@@ -921,8 +921,9 @@ def test_ticker_brief_aside_returns_empty_database_state(
     db_session.add(ticker)
     db_session.commit()
 
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["aside"]
+    result = ticker_route.get_ticker_brief(
+        symbol.lower(), db=db_session, quotes=FixedQuotes()
+    )["aside"]
 
     assert result["key_numbers"] == [
         {"label": "Current price", "value": "N/A"},
@@ -936,9 +937,9 @@ def test_ticker_brief_aside_returns_empty_database_state(
 def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
     """The overview API should format the live quote it is given.
 
-    The quote is fetched from Yahoo at request time rather than stored, so the
-    lookup is patched here and only the formatting and failure handling are
-    under test.
+    The quote is fetched from Yahoo at request time rather than stored, so a
+    fixed quote source stands in for it and only the formatting and failure
+    handling are under test.
     """
     from app.api.routes import ticker as ticker_route
 
@@ -951,14 +952,18 @@ def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
     db_session.add(ticker)
     db_session.commit()
 
-    with patch.object(ticker_route, "_live_quote", return_value=(31.25, 30.0)):
-        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
+    quotes = FixedQuotes({symbol: Quote(price=31.25, previous_close=30.0)})
+    result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session, quotes=quotes)[
+        "overview"
+    ]
 
     assert result["current_price"] == "$31.25"
     assert result["day_change"] == "+4.17%"
+    assert quotes.requested == [symbol]
 
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        unavailable = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
+    unavailable = ticker_route.get_ticker_brief(
+        symbol.lower(), db=db_session, quotes=FixedQuotes()
+    )["overview"]
 
     assert unavailable["current_price"] == "N/A"
     assert unavailable["day_change"] == "N/A"

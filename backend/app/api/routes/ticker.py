@@ -1,7 +1,5 @@
-import time
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -11,58 +9,9 @@ from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 from app.services import artifact_card, artifact_summary
+from app.services.quotes import Quote, QuoteSource, live_quotes
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
-
-QUOTE_CACHE_TTL_SECONDS = 300
-QUOTE_FAILURE_TTL_SECONDS = 60
-# symbol -> (fetched_at, quote or None). Quotes are read live from Yahoo instead of being
-# stored, so there is no market data table behind the price cards. Failures are cached too,
-# for a shorter window, so a symbol Yahoo cannot resolve does not cost an HTTP timeout on
-# every page load.
-_QUOTE_CACHE: dict[str, tuple[float, tuple[float, float] | None]] = {}
-
-
-def _fetch_quote(symbol: str) -> tuple[float, float] | None:
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.AX"
-    try:
-        timeout = httpx.Timeout(2.5, connect=1.5)
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        result = response.json().get("chart", {}).get("result") or []
-        if not result:
-            return None
-
-        meta = result[0].get("meta", {})
-        current_price = meta.get("regularMarketPrice")
-        previous_close = meta.get("chartPreviousClose") or meta.get(
-            "regularMarketPreviousClose"
-        )
-        if current_price is None or previous_close is None:
-            return None
-        return float(current_price), float(previous_close)
-    except Exception:
-        return None
-
-
-def _live_quote(symbol: str) -> tuple[float, float] | None:
-    """Current price and previous close for a ticker, cached briefly in-process.
-
-    Returns None when Yahoo is unreachable or the response cannot be parsed, so
-    callers degrade to "N/A" rather than failing the request.
-    """
-    now = time.monotonic()
-    cached = _QUOTE_CACHE.get(symbol)
-    if cached:
-        fetched_at, cached_quote = cached
-        ttl = QUOTE_CACHE_TTL_SECONDS if cached_quote else QUOTE_FAILURE_TTL_SECONDS
-        if now - fetched_at < ttl:
-            return cached_quote
-
-    quote = _fetch_quote(symbol)
-    _QUOTE_CACHE[symbol] = (now, quote)
-    return quote
 
 
 def _money(value) -> str:
@@ -71,14 +20,9 @@ def _money(value) -> str:
     return f"${float(value):,.2f}"
 
 
-def _day_change(quote: tuple[float, float] | None) -> str:
-    if not quote:
-        return "N/A"
-    current, previous = quote
-    if previous == 0:
-        return "N/A"
-    change = ((current - previous) / previous) * 100
-    return f"{change:+.2f}%"
+def _day_change(quote: Quote | None) -> str:
+    change = quote.day_change() if quote else None
+    return "N/A" if change is None else f"{change:+.2f}%"
 
 
 def _sentiment_label(value: str | None) -> str:
@@ -161,12 +105,12 @@ def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[st
     return themes
 
 
-def _ticker_brief_payload(symbol: str, db: Session) -> dict:
+def _ticker_brief_payload(symbol: str, db: Session, quotes: QuoteSource) -> dict:
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
 
-    quote = _live_quote(ticker.symbol)
+    quote = quotes.quote(ticker.symbol)
     artifacts = _ticker_artifacts(db, ticker.id, limit=20)
     latest_artifact = artifacts[0] if artifacts else None
     latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
@@ -191,7 +135,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
             if latest_artifact
             else "No updates yet"
         ),
-        "current_price": _money(quote[0] if quote else None),
+        "current_price": _money(quote.price if quote else None),
         "day_change": _day_change(quote),
         "story": artifact_summary.brief(latest_summary),
         "sources_count": len(sources),
@@ -210,7 +154,7 @@ def _ticker_brief_payload(symbol: str, db: Session) -> dict:
     }
     aside = {
         "key_numbers": [
-            {"label": "Current price", "value": _money(quote[0] if quote else None)},
+            {"label": "Current price", "value": _money(quote.price if quote else None)},
             {"label": "Day change", "value": _day_change(quote)},
             {
                 "label": "Latest filing",
@@ -288,9 +232,13 @@ def update_ticker(
 
 
 @router.get("/symbol/{symbol}/brief")
-def get_ticker_brief(symbol: str, db: Session = Depends(get_db)):
+def get_ticker_brief(
+    symbol: str,
+    db: Session = Depends(get_db),
+    quotes: QuoteSource = Depends(live_quotes),
+):
     """Return the overview and aside from one quote and artifact lookup."""
-    return _ticker_brief_payload(symbol, db)
+    return _ticker_brief_payload(symbol, db, quotes)
 
 
 @router.get("/symbol/{symbol}/news-feed")

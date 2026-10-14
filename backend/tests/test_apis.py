@@ -37,6 +37,7 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
     import uuid
 
     from app.api.routes import ticker
+    from app.services.quotes import FixedQuotes, Quote
 
     ticker_record = MagicMock(
         id=uuid.uuid4(),
@@ -65,15 +66,12 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
         created_at=published_at,
     )
 
+    quotes = FixedQuotes({"CBA": Quote(price=150.0, previous_close=149.0)})
     with patch.object(
         ticker.crud,
         "get_ticker_by_symbol",
         return_value=ticker_record,
     ), patch.object(
-        ticker,
-        "_live_quote",
-        return_value=(150.0, 149.0),
-    ) as live_quote, patch.object(
         ticker,
         "_ticker_artifacts",
         return_value=[artifact],
@@ -82,9 +80,9 @@ def test_combined_ticker_brief_reuses_one_quote_lookup() -> None:
         "_latest_sentiment_for_ticker",
         return_value=sentiment,
     ):
-        result = ticker.get_ticker_brief("CBA", db=MagicMock())
+        result = ticker.get_ticker_brief("CBA", db=MagicMock(), quotes=quotes)
 
-    live_quote.assert_called_once_with("CBA")
+    assert quotes.requested == ["CBA"]
     assert result["overview"]["latest_signal_confidence_pct"] == "91%"
     assert result["overview"]["sentiment_status"] == "available"
     assert result["aside"]["key_numbers"][0]["value"] == "$150.00"

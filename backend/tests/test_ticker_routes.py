@@ -4,13 +4,12 @@ Each reads an artifact's summary through the artifact summary module: the
 brief story and clarity, each news-feed item's card, and the deep-dive
 detail. An artifact with no summary shows nothing in their place, never
 placeholder sentences or its raw text. Quotes come from Yahoo at request
-time, so ``_live_quote`` is patched.
+time, so a fixed quote source with no quotes stands in for it.
 """
 
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -24,6 +23,7 @@ from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.services import artifact_summary
 from app.services.artifact_summary import Summary
+from app.services.quotes import FixedQuotes
 
 ANNOUNCEMENT_ANSWER = {
     "summary": "ANZ confirmed its first-half profit.",
@@ -103,8 +103,8 @@ def _record(db: Session, artifact: Artifact, answer: dict) -> Summary:
 
 
 def _overview(db: Session, ticker: Ticker) -> dict:
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        return ticker_route.get_ticker_brief(ticker.symbol.lower(), db=db)["overview"]
+    brief = ticker_route.get_ticker_brief(ticker.symbol.lower(), db=db, quotes=FixedQuotes())
+    return brief["overview"]
 
 
 def test_the_brief_tells_the_latest_summary_and_its_clarity(db_session: Session) -> None:
