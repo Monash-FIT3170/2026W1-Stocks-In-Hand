@@ -47,7 +47,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from tools.template_model import TEMPLATE_PATH, TemplateModel, substitute, template_model
+import yaml
+
+from tools.template_model import (
+    TEMPLATE_PATH,
+    CloudFormationLoader,
+    TemplateModel,
+    substitute,
+    template_model,
+)
 
 # The ECR repository each image parameter's images are pushed to (infra/bootstrap.yaml).
 IMAGE_REPOSITORIES = {
@@ -57,8 +65,8 @@ IMAGE_REPOSITORIES = {
 }
 # The role CloudFormation applies a change set as (infra/github-oidc.yaml).
 CLOUDFORMATION_ROLE_NAME = "stocks-in-hand-cloudformation-execution"
-# sam deploy needs an S3 bucket for a larger template, and the GitHub deploy
-# role has no grant for one.
+# sam deploy needs an S3 bucket once the template it packages is larger than
+# this, and the GitHub deploy role has no grant for one.
 INLINE_TEMPLATE_LIMIT = 51200
 # What a manual deploy's inputs default to. --set-unless-empty reads it like an
 # empty value, so a change set changes only what someone chose.
@@ -460,10 +468,12 @@ def _plan(
         problems += parameter.problems(plain[name])
     problems += model.rule_failures(plain)
     text = template.read_bytes()
-    if len(text) > INLINE_TEMPLATE_LIMIT:
+    size = packaged_template_size(text.decode("utf-8"))
+    if size > INLINE_TEMPLATE_LIMIT:
         problems.append(
-            f"{template} is {len(text)} bytes. sam deploy sends at most "
-            f"{INLINE_TEMPLATE_LIMIT} bytes without an S3 bucket, and the deploy role has none."
+            f"{template} is {size} bytes once sam deploy packages it. sam deploy sends at "
+            f"most {INLINE_TEMPLATE_LIMIT} bytes without an S3 bucket, and the deploy role "
+            "has none."
         )
     problems += _secret_problems(model, aws, plain)
     if problems:
@@ -574,6 +584,56 @@ def _secret_problems(model: TemplateModel, aws: Aws, values: Mapping[str, str]) 
         elif parameter_type != "SecureString":
             problems.append(f"{name} must be a SecureString, not a {parameter_type}")
     return problems
+
+
+class _PackageLoader(CloudFormationLoader):
+    """Reads a template as sam deploy does before it packages it."""
+
+
+# SAM CLI keeps an unquoted date, such as an IAM policy's Version, as a string.
+_PackageLoader.add_constructor("tag:yaml.org,2002:timestamp", yaml.SafeLoader.construct_yaml_str)
+
+
+class _PackageDumper(yaml.SafeDumper):
+    """Writes YAML as sam deploy writes the template it packages."""
+
+    def ignore_aliases(self, data: Any) -> bool:
+        # A YAML alias is written out in full wherever it is used.
+        return True
+
+
+def _represent_string(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
+    # SAM CLI quotes every string that starts with 0, so an account ID stays a string.
+    style = "'" if value.startswith("0") else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_PackageDumper.add_representer(str, _represent_string)
+
+
+def packaged_template(text: str) -> str:
+    """The template as sam deploy packages it before it checks the size.
+
+    sam deploy parses the template, adds ``Metadata: SamResourceId`` to every
+    resource and writes the result out again as YAML, with each intrinsic
+    function in its long form and without the comments. That file, not the
+    source, is what must fit in INLINE_TEMPLATE_LIMIT. SAM CLI 1.165.0 writes
+    exactly this text.
+    """
+    document = yaml.load(text, Loader=_PackageLoader)  # nosec B506 - _PackageLoader is a SafeLoader
+    for logical_id, resource in (document.get("Resources") or {}).items():
+        if isinstance(resource, dict):
+            metadata = dict(resource.get("Metadata") or {})
+            metadata.setdefault("SamResourceId", logical_id)
+            resource["Metadata"] = metadata
+    return yaml.dump(document, Dumper=_PackageDumper, default_flow_style=False, sort_keys=False)
+
+
+def packaged_template_size(text: str) -> int:
+    """The bytes sam deploy compares with INLINE_TEMPLATE_LIMIT."""
+    packaged = packaged_template(text)
+    # SAM CLI writes the file in text mode, so every line ends in os.linesep.
+    return len(packaged.encode("utf-8")) + packaged.count("\n") * (len(os.linesep) - 1)
 
 
 def apply(plan: ReleasePlan, aws: Aws, run: Run = _stream, *, dry_run: bool = False) -> list[str]:

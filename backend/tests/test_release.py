@@ -22,6 +22,8 @@ from tools.release import (
     Value,
     apply,
     main,
+    packaged_template,
+    packaged_template_size,
     plan_release,
     plan_rollback,
     resolve,
@@ -370,21 +372,144 @@ def test_every_value_is_checked_against_its_constraints_and_the_rules() -> None:
     ]
 
 
+PACKAGING_SOURCE = """\
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  QueueSuffix:
+    Type: String
+    Default: "089"
+Resources:
+  # Comments are not packaged.
+  Topic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${AWS::StackName}-alarms
+      Tags: &tags
+        - Key: team
+          Value: stocks
+  Queue:
+    Type: AWS::SQS::Queue
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W3005]
+    Properties:
+      QueueName: !Sub queue-${QueueSuffix}
+      Tags: *tags
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref Queue]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: {Service: sns.amazonaws.com}
+            Action: sqs:SendMessage
+            Resource: !GetAtt Queue.Arn
+"""
+
+# What SAM CLI 1.165.0's own packaging writes for PACKAGING_SOURCE.
+SAM_PACKAGED = """\
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+  QueueSuffix:
+    Type: String
+    Default: '089'
+Resources:
+  Topic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName:
+        Fn::Sub: ${AWS::StackName}-alarms
+      Tags:
+      - Key: team
+        Value: stocks
+    Metadata:
+      SamResourceId: Topic
+  Queue:
+    Type: AWS::SQS::Queue
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+          - W3005
+      SamResourceId: Queue
+    Properties:
+      QueueName:
+        Fn::Sub: queue-${QueueSuffix}
+      Tags:
+      - Key: team
+        Value: stocks
+  QueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+      - Ref: Queue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: sns.amazonaws.com
+          Action: sqs:SendMessage
+          Resource:
+            Fn::GetAtt:
+            - Queue
+            - Arn
+    Metadata:
+      SamResourceId: QueuePolicy
+"""
+
+
+def test_the_size_check_measures_the_template_sam_deploy_packages(tmp_path: Path) -> None:
+    """sam deploy writes the template out again and checks the size of that file."""
+    assert packaged_template(PACKAGING_SOURCE) == SAM_PACKAGED
+
+    written = tmp_path / "packaged.yaml"
+    # SAM CLI writes it in text mode.
+    with open(written, "w", encoding="utf-8") as file:
+        file.write(SAM_PACKAGED)
+    assert packaged_template_size(PACKAGING_SOURCE) == written.stat().st_size
+
+
 def test_the_template_fits_in_a_sam_deploy_without_an_s3_bucket() -> None:
-    assert TEMPLATE_PATH.stat().st_size <= INLINE_TEMPLATE_LIMIT
+    """The packaged template is about 10% larger than the source."""
+    text = TEMPLATE_PATH.read_text(encoding="utf-8")
+
+    assert packaged_template_size(text) <= INLINE_TEMPLATE_LIMIT
 
 
-def test_a_template_too_large_to_send_inline_is_refused(tmp_path: Path) -> None:
-    template = tmp_path / "template.yaml"
-    text = TEMPLATE_PATH.read_bytes()
-    # A trailing YAML comment takes the file one byte over the limit.
-    template.write_bytes(text + b"#" * (INLINE_TEMPLATE_LIMIT + 1 - len(text)))
+def template_packaged_to(path: Path, size: int) -> Path:
+    """The checked-in template, padded so that sam deploy packages it to ``size`` bytes."""
 
+    def write(padding: int) -> int:
+        # A top-level Metadata section is packaged, unlike a comment.
+        path.write_bytes(
+            TEMPLATE_PATH.read_bytes() + b"Metadata:\n  Padding: " + b"x" * padding + b"\n"
+        )
+        return packaged_template_size(path.read_text(encoding="utf-8"))
+
+    # Each x adds one byte.
+    assert write(1 + size - write(1)) == size
+    return path
+
+
+def test_a_template_packaged_over_the_inline_limit_is_refused(tmp_path: Path) -> None:
+    """The source can fit while the template sam deploy packages from it does not."""
+    at_limit = template_packaged_to(tmp_path / "at-limit.yaml", INLINE_TEMPLATE_LIMIT)
+    over = template_packaged_to(tmp_path / "over.yaml", INLINE_TEMPLATE_LIMIT + 1)
+
+    plan(FakeAws(live_stack()), template=at_limit)
     with pytest.raises(ReleaseError) as error:
-        plan(FakeAws(live_stack()), template=template)
+        plan(FakeAws(live_stack()), template=over)
 
-    [problem] = problems(error)
-    assert problem.startswith(f"{template} is {INLINE_TEMPLATE_LIMIT + 1} bytes")
+    assert over.stat().st_size < INLINE_TEMPLATE_LIMIT
+    assert problems(error) == [
+        f"{over} is {INLINE_TEMPLATE_LIMIT + 1} bytes once sam deploy packages it. sam deploy "
+        f"sends at most {INLINE_TEMPLATE_LIMIT} bytes without an S3 bucket, and the deploy "
+        "role has none."
+    ]
 
 
 @pytest.mark.parametrize(
