@@ -1,16 +1,22 @@
-"""PostgreSQL integration coverage for the notification worker."""
+"""PostgreSQL integration coverage for the notification worker.
 
-# pylint: disable=duplicate-code,too-many-locals
+These tests commit for real, through the worker's own sessions, and remove
+what they created afterwards.
+"""
+
+# pylint: disable=duplicate-code,redefined-outer-name,too-many-locals
 
 from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -28,23 +34,147 @@ from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 from app.services import email_sender
-from app.services.email_sender import RecordingEmailSender
+from app.services.email_sender import (
+    Accepted,
+    OutgoingEmail,
+    RecordingEmailSender,
+    SendOutcome,
+)
 from lambdas import notify
 
 
-def _engine_or_skip():
-    engine = create_engine(settings.DATABASE_URL)
+@pytest.fixture()
+def engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
+    """The configured database, with alerts switched on for the worker."""
+    database = create_engine(settings.DATABASE_URL)
     try:
-        with engine.connect() as connection:
+        with database.connect() as connection:
             if not inspect(connection).has_table("alert_deliveries"):
+                database.dispose()
                 pytest.skip("Alert migrations are not applied")
     except OperationalError as exc:
-        engine.dispose()
+        database.dispose()
         pytest.skip(f"PostgreSQL is unavailable: {exc}")
-    return engine
+    monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
+    monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", 100_000, raising=False)
+    monkeypatch.setattr(
+        settings,
+        "FRONTEND_BASE_URL",
+        "https://app.example.test",
+        raising=False,
+    )
+    try:
+        yield database
+    finally:
+        database.dispose()
 
 
-def _cleanup(engine, *, ids: dict[str, uuid.UUID]) -> None:
+def _seed(engine: Engine, *, label: str) -> tuple[dict[str, uuid.UUID], dict[str, object]]:
+    """Commit an artifact watched by one investor whose rule wants ``label``.
+
+    Returns the ids ``_cleanup`` removes and the SQS record about the artifact.
+    """
+    suffix = uuid.uuid4().hex
+    with Session(engine) as db:
+        investor = Investor(
+            email=f"notify-{suffix}@example.com",
+            username="Notification integration test",
+        )
+        ticker = Ticker(
+            symbol=f"T{suffix[:8].upper()}",
+            company_name="Notification Test Limited",
+            exchange="ASX",
+        )
+        platform = InformationPlatform(
+            name=f"Notification test {suffix}",
+            platform_type="test",
+        )
+        db.add_all([investor, ticker, platform])
+        db.flush()
+
+        scrape_run = ScrapeRun(
+            platform_id=platform.id,
+            ticker_id=ticker.id,
+            status="completed",
+            idempotency_key=f"notify:{suffix}",
+        )
+        watchlist = Watchlist(
+            investor_id=investor.id,
+            name="Notification test watchlist",
+        )
+        db.add_all([scrape_run, watchlist])
+        db.flush()
+
+        artifact = Artifact(
+            scrape_run_id=scrape_run.id,
+            ticker_id=ticker.id,
+            artifact_type="announcement",
+            title="Half year results",
+            content_hash=f"notify-{suffix}",
+            analysis_status="completed",
+        )
+        db.add(artifact)
+        db.flush()
+        db.add_all(
+            [
+                ArtifactSentiment(
+                    artifact_id=artifact.id,
+                    sentiment_label=label,
+                    confidence_score=Decimal("0.8200"),
+                ),
+                ArtifactSummary(
+                    artifact_id=artifact.id,
+                    summary_text="Earnings were below expectations.",
+                ),
+                WatchlistTicker(
+                    watchlist_id=watchlist.id,
+                    ticker_id=ticker.id,
+                ),
+                AlertSubscription(
+                    investor_id=investor.id,
+                    email=investor.email,
+                    enabled=True,
+                    verification_status="verified",
+                    verification_requested_at=datetime.now(timezone.utc),
+                    verified_at=datetime.now(timezone.utc),
+                    unsubscribe_token_hash=uuid.uuid4().hex + uuid.uuid4().hex,
+                ),
+                AlertRule(
+                    investor_id=investor.id,
+                    ticker_id=None,
+                    rule_type="sentiment_threshold",
+                    sentiment_labels=[label],
+                    min_confidence=Decimal("0.7500"),
+                    enabled=True,
+                ),
+            ]
+        )
+        db.commit()
+        ids = {
+            "investor": investor.id,
+            "ticker": ticker.id,
+            "platform": platform.id,
+            "run": scrape_run.id,
+            "watchlist": watchlist.id,
+            "artifact": artifact.id,
+        }
+        message = {
+            "schema_version": 1,
+            "artifact_id": str(artifact.id),
+            "ticker": ticker.symbol,
+            "scrape_run_id": str(scrape_run.id),
+            "sentiment_label": label,
+            "confidence_score": "0.8200",
+        }
+    record = {
+        "messageId": f"notify-{suffix}",
+        "body": json.dumps(message),
+        "attributes": {"ApproximateReceiveCount": "1"},
+    }
+    return ids, record
+
+
+def _cleanup(engine: Engine, *, ids: dict[str, uuid.UUID]) -> None:
     """Remove only records created by this test, in foreign-key order."""
     with Session(engine) as db:
         db.query(AlertDelivery).filter(
@@ -88,124 +218,18 @@ def _cleanup(engine, *, ids: dict[str, uuid.UUID]) -> None:
 
 @pytest.mark.parametrize("label", ["negative", "neutral"])
 def test_worker_sends_and_deduplicates_against_postgres(
+    engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
     label: str,
 ) -> None:
-    """A canonical artifact should send once and persist both D17 outcomes.
+    """A canonical artifact sends once, recorded on its ledger row and the subscription.
 
     Neutral runs the same path: a neutral-only rule must fire end to end.
     """
-    engine = _engine_or_skip()
-    suffix = uuid.uuid4().hex
-    ids: dict[str, uuid.UUID] = {}
+    ids, record = _seed(engine, label=label)
     try:
-        with Session(engine) as db:
-            investor = Investor(
-                email=f"notify-{suffix}@example.com",
-                username="Notification integration test",
-            )
-            ticker = Ticker(
-                symbol=f"T{suffix[:8].upper()}",
-                company_name="Notification Test Limited",
-                exchange="ASX",
-            )
-            platform = InformationPlatform(
-                name=f"Notification test {suffix}",
-                platform_type="test",
-            )
-            db.add_all([investor, ticker, platform])
-            db.flush()
-
-            scrape_run = ScrapeRun(
-                platform_id=platform.id,
-                ticker_id=ticker.id,
-                status="completed",
-                idempotency_key=f"notify:{suffix}",
-            )
-            watchlist = Watchlist(
-                investor_id=investor.id,
-                name="Notification test watchlist",
-            )
-            db.add_all([scrape_run, watchlist])
-            db.flush()
-
-            artifact = Artifact(
-                scrape_run_id=scrape_run.id,
-                ticker_id=ticker.id,
-                artifact_type="announcement",
-                title="Half year results",
-                content_hash=f"notify-{suffix}",
-                analysis_status="completed",
-            )
-            db.add(artifact)
-            db.flush()
-            db.add_all(
-                [
-                    ArtifactSentiment(
-                        artifact_id=artifact.id,
-                        sentiment_label=label,
-                        confidence_score=Decimal("0.8200"),
-                    ),
-                    ArtifactSummary(
-                        artifact_id=artifact.id,
-                        summary_text="Earnings were below expectations.",
-                    ),
-                    WatchlistTicker(
-                        watchlist_id=watchlist.id,
-                        ticker_id=ticker.id,
-                    ),
-                    AlertSubscription(
-                        investor_id=investor.id,
-                        email=investor.email,
-                        enabled=True,
-                        verification_status="verified",
-                        verification_requested_at=datetime.now(timezone.utc),
-                        verified_at=datetime.now(timezone.utc),
-                        unsubscribe_token_hash="a" * 64,
-                    ),
-                    AlertRule(
-                        investor_id=investor.id,
-                        ticker_id=None,
-                        rule_type="sentiment_threshold",
-                        sentiment_labels=[label],
-                        min_confidence=Decimal("0.7500"),
-                        enabled=True,
-                    ),
-                ]
-            )
-            db.commit()
-            ids = {
-                "investor": investor.id,
-                "ticker": ticker.id,
-                "platform": platform.id,
-                "run": scrape_run.id,
-                "watchlist": watchlist.id,
-                "artifact": artifact.id,
-            }
-            message = {
-                "schema_version": 1,
-                "artifact_id": str(artifact.id),
-                "ticker": ticker.symbol,
-                "scrape_run_id": str(scrape_run.id),
-                "sentiment_label": label,
-                "confidence_score": "0.8200",
-            }
-
         sender = RecordingEmailSender()
-        monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", True, raising=False)
-        monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", 100_000, raising=False)
-        monkeypatch.setattr(
-            settings,
-            "FRONTEND_BASE_URL",
-            "https://app.example.test",
-            raising=False,
-        )
         monkeypatch.setattr(email_sender, "configured_sender", lambda **_: sender)
-        record = {
-            "messageId": f"notify-{suffix}",
-            "body": json.dumps(message),
-            "attributes": {"ApproximateReceiveCount": "1"},
-        }
 
         assert notify.handler({"Records": [record]}, None) == {
             "batchItemFailures": []
@@ -237,6 +261,43 @@ def test_worker_sends_and_deduplicates_against_postgres(
         # The seeded summary row has only joined text, so the alert recovers it.
         assert "Earnings were below expectations." in sender.sent[0].text
     finally:
-        if ids:
-            _cleanup(engine, ids=ids)
-        engine.dispose()
+        _cleanup(engine, ids=ids)
+
+
+def test_the_claim_is_committed_before_the_alert_is_sent(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another worker sees the claim while the email is going out.
+
+    So a redelivery that runs during the send finds the claim and sends
+    nothing, and the cap and budget counts include it.
+    """
+    ids, record = _seed(engine, label="negative")
+    seen: list[str | None] = []
+
+    def answer(_email: OutgoingEmail) -> SendOutcome:
+        with engine.connect() as connection:
+            seen.append(
+                connection.scalar(
+                    select(AlertDelivery.status).where(
+                        AlertDelivery.investor_id == ids["investor"]
+                    )
+                )
+            )
+        return Accepted("recorded-1")
+
+    try:
+        monkeypatch.setattr(
+            email_sender,
+            "configured_sender",
+            lambda **_: RecordingEmailSender(answer),
+        )
+
+        assert notify.handler({"Records": [record]}, None) == {
+            "batchItemFailures": []
+        }
+
+        assert seen == ["claimed"]
+    finally:
+        _cleanup(engine, ids=ids)

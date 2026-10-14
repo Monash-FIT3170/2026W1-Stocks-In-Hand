@@ -15,7 +15,10 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.sql import func, true
 
-from app.alert_vocabulary import DEFAULT_ALERT_SENTIMENT_LABELS
+from app.alert_vocabulary import (
+    DEFAULT_ALERT_MIN_CONFIDENCE,
+    DEFAULT_ALERT_SENTIMENT_LABELS,
+)
 from app.database.base import Base
 
 
@@ -70,8 +73,8 @@ class AlertRule(Base):
     min_confidence = Column(
         Numeric(5, 4),
         nullable=False,
-        default=0.75,
-        server_default="0.75",
+        default=DEFAULT_ALERT_MIN_CONFIDENCE,
+        server_default=str(DEFAULT_ALERT_MIN_CONFIDENCE),
     )
     enabled = Column(
         Boolean,
