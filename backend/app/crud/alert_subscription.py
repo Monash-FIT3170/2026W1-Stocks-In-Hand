@@ -19,8 +19,14 @@ from app.models.alert_subscription import AlertSubscription
 from app.services.alert_tokens import is_token_hash
 
 
-def _normalise_email(email: str) -> str:
-    """Return one deliverable-independent, lower-case mailbox address."""
+def normalise_email(email: str) -> str:
+    """The one form an alert address is stored and compared in.
+
+    The address is checked with the rules every email sender uses: one
+    mailbox, no display name and nothing that needs SMTPUTF8. Its domain
+    is in ASCII (punycode) form, and the whole address is lower case.
+    Raises ``ValueError`` for an address alerts cannot be sent to.
+    """
     try:
         validated = validate_email(
             str(email).strip(),
@@ -36,7 +42,7 @@ def _normalise_email(email: str) -> str:
 def _expected_email(email: str) -> str:
     """Require the mailbox generation a verification callback observed."""
     try:
-        return _normalise_email(email)
+        return normalise_email(email)
     except ValueError as exc:
         raise ValueError("expected_email must contain one valid email address") from exc
 
@@ -112,7 +118,7 @@ def upsert_subscription(  # pylint: disable=too-many-arguments
 ) -> AlertSubscription:
     """Create or update one subscription, resetting verification on email change."""
     commit = _validate_commit(commit)
-    normalised_email = _normalise_email(email)
+    normalised_email = normalise_email(email)
     enabled = _optional_bool(enabled, field="enabled")
     normalised_hash = (
         _normalise_token_hash(unsubscribe_token_hash)

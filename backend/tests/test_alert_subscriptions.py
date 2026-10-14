@@ -608,6 +608,50 @@ def test_a_link_older_than_its_lifetime_answers_400(api: Api) -> None:
     assert api.preferences()["verification_status"] == "pending"
 
 
+def test_an_internationalised_address_saved_twice_within_a_minute_gets_one_link(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The account keeps the domain in Unicode, as sign-up stores it.
+
+    The subscription keeps it in ASCII, so the two must be compared in one form.
+    """
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+    local_part = f"alerts-{uuid.uuid4().hex[:12]}"
+    api.investor.email = f"{local_part}@b\u00fccher.de"
+
+    first = api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+    second = api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+
+    assert (first.status_code, second.status_code) == (200, 200)
+    assert [email.to for email in sender.sent] == [f"{local_part}@xn--bcher-kva.de"]
+    assert _subscription(api).email == f"{local_part}@xn--bcher-kva.de"
+
+
+def test_an_account_address_that_cannot_receive_alerts_answers_422_and_saves_nothing(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alerts go out without SMTPUTF8, so a non-ASCII name before the @ cannot get them."""
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+    api.investor.email = f"\u00e9lise-{uuid.uuid4().hex[:12]}@example.com"
+
+    response = api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+
+    assert (response.status_code, response.json()) == (
+        422,
+        {"detail": "The email address on your account cannot receive alerts."},
+    )
+    assert sender.sent == []
+    with api.session() as db:
+        for model in (AlertSubscription, AlertRule):
+            assert db.scalars(
+                select(model).where(model.investor_id == api.investor.id)
+            ).all() == []
+
+
 def test_a_link_sent_to_a_replaced_address_cannot_verify_the_new_one(
     api: Api,
     monkeypatch: pytest.MonkeyPatch,

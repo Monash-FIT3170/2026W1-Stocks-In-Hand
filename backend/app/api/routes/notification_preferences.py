@@ -29,6 +29,7 @@ from app.schemas.notification import (
 )
 from app.services import alert_subscriptions
 from app.services.alert_subscriptions import (
+    AddressNotUsable,
     AlertPreferences,
     AlertsNotEnabled,
     AlertsSwitchedOff,
@@ -77,6 +78,10 @@ _REFUSALS: dict[type[AlertSubscriptionError], tuple[int, str]] = {
     SupersededVerificationLink: (
         status.HTTP_409_CONFLICT,
         "The verification request changed. Open the newest email.",
+    ),
+    AddressNotUsable: (
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        "The email address on your account cannot receive alerts.",
     ),
 }
 # What a route answers when its verification email is not sent. The investor

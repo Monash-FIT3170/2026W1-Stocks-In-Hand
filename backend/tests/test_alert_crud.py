@@ -162,6 +162,26 @@ def _requested(db: Session, subscription: AlertSubscription) -> datetime:
     return requested_at
 
 
+@pytest.mark.parametrize(
+    "address",
+    [" Alice.Smith@Example.COM ", "Mixed+Tag@Sub.Example.org", "user@xn--bcher-kva.de"],
+)
+def test_normalising_an_ascii_address_only_trims_and_lower_cases_it(address: str) -> None:
+    normalised = subscription_crud.normalise_email(address)
+
+    assert normalised == address.strip().lower()
+    assert subscription_crud.normalise_email(normalised) == normalised
+
+
+def test_an_internationalised_domain_is_normalised_to_its_ascii_form() -> None:
+    normalised = subscription_crud.normalise_email("user@B\u00dcCHER.de")
+
+    assert normalised == "user@xn--bcher-kva.de"
+    assert subscription_crud.normalise_email(normalised) == normalised
+    with pytest.raises(ValueError, match="valid email"):
+        subscription_crud.normalise_email("\u00e9lise@example.com")
+
+
 def test_alert_crud_validation_needs_no_database() -> None:
     """Reject malformed values before CRUD code executes any SQL."""
     db = Mock()

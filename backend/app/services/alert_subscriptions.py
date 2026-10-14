@@ -109,6 +109,14 @@ class SupersededVerificationLink(AlertSubscriptionError):
     """The request the link verifies changed while it was being verified."""
 
 
+class AddressNotUsable(AlertSubscriptionError):
+    """Alerts cannot be sent to the account's address.
+
+    Email goes out without SMTPUTF8, so for example an address with a
+    non-ASCII name before the @ cannot get alerts.
+    """
+
+
 @dataclass(frozen=True)
 class AlertPreferences:  # pylint: disable=too-many-instance-attributes
     """What an investor's alert settings show.
@@ -172,14 +180,15 @@ def save(  # pylint: disable=too-many-arguments,too-many-locals
     With alerts on, a new or changed address gets a link at once, and an
     address still waiting for verification gets a new one at most once a
     minute. Raises ``AlertsSwitchedOff`` when turning alerts on while the
-    deployment sends none, ``PreferencesChangedConcurrently`` when another
+    deployment sends none, ``AddressNotUsable`` when alerts cannot be sent
+    to the account address, ``PreferencesChangedConcurrently`` when another
     request changed the subscription meanwhile, and
     ``VerificationEmailNotSent`` when the link was not sent.
     """
     if enabled and not settings.NOTIFICATIONS_ENABLED:
         raise AlertsSwitchedOff()
     now = datetime.now(timezone.utc)
-    address = _comparable(account_email)
+    address = _alert_address(account_email)
     existing = alert_subscription_crud.get_subscription_by_investor(db, investor_id)
     # Decided before the upsert, which refreshes ``existing`` in place.
     verification_due = enabled and _verification_due(existing, address, now)
@@ -402,9 +411,12 @@ def _aware_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _comparable(email: str) -> str:
-    """An address in the form saved addresses are compared in."""
-    return str(email).strip().lower()
+def _alert_address(account_email: str) -> str:
+    """The account address in the form subscriptions store and compare it in."""
+    try:
+        return alert_subscription_crud.normalise_email(account_email)
+    except ValueError as exc:
+        raise AddressNotUsable() from exc
 
 
 def _load(
@@ -491,7 +503,7 @@ def _verification_due(
     now: datetime,
 ) -> bool:
     """Whether turning alerts on for ``address`` should send a verification link now."""
-    if existing is None or _comparable(str(existing.email)) != address:
+    if existing is None or existing.email != address:
         return True
     if existing.verification_status == VerificationStatus.VERIFIED:
         return False
