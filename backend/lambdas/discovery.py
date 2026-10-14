@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 from typing import cast
 from uuid import UUID
@@ -9,6 +8,7 @@ from uuid import UUID
 import boto3
 from pydantic import HttpUrl, ValidationError
 
+from app.core.config import settings
 from app.messages import QueueAMessage, QueueBMessage
 from lambdas.common import (
     PermanentDocumentError,
@@ -48,8 +48,7 @@ def _published_at_utc(value: datetime) -> datetime:
 
 def _bounded_announcements(announcements: list) -> list:
     """Return recent announcements newest-first before database deduplication."""
-    lookback_days = max(int(os.getenv("DISCOVERY_LOOKBACK_DAYS", "30")), 1)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.DISCOVERY_LOOKBACK_DAYS)
     return sorted(
         (
             announcement
@@ -85,13 +84,13 @@ def _discover(current: StageRecord) -> None:
         # unreachable site (SourceUnreachableError) is retried as usual.
         raise PermanentDocumentError(str(exc), code="source_layout_changed") from exc
     announcements = _bounded_announcements(listed)
-    queue_url = os.environ["DOWNLOAD_QUEUE_URL"]
+    queue_url = settings.required("DOWNLOAD_QUEUE_URL")
     sqs = boto3.client("sqs")
     seen_urls: set[str] = set()
     documents_seen = 0
     documents_queued = 0
     duplicates_skipped = 0
-    max_documents = max(int(os.getenv("MAX_DOCUMENTS_PER_RUN", "3")), 1)
+    max_documents = settings.MAX_DOCUMENTS_PER_RUN
 
     for announcement in announcements:
         if documents_queued >= max_documents:

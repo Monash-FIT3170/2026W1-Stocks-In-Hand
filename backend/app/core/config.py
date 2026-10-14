@@ -377,6 +377,11 @@ class Settings:
     PUBLIC_DISCUSSION_SEARCH_QUERY: str = text(
         "ASX", strip=True, max_length=100, empty_means_default=True
     )
+    # Discovery queues at most MAX_DOCUMENTS_PER_RUN announcements per run,
+    # the newest first, from the last DISCOVERY_LOOKBACK_DAYS days.
+    DISCOVERY_LOOKBACK_DAYS: int = integer(30, minimum=1)
+    MAX_DOCUMENTS_PER_RUN: int = integer(3, minimum=1)
+    DOWNLOAD_QUEUE_URL: str = text()
 
     @classmethod
     def from_environment(

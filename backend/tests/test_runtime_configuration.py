@@ -100,6 +100,8 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert defaults.SCHEDULED_PUBLIC_DISCUSSION_SOURCES == ["bluesky", "mastodon"]
     assert defaults.PUBLIC_DISCUSSION_PER_SOURCE_LIMIT == 10
     assert defaults.PUBLIC_DISCUSSION_SEARCH_QUERY == "ASX"
+    assert (defaults.DISCOVERY_LOOKBACK_DAYS, defaults.MAX_DOCUMENTS_PER_RUN) == (30, 3)
+    assert defaults.DOWNLOAD_QUEUE_URL == ""
 
 
 def test_values_are_read_as_the_backend_always_read_them() -> None:
@@ -182,6 +184,10 @@ def test_a_required_setting_must_be_set() -> None:
         ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "26", "must be at most 25"),
         ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "abc", "must be a whole number"),
         ("PUBLIC_DISCUSSION_SEARCH_QUERY", "x" * 101, "must be at most 100 characters"),
+        ("DISCOVERY_LOOKBACK_DAYS", "0", "must be at least 1"),
+        ("DISCOVERY_LOOKBACK_DAYS", "abc", "must be a whole number"),
+        ("MAX_DOCUMENTS_PER_RUN", "0", "must be at least 1"),
+        ("MAX_DOCUMENTS_PER_RUN", "abc", "must be a whole number"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:
