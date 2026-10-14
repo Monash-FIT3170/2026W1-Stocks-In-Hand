@@ -4,8 +4,10 @@ A row is claimed before its email is sent, and then records what became of
 it: sent, rejected, failed or suppressed. A direct alert's row belongs to one
 investor and artifact, and a rollup's row to one investor and scrape run, with
 no artifact. Each claim is committed on its own before anything is sent, so
-an email goes out at most once for each row, and every count here includes
-every claim other workers have committed.
+only one claim holder sends a row's email at a time, and every count here
+includes every claim other workers have committed. A claim taken over once it
+is stale, or a provider answer lost after the provider took the email, can
+still send a row's email twice (see ``app/services/alert_delivery.py``).
 
 Recording an outcome also mirrors it onto the investor's alert subscription
 (``last_delivery_status``, ``last_delivery_error_code`` and

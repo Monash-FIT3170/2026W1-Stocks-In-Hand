@@ -137,11 +137,13 @@ routes.
 The delivery ledger behind watchlist alerts. `app/services/alert_delivery.py`
 decides what each investor gets; this module records it. `claim` takes one
 row per investor and artifact, or per investor and scrape run for a rollup,
-and commits before any email is sent. So an alert goes out at most once, and
-the per-run cap and daily budget counts include every committed claim.
-`record` writes the outcome and mirrors it onto the investor's alert
-subscription in one transaction. The delivery statuses live in
-`app/alert_vocabulary.py`.
+and commits before any email is sent. So only one claim holder sends a row's
+email at a time, and the per-run cap and daily budget counts include every
+committed claim. A claim taken over once it is stale, or a provider answer
+lost after the provider took the email, can still send it twice (see
+`app/services/alert_delivery.py`). `record` writes the outcome and mirrors it
+onto the investor's alert subscription in one transaction. The delivery
+statuses live in `app/alert_vocabulary.py`.
 
 ## Write Behavior
 
