@@ -75,7 +75,10 @@ _CLAIM_UNAVAILABLE = {
 
 
 class AlertNotReady(RuntimeError):
-    """The artifact or its analysis is not visible yet, so a retry may find it."""
+    """The artifact, its analysis or an investor's rule cannot be read as an alert yet.
+
+    A retry may succeed.
+    """
 
     def __init__(self, message: str, *, code: str):
         super().__init__(message)
@@ -94,8 +97,9 @@ class AlertMismatch(ValueError):
 class WatcherResult:
     """What one alert came to for one investor watching its ticker.
 
-    ``kind`` is the delivery last attempted, and None when the investor's rule
-    did not want the alert or the attempt failed before it began.
+    ``kind`` is the delivery last attempted. It is None when the investor's
+    rule did not want the alert, and when the attempt raised, which can happen
+    after the claim or even after the send.
     ``recorded`` is the ledger status the attempt wrote, and None when it wrote
     none, as when an earlier attempt had already settled the delivery.
     ``retry_code`` is set when SQS should deliver the record again.
@@ -115,8 +119,9 @@ def deliver_alerts(
 ) -> list[WatcherResult]:
     """Deliver the alert about the message's artifact to every investor watching it.
 
-    Raises ``AlertNotReady`` while the artifact or its analysis is not visible,
-    and ``AlertMismatch`` when the message disagrees with the stored artifact.
+    Raises ``AlertNotReady`` while the artifact or its analysis cannot be read
+    as an alert, and ``AlertMismatch`` when the message disagrees with the
+    stored artifact.
     Each investor's delivery stands alone: a failure becomes that investor's
     ``retry_code``, and the others still get their alerts. ``open_session``
     opens one short database session; this module commits what it writes.
