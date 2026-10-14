@@ -249,7 +249,10 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
             if not artifact_summary.is_complete(summary, source_type="asx_announcement"):
                 raise RuntimeError("Bedrock response omitted structured summary fields")
             with database_session() as db:
-                artifact_summary.record(db, get_artifact(db, artifact_id), summary)
+                artifact = get_artifact(db, artifact_id)
+                if artifact is None:
+                    raise RuntimeError("Completed artifact is no longer available")
+                artifact_summary.record(db, artifact, summary)
                 db.commit()
             result["updated"] = int(result["updated"]) + 1
         # Continue so one malformed model response cannot block the batch.
