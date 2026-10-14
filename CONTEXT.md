@@ -83,7 +83,7 @@ The version of the instructions an LLM summary was written from, recorded with e
 _Avoid_: model version, template
 
 **Sentiment bucket**:
-One of the five themes a ticker's sentiment is broken down by: revenue, strategy, risk, dividend and organisational.
+One of the five themes a ticker's sentiment is broken down by: revenue, strategy, risk, dividend and organisational. A classified announcement counts in its category's one bucket, or in none (security notifications). Keywords place news and the announcements the rules could not classify.
 _Avoid_: category (for a bucket), theme
 
 **Artifact summary**:
@@ -101,6 +101,40 @@ _Avoid_: resummarise job, summary job
 **Artifact card**:
 How one artifact appears in a feed: a tag, its title, who published it with a link to the original, and the about, changed and matters lines of its summary. A line the summary lacks is empty, never placeholder text or the artifact's raw text.
 _Avoid_: announcement card (for both feeds), feed item formatter, news card
+
+### Reading
+
+**Read-model**:
+A module that answers one page's question from stored data and writes nothing, such as the ticker brief or the watchlist summary (the brief also asks for a live quote). Its route only translates HTTP: parameters in, one read, a 404 for an unknown ticker, a declared response schema.
+_Avoid_: view (for the module), query service, presenter
+
+**Quote**:
+A ticker's current price and previous close, read from Yahoo when a page asks and never stored in the database.
+_Avoid_: market data, price data, ticker price
+
+**Quote source**:
+Where quotes come from: Yahoo in production, a fixed table in tests. It answers a quote or nothing, and the page then shows "N/A".
+_Avoid_: quote client, price feed, Yahoo (for the interface)
+
+**Ticker record**:
+An artifact stored against a ticker, as the ticker's pages list it: newest published first, with its summary. The news feed shows the ten newest as artifact cards, and the deep dive shows them as research history.
+_Avoid_: record (for any artifact), filing (for news), entry
+
+**Ticker brief**:
+What a ticker's research summary opens with: the company, its quote and latest signal, and the story, sources and clarity of its newest ticker record, beside that record's date and type and the kinds of record the ticker has had lately.
+_Avoid_: overview (for the whole brief), aside (for the whole brief), summary (for the brief)
+
+**Latest signal**:
+The sentiment of a ticker's most recently published ASX announcement with a positive, neutral or negative label, shown on its brief and its watchlist card. News and public discussion never set it.
+_Avoid_: latest sentiment, public sentiment, headline sentiment
+
+**Category sentiment**:
+A ticker's analysed sentiment in each sentiment bucket, plus public discussion, over the last year, read from what the analysis worker stored. Its groups are sentiment buckets, not categories, although the API names them `categories`.
+_Avoid_: topic sentiment, category analysis, sentiment categories
+
+**Watchlist summary**:
+What an investor's watchlist page shows in one read: their oldest watchlist and, for each company in the order it was added, its latest signal and the brief line of its newest ticker record.
+_Avoid_: watchlist details, watchlist page data
 
 ### People and access
 
@@ -133,6 +167,24 @@ _Avoid_: notify (the Lambda that hands it SQS records), notification processing
 **Delivery ledger**:
 One row for each alert (per investor and artifact) and each rollup (per investor and scrape run). A row is claimed, and the claim committed, before its email is sent, so only one worker sends it at a time. The row then records sent, rejected, failed (a later claim may try again) or suppressed. Each outcome is also copied onto the investor's alert subscription, unless the subscription already shows a newer one.
 _Avoid_: D17 fields or mirror (for the subscription's copy), delivery log
+
+**Alert subscription**:
+An investor's opt-in to email alerts at one address: whether alerts are on, where the address's verification stands, and the hash of the secret behind its unsubscribe links. Each investor has at most one, and changing the address starts verification again.
+_Avoid_: notification preferences (for the stored record), subscriber
+
+**Verification link**:
+The signed, expiring link in a verification email that confirms an alert subscription's address. Only the newest request's link works, for 24 hours by default, and alerts go only to a verified address.
+_Avoid_: confirmation token, magic link
+
+### Running the system
+
+**Runtime configuration**:
+The settings a backend process runs with. Each is declared once with its default and limits. The whole set is read from the process's environment the first time any setting is used, and its secrets are read from SSM Parameter Store then. A value outside its limits fails that first read, naming the variable but never the value.
+_Avoid_: env vars, config (for the whole set), settings file
+
+**Secret**:
+A setting AWS keeps in SSM Parameter Store, such as the database URL or the Brevo API key. A Lambda's environment holds only the parameter's name, in `<SETTING>_PARAMETER`, and the runtime configuration reads the value when it is built. A secret that may be missing reads as empty when its parameter does not exist, which switches its feature off. That is separate from a gated secret: the Marketaux token is gated but must exist, and the Reddit credentials may be missing although no switch gates them.
+_Avoid_: credential, key (for every secret), SSM value
 
 ### Deploying
 

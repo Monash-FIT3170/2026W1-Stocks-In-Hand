@@ -6,7 +6,8 @@
 - The main idea is to take knowledge that is copied across many files and give it one home (a "module") with a small, clear interface. Tests then check that interface instead of private functions.
 - The work is split into 18 pieces of work called candidates, grouped into phases. Phase 0 fixes live bugs and deletes dead code first, so the later work starts from a smaller and correct codebase.
 - Phase 0 is done in #56. It was reviewed as PRs #57 to #65, which are being closed in favour of #56.
-- Phase 1 (candidates 01, 15 and 11), Phase 2 (candidates 04, 03, 02 and 05), Phase 3 (candidates 06, 07, 09 and 08), candidates 13 and 12 on the alerts track and candidates 16 and 18 on the deploy track are also done in this PR, #56. #56 is the one PR to merge. More candidates are still being finished in #56.
+- All 18 candidates are done in #56 too: Phase 1 (01, 15 and 11), Phase 2 (04, 03, 02 and 05), Phase 3 (06, 07, 09 and 08), Phase 4 (10), the alerts track (13, 12 and 14) and the deploy track (16, 17 and 18). #56 is the one PR to merge. It passes 1174 backend tests with Postgres and LocalStack running, the same on Python 3.11 and 3.12.
+- #56 adds four migrations: `86d9seedtickers`, `86d9statuschecks`, `86d9engagement` and `86d9artifacttypes`. No workflow runs them, so they are applied by hand, as `infra/README.md` §4 says. The first deploy also needs the hand checks listed in [Checks before and after merging #56](#checks-before-and-after-merging-56).
 - Some choices belong to the team, not the engineer doing the work. They are listed under [Decisions still needed](#decisions-still-needed).
 
 ## What done looks like
@@ -19,6 +20,12 @@
 6. Alert decisions, email provider errors and the subscription lifecycle each live in one module. Each is tested end to end against Postgres with a fake email sender.
 7. Deploy and rollback work out their parameters from one release module. Template tests check rules ("every queue has a dead-letter queue") instead of exact text.
 8. Tests call each module through its interface. Tests that patch private functions or check call order are deleted as each candidate replaces them.
+
+Where #56 leaves these points:
+- Met: 1 (Phase 0), 3 (#61 and 04), 4 (06, 07 and 08), 6 (12, 13 and 14) and 7 (15, 16 and 18).
+- Point 2 is close. Besides the catalogue entry and the source adapter, a new ticker needs a line in `ADAPTER_TYPES`, its recorded pages pinned in a test, and its own seed migration (see 01).
+- Point 5 is met for access (11). The brief, news feed, deep dive, category sentiment and watchlist summary routes now only call a read-model (10), and each alert settings route makes one call (14). `POST /llm/categorise/recent` and `GET /reddit/ticker-sentiment/{t}` still generate inside their routes (see 08's Left over).
+- Point 8 is mostly met. A few tests still patch a private seam: the queue modules' `_sqs_client`, `parsing.analysis._ocr_pdf` and `crud.scrape_run._lock_run`.
 
 ## Status at a glance
 
@@ -33,26 +40,34 @@
 | 02 | Source adapter per company | Phase 2 | Strong | L | 01 | Done in #56 |
 | 05 | Public discussion collector | Phase 2 | Strong | M | 01 | Done in #56 |
 | 06 | Structured generation | Phase 3 | Strong | M | Phase 0 | Done in #56 |
-| 07 | Artifact summary | Phase 3 | Strong | M to L | 06 | Done in #56 (the watchlist brief is 10 step 4) |
-| 09 | Category taxonomy ownership | Phase 3 | Worth exploring | S to M | Phase 0 | Done in #56 (the bucket switch is 10 step 3) |
+| 07 | Artifact summary | Phase 3 | Strong | M to L | 06 | Done in #56 (10 serves the watchlist brief) |
+| 09 | Category taxonomy ownership | Phase 3 | Worth exploring | S to M | Phase 0 | Done in #56 (10 made the bucket switch) |
 | 08 | Artifact analysis | Phase 3 | Strong | L | 03, 04, 06, 07 | Done in #56 |
-| 10 | Ticker read-models | Phase 4 | Strong (bucket remap: worth exploring) | M | 01, 07, 09 | Partly done in Phase 0; step 5 done by 07 in #56 |
+| 10 | Ticker read-models | Phase 4 | Strong | M | 01, 07, 09 | Done in #56 (the bucket remap uses the decided mapping) |
 | 13 | Email sender port | Alerts track | Strong | S to M | Phase 0 | Done in #56 |
 | 12 | Alert delivery | Alerts track | Strong | M | 13 | Done in #56 |
-| 14 | Alert subscription lifecycle | Alerts track | Worth exploring | M | 13 | Not started |
+| 14 | Alert subscription lifecycle | Alerts track | Worth exploring | M | 13 | Done in #56 |
 | 16 | Release parameters | Deploy track | Strong | M | 15 | Done in #56 |
-| 17 | Runtime configuration | Deploy track | Worth exploring | M to L | 15 | Partly done in Phase 0 |
+| 17 | Runtime configuration | Deploy track | Worth exploring | M to L | 15 | Done in #56 |
 | 18 | OIDC role pair | Deploy track | Speculative | S to M | 16 | Done in #56 (the deployment-test roles are deleted) |
 
 "Strong" means the problem is clear and the fix is worth doing. "Worth exploring" means it is probably worth doing but needs a closer look or a team decision first. "Speculative" means it may not be needed at all.
 
-The alerts track and the deploy track do not depend on the ingestion or analysis phases. A second person can work on them in parallel once Phase 0 has merged.
+The alerts track and the deploy track do not depend on the ingestion or analysis phases, so they were done in parallel with them.
 
 ## Order of work
 
-1. Merge #56. It is the one PR to merge. It holds this plan, Phase 0 (reviewed as PRs #57 to #65, which are being closed in its favour), Phase 1 (candidates 01, 15 and 11), Phase 2 (candidates 04, 03, 02 and 05), Phase 3 (candidates 06, 07, 09 and 08), candidates 13 and 12 on the alerts track and candidates 16 and 18 on the deploy track. More candidates are still being finished in #56. It passes 1024 backend tests with Postgres and LocalStack running; without LocalStack, its one LocalStack test skips. #56 adds four migrations: `86d9seedtickers` (Phase 0), `86d9statuschecks` (04), `86d9engagement` (05) and `86d9artifacttypes` (08). No workflow runs them, so apply them by hand before the first release of #56 (`infra/README.md` §4), and run `86d9artifacttypes` again once the new analysis image is live (see 08's Left over). It also fixes the analysis image, which could not import its handler (see 09), so check the analysis Lambda after the next deploy. The deploy, rollback and execute workflows now run `backend/tools/release.py`, so do the first staging runs in 16's Left over before relying on an automatic deploy. 18's change to `infra/github-oidc.yaml` reaches AWS only when someone deploys the OIDC stack by hand after reviewing its change set (`infra/README.md` §10).
-2. Do not wait for the citation branches. `feature/86d4a0a1d-specific_report_sources` is not merged, and its change to `ticker._source_from_values` now belongs on `artifact_card.sources`. The two claim-traceability branches, `feature/86d2ba6e6-claim_source_traceability` (#68) and `feature/86d48cxxz-advanced_traceability`, define `claim_evidence` in incompatible ways and no longer merge. Pick one and rewrite it onto 07's `SummaryExtension` hook and the artifact card.
-3. After that, follow the "Depends on" column. Phase 2 before Phase 3 before Phase 4, with the alerts and deploy tracks in parallel.
+1. Merge #56. It is the one PR to merge. It holds this plan, Phase 0 (reviewed as PRs #57 to #65, which are being closed in its favour) and all 18 candidates: Phase 1 (01, 15 and 11), Phase 2 (04, 03, 02 and 05), Phase 3 (06, 07, 09 and 08), Phase 4 (10), the alerts track (13, 12 and 14) and the deploy track (16, 17 and 18). It passes 1174 backend tests with Postgres and LocalStack running, the same on Python 3.11 and 3.12. Without LocalStack, its one LocalStack test skips.
+2. Apply its four migrations by hand before its first release: `86d9seedtickers` (Phase 0), `86d9statuschecks` (04), `86d9engagement` (05) and `86d9artifacttypes` (08). 10, 14 and 17 add none. No workflow runs them (`infra/README.md` §4), and the merge starts that first release, because a push to `main` deploys staging. A release deploys the backend before it publishes the frontend, which 07 and 10 need.
+3. Do the checks in [Checks before and after merging #56](#checks-before-and-after-merging-56). They need staging, AWS or a GitHub Actions run, and some of them must come before the merge.
+
+### Other open branches
+
+These branches were written against `main` and do not build on #56. Each needs porting onto it, before or after it merges.
+
+- #67 (`feature/announcement-monitor`) adds feed eligibility to `app/services/llm.py`, `lambdas/analysis.py` and `app/crud/announcement.py`. #56 replaced `llm.py` with `app/services/generation` (06), moved analysis into `lambdas/artifact_analysis.py` (08) and rebuilt the market feed on the artifact card (07). Its `_required_summary_values` also fails any analysis that has no summary, so with no LLM switched on every analysis fails again, which #58 fixed. Port it onto `generation` as a `FeedEligibility` kind.
+- #68 (`feature/86d2ba6e6-claim_source_traceability`) and `feature/86d48cxxz-advanced_traceability` define `claim_evidence` in incompatible ways and no longer merge. Once the team picks one, rewrite it onto 07's `SummaryExtension` hook and the artifact card (see 07's Left over).
+- `feature/86d4a0a1d-specific_report_sources` has no PR. Its backend change to `ticker._source_from_values` now belongs in `artifact_card.sources`. The `CitationLinks.jsx` it edits is now in `components/sources/`, and no page imports it (see 10's Left over).
 
 ## How to work on a candidate
 
@@ -68,8 +83,10 @@ These rules apply to every candidate.
 - Branch off `main`. The hooks in `.githooks` only allow `feature/<9-character ClickUp id>-<description>`, `bugfix/<description>` or `admin/<description>`. Use underscores, not hyphens, inside the description.
 - Commit messages on `feature/` branches look like `3.2.3.86d2buamy - Description`. On `bugfix/` and `admin/` branches they look like `3.2.3 - Description`.
 - Run the backend tests from the repo root with `python -m pytest -q backend/tests`. Set `DATABASE_URL` to a Postgres database that has been migrated with `python -m alembic upgrade head` (run from `backend/`). Database tests skip themselves when Postgres is not reachable, so a run with no database can pass without testing much. On Windows, install `tzdata` so `ZoneInfo("Australia/Sydney")` works.
-- The "Queue wiring regression tests" CI job installs only pytest and PyYAML, and runs `test_queue_wiring.py`, `test_deployment_contracts.py`, `test_template_model.py`, `test_release.py` and `test_github_oidc.py`. Keep those five files, and anything they import, free of other dependencies. Today that means `backend/app/sources.py`, `backend/tools/sync_tickers.py`, `backend/tools/template_model.py`, `backend/tools/verify_queue_wiring.py` and `backend/tools/release.py`. A test file added to the job's pytest command must also go in both of its path filters, or `test_queue_ci_lints_every_template_and_runs_when_one_changes` fails.
-- Line references in this plan point at `main` commit `c6e7574`. Phase 0 moves some code, so if a line does not match, search for the function or symbol name instead.
+- The "Queue wiring regression tests" CI job installs only pytest and PyYAML, and runs `test_queue_wiring.py`, `test_deployment_contracts.py`, `test_template_model.py`, `test_release.py` and `test_github_oidc.py`. Keep those five files, and anything they import, free of other dependencies. Today that means `backend/app/core/config.py` and what it loads (`backend/app/__init__.py`, `backend/app/core/__init__.py`, `backend/app/alert_vocabulary.py` and `backend/app/sources.py`), and `backend/tools/sync_tickers.py`, `backend/tools/template_model.py`, `backend/tools/verify_queue_wiring.py` and `backend/tools/release.py`. The configuration must need only the standard library: `test_queue_wiring.py` imports it with `python -S`, and fails if the job's path filters miss a module that import loads. A test file added to the job's pytest command must also go in both of its path filters, or `test_queue_ci_lints_every_template_and_runs_when_one_changes` fails.
+- Every setting is declared once in `backend/app/core/config.py`, with its default and limits, and read through `settings` (17). No module in `app/`, `lambdas/`, `parsing/`, `scrapers/` or `alembic/`, nor `main.py` or `lambda_api.py`, may read `os.environ` or `os.getenv` outside `app/core/config.py`. `test_only_the_configuration_reads_the_environment` allows only facts AWS sets about the process: `AWS_LAMBDA_FUNCTION_NAME` in `app/database/connection.py`, and `AWS_LAMBDA_RUNTIME_API` and the environment Chromium inherits in `scrapers/browser.py`. A variable a function gets in `infra/template.yaml` must be a declared setting or name a registered secret, and a literal value must equal the declared default unless it is listed as a deliberate difference, or the rules in `test_queue_wiring.py` fail. Tests patch `settings` instead of setting an environment variable, though nothing checks that.
+- `parsing/classification` and `parsing/categories` must use only the standard library, because `Dockerfile.api` ships them to the API (10). `test_lambda_images.py` fails on any other import, which CI's full install would otherwise hide.
+- Line references in a "What was wrong" list point at the code before that candidate was done. The others point at #56, unless they say "old". If a line does not match, search for the function or symbol name instead.
 - If several agents work in separate git worktrees at the same time, do not use `git stash`. The stash is shared by every worktree of a repo, so two agents' changes can swap.
 
 ## Words used in this plan
@@ -116,8 +133,8 @@ Status: Done in #56; reviewed as PRs #57 to #65. Nothing here needs to be done a
 | Neutral-only alert rules never fired. The UI, schema and rule validation accepted "neutral" but the producer dropped it. | #60 | `app/alert_vocabulary.py` defines the alert labels once. Neutral works end to end. |
 | A temporary failure marked an artifact or run as failed, and the retry then undid it. The API and scheduler could also enqueue a second Queue A message during a retry. | #61 | Retryable errors record the error only. The final state is recorded on the last receive (`MAX_RECEIVE_COUNT = 5` in `lambdas/common.py`). `test_transient_failures.py` reproduces the duplicate enqueue on `main`. |
 | Category sentiment gave rows with 0 or NULL confidence the most weight (`confidence or 1.0`). | #62 | Confidence is the weight. If no row has any confidence, labels are counted equally. |
-| Appendix 3G/3H notices counted as "risk", because "securitynotification" contains "security". | #62 | Keywords match whole words only. Whether one artifact can count in several buckets is still open (see decisions). |
-| The document size limit was 10 MiB in code and 25 MiB in the template. The DOCX limit was 50 MiB in code and 20 MiB in the template. | #62 | Both defaults live in `lambdas/download_validation.py` (`document_size_limit()`, `docx_uncompressed_limit()`) and match the template. |
+| Appendix 3G/3H notices counted as "risk", because "securitynotification" contains "security". | #62 | Keywords match whole words only. A classified announcement now counts in one bucket, as decided on 2026-10-13 and done by 10 in #56. |
+| The document size limit was 10 MiB in code and 25 MiB in the template. The DOCX limit was 50 MiB in code and 20 MiB in the template. | #62 | Both defaults live in `lambdas/download_validation.py` (`document_size_limit()`, `docx_uncompressed_limit()`) and match the template. 17 (#56) moved them into `app/core/config.py` as `MAX_DOCUMENT_BYTES` and `MAX_DOCX_UNCOMPRESSED_BYTES`, and a template rule keeps them equal to the template. |
 | The unsubscribe header invited a one-click POST, but CloudFront only allows GET on that page. | #62 | The `List-Unsubscribe-Post` header and the `ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED` flag are removed. The flag was off everywhere, so no sent email had the header. |
 | The analysis image could not import its handler: `Dockerfile.analysis` did not copy `parsing/classification/`, `parsing/extractors.py` or `parsing/classification_metadata.py` (since `9816ef6`). Found in #56 while doing 09. | #56 | The image copies them. `test_lambda_images.py` checks every image ships the backend modules its handler imports. |
 | The news summary route inserted a new summary row, which hit the unique constraint when a summary already existed. The local loader did the same. | #62 | Both use `upsert_artifact_summary`. |
@@ -135,20 +152,20 @@ Status: Done in #56; reviewed as PRs #57 to #65. Nothing here needs to be done a
 | The `app/services/gemini.py` and `groq.py` re-export shims. | #64 |
 | The `/tickers/symbol/{s}/overview` and `/brief-aside` routes and their unused frontend fetch functions. `/brief` stays. | #64 |
 | `_is_bluesky_ticker_post` and `_is_mastodon_ticker_post` and their tests. | #64 |
-| 15 unread `Settings` fields (14 in #65, `NOTIFICATION_QUEUE_URL` in #62), the stale `GROQ_API_KEY_PARAMETER` in `.env.example`, `SEED_TICKERS` in both compose files, and the `enqueue_public_discussion_analysis` alias. | #65, #62 |
+| 15 unread `Settings` fields (14 in #65, `NOTIFICATION_QUEUE_URL` in #62), the stale `GROQ_API_KEY_PARAMETER` in `.env.example`, `SEED_TICKERS` in both compose files, and the `enqueue_public_discussion_analysis` alias. `NOTIFICATION_QUEUE_URL` was not really unread: the analysis worker read it with `os.getenv`, and 17 (#56) declares it again. | #65, #62 |
 
 ### Left over from Phase 0
 
 These were found or deferred during Phase 0. Each one is also noted in the candidate it belongs to.
 
-- `"tone": "green"` in the deep-dive payload was kept because `DeepDiveTimeline.jsx` used it to colour the timeline dot. #42 deleted that component, and `DeepDiveNotebook.jsx` does not read `tone`, so 10 step 6 can drop it with no frontend change.
+- `"tone": "green"` in the deep-dive payload was kept because `DeepDiveTimeline.jsx` used it to colour the timeline dot. #42 deleted that component, and `DeepDiveNotebook.jsx` does not read `tone`, so it could go with no frontend change. Done in #56: 10 dropped `tone`, `metrics` and `month`.
 - `BaseScraper.download_pdf` is still used by `backend/scripts/populate_local_content.py` and still imports `lambdas.source_download` (candidate 02). Done in #56.
 - `crud.artifact.get_bluesky_posts_for_ticker` and `get_mastodon_posts_for_ticker` became dead in #64 but were not on the list (candidate 05). Done in #56.
 - `/headlines` and `/analyse` in `backend/main.py` were kept because they may still be used locally. `/analyse` now needs an admin session.
 - If a Lambda times out on its final receive, its error handler never runs, so nothing records the final failure (candidate 04). Done in #56 with a sweep the schedule runs.
 - With 4096 output tokens, an admin summary route could come close to the 30-second API Gateway limit (candidate 06). Done in #56 by 08 for the two summary routes, which now queue a summary request. `POST /llm/categorise/recent` and `GET /reddit/ticker-sentiment/{t}` still generate inline.
-- Run "Prepare staging backend rollback" once against staging to check the #59 change. It only creates a change set. The only parameter changes should be the three image URIs (candidate 16). 16 replaces the #59 rollback with the release module in #56, so run the #59 version from its branch (`bugfix/release_workflow_parameters`) before #56 merges, then the module's version, and compare (see 16's Left over). Still open.
-- Deleting unread `Settings` fields means a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashes the API at import. The Lambdas that read them still fail on bad input (candidate 17).
+- Run "Prepare staging backend rollback" once against staging to check the #59 change. It only creates a change set. The only parameter changes should be the three image URIs (candidate 16). 16 replaces the #59 rollback with the release module in #56, so run the #59 version from its branch (`bugfix/release_workflow_parameters`) before #56 merges, then the module's version, and compare (see 16's Left over). Still open, and listed under [Checks before and after merging #56](#checks-before-and-after-merging-56).
+- Deleting unread `Settings` fields meant a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashed the API at import, while each Lambda that read them handled bad input its own way (candidate 17). Done in #56 by 17: every setting is declared once with its limits, and a bad value fails at the first settings read with `ConfigurationError`.
 
 ## Phase 1: foundations
 
@@ -291,7 +308,7 @@ What was built
 `validated_document` (in `lambdas/download_validation.py`) is the only way to build a `DownloadedDocument`; its checksum and content type are derived from the validated bytes. `lambdas/raw_documents.RawDocumentStore` owns, for both workers, the key layout and parsing (`locate`), the object metadata, "put only if absent", "is it still there", "read and verify" and "is this object the document its key names" (`verify`). It sits on an `ObjectBucket`: `S3Bucket` for AWS and LocalStack, `InMemoryBucket` for tests.
 
 Done in Phase 0
-- The size limits agree with the template and live in `lambdas/download_validation.py` (#62).
+- The size limits agree with the template and live in `lambdas/download_validation.py` (#62). 17 (#56) moved them into the runtime configuration.
 - The `DownloadedPdf` alias, the `download_pdf` shim and the unused `final_url` parameter are gone (#63).
 
 Done in #56
@@ -431,7 +448,7 @@ Where the code is: `backend/app/services/generation/` (`__init__.py`, `kinds.py`
 
 ### 07 Artifact summary
 
-Strong, size M to L. Done in #56, except serving the watchlist brief, which moves to 10 step 4. Unblocks 08 and 10. Test approach: real Postgres.
+Strong, size M to L. Done in #56. 10 serves the watchlist brief, also in #56. Unblocks 08 and 10. Test approach: real Postgres.
 
 What was wrong
 - The six-field summary (`summary`, `about`, `changed`, `matters`, `confirmed_facts`, `speculation`) had no single owner. Its shape was written out again in 11 backend modules, and six frontend readers depended on how the backend filled the gaps: `AnnouncementCard.jsx` with `recordPresentation.js`, the home page, `SourceLibrary.jsx` with `companyFormat.js`, `DeepDiveNotebook.jsx`, `ResearchSummary.jsx` (which replaced `ClarityLayer.jsx`) and `watchlist/page.jsx`.
@@ -458,7 +475,7 @@ Done in #56
 Tests
 - `test_artifact_summary.py` records and reads on Postgres. Like `SessionLocal`, its session does not autoflush. It checks one row after two records, stale lines and lists removed, nothing left after a rolled-back savepoint, the caller's unflushed metadata kept (this fails if `record` stops flushing), an empty summary refused, two concurrent first records, the extension hook, completeness, the repair selection and the views. Pure tests cover cleaning and legacy recovery. It replaces `test_summary_metadata.py`, whose storage test was a MagicMock whose `side_effect` depended on call order.
 - `test_summary_writers.py` runs every writer against one scripted answer per summary kind. Each must give the same read back from one row, model and prompt version included. It also runs the repair operation through the analysis handler, including an announcement removed while the model answers. It checks that the local loader stores sentiment but no summary for an answer with no text. The worker's document path is checked in `test_pipeline_stages.py`. Neither file's session autoflushes.
-- `test_artifact_card.py` covers tags, source names, link labels, link fallbacks, legacy rows, and an unsummarised artifact showing no lines or raw text. `test_announcements.py` and the new `test_ticker_routes.py` read the market feed and the ticker brief, news feed and deep dive on Postgres, with and without a summary. `test_notify_database.py` checks the alert email quotes the summary. `test_llm_routes.py` adds the regression test for re-summarising news. It also checks that the ticker route lists an answer with no text as that artifact's error and goes on to the next artifact. `test_news_summary_database.py` checks the same for the news loop. 08 (#56) deleted those `test_llm_routes.py` tests and `test_news_summary_database.py` with the inline routes and the news loop. `test_llm_routes.py` now checks that the ticker route queues only artifacts without a complete summary.
+- `test_artifact_card.py` covers tags, source names, link labels, link fallbacks, legacy rows, and an unsummarised artifact showing no lines or raw text. `test_announcements.py` and the new `test_ticker_routes.py` (now `test_ticker_read_models.py`, which 10 grew into the read-model tests) read the market feed and the ticker brief, news feed and deep dive on Postgres, with and without a summary. `test_notify_database.py` checks the alert email quotes the summary. `test_llm_routes.py` adds the regression test for re-summarising news. It also checks that the ticker route lists an answer with no text as that artifact's error and goes on to the next artifact. `test_news_summary_database.py` checks the same for the news loop. 08 (#56) deleted those `test_llm_routes.py` tests and `test_news_summary_database.py` with the inline routes and the news loop. `test_llm_routes.py` now checks that the ticker route queues only artifacts without a complete summary.
 - These replace the MagicMock news-feed, clarity and summary-metadata tests in `test_apis.py` (the old lines 34-156 and 481-586), the four mapping tests in `test_announcements.py`, the `_summary_values` and repair-dispatch tests in `test_document_workers.py`, and two tests in `test_news_summary.py`. The frontend tests check null instead of the placeholder sentences.
 
 Behaviour changes
@@ -475,8 +492,8 @@ Behaviour changes
 - The frontend no longer hides the old placeholder sentences, so it must ship with this backend, not before it. Rolling the backend back to an image from before 07 needs the frontend rolled back too. The old backend sends "Summary pending.", "No change summary available yet.", "No detail available yet." and the "is tracked from the StonksInHand database" sentence. The new frontend would show them as text, for example under "AI-assisted brief".
 
 Left over
-- The two stores stay for now, as the team decided (the old step 5). Look again after 10 steps 3 and 4. Until then, `category_sentiment.py` reads the top-level keys for its keyword search and `_artifact_summary_text`, and the watchlist page reads `artifact_metadata.about` from `GET /artifacts/ticker/{id}`. `/artifacts` and `/artifact-summaries` still return the stores raw. If the stores are collapsed, make the summary row the one store.
-- Serving the watchlist brief from the `brief` view (the old step 4) is now 10 step 4, through the watchlist summary endpoint.
+- The two stores stay for now, as the team decided (the old step 5). 10 moved both readers in #56. Category sentiment reads summaries through `artifact_summary.read`, the watchlist reads the `brief` view through `GET /watchlists/me/summary`, and `GET /artifacts/ticker/{id}` is deleted. Only `/artifacts` and `/artifact-summaries` still return the stores raw, so the team can look again now. If the stores are collapsed, make the summary row the one store.
+- Serving the watchlist brief from the `brief` view (the old step 4) was done by 10 in #56, through the watchlist summary endpoint.
 - The repair operation still skips announcements with no summary row, as the team decided. `/llm/summarise/ticker/{symbol}` fills those gaps.
 - If the model keeps leaving a line empty for some announcements, the ticker route spends an LLM call on each of them on every run. If that shows up in the LLM budget, the team can bring back the old skip rule for announcements in that route.
 - `feature/86d4a0a1d-specific_report_sources` is not merged. Its change to `ticker._source_from_values` now belongs in `artifact_card.sources`. The claim-traceability branches (#68 and `feature/86d48cxxz-advanced_traceability`) are not merged either. The chosen one adds `SummaryExtension("claim_evidence", ...)`, required for announcements, to `EXTENSIONS`. It also keeps `claim_evidence` in `AnnouncementSummary.parse`, bumps the prompt version, and adds its field to the card and the clarity view.
@@ -489,11 +506,11 @@ Left over
   - The market feed, home page, source library, research summary and deep dive show the empty-summary states.
   - The Brevo alert smoke test passes.
 
-Where the code is: `backend/app/services/artifact_summary.py`, `backend/app/services/artifact_card.py`, `backend/app/crud/artifact.py` (`store_artifact_analysis`), `backend/app/crud/announcement.py`, `backend/app/api/routes/ticker.py`, `backend/app/services/analysis_queue.py` (`request_ticker_summaries`), `backend/lambdas/artifact_analysis.py` (`summarise`, `repair_missing_summaries`), `backend/lambdas/artifact_analysis_records.py`, `backend/scripts/populate_local_content.py`, `backend/app/services/alert_delivery.py` (`_load_alert`, which was notify's `_load_context`), `frontend/src/app/components/announcements/recordPresentation.js`, `frontend/src/app/components/company/companyFormat.js`, `backend/tests/test_artifact_summary.py`, `backend/tests/test_artifact_card.py`, `backend/tests/test_summary_writers.py`, `backend/tests/test_ticker_routes.py`.
+Where the code is: `backend/app/services/artifact_summary.py`, `backend/app/services/artifact_card.py`, `backend/app/crud/artifact.py` (`store_artifact_analysis`), `backend/app/crud/announcement.py`, `backend/app/read_models/ticker_brief.py`, `backend/app/read_models/ticker_records.py`, `backend/app/services/analysis_queue.py` (`request_ticker_summaries`), `backend/lambdas/artifact_analysis.py` (`summarise`, `repair_missing_summaries`), `backend/lambdas/artifact_analysis_records.py`, `backend/scripts/populate_local_content.py`, `backend/app/services/alert_delivery.py` (`_load_alert`, which was notify's `_load_context`), `frontend/src/app/components/announcements/recordPresentation.js`, `frontend/src/app/components/company/companyFormat.js`, `backend/tests/test_artifact_summary.py`, `backend/tests/test_artifact_card.py`, `backend/tests/test_summary_writers.py`, `backend/tests/test_ticker_read_models.py`.
 
 ### 09 Category taxonomy ownership
 
-Worth exploring, size S to M. Done in #56, except switching the category sentiment view to the proposed buckets, which is 10 step 3. Test approach: pure code.
+Worth exploring, size S to M. Done in #56. 10 switched the category sentiment view to the buckets, also in #56. Test approach: pure code.
 
 What was wrong
 - The classification engine itself is good, but adding a category meant editing 7 places: the taxonomy, `EXTRACTORS`, `CATEGORIES`, the storage `artifact_type` map, `_LEGACY_TO_STABLE`, the `ArtifactType` enum and the sentiment keywords.
@@ -502,22 +519,23 @@ What was wrong
 
 What was built
 
-Each `CategoryDefinition` in `parsing/classification/taxonomy.py` owns its facts: its rules, the names it is stored under (`compatibility_category` and `artifact_type`), its display label, its metric extractor if it has one, and a proposed sentiment bucket. `category_definition()` and `artifact_type_for()` read them. `classify_document` did not change, so this stays in line with the classification implementation plan.
+Each `CategoryDefinition` in `parsing/classification/taxonomy.py` owns its facts: its rules, the names it is stored under (`compatibility_category` and `artifact_type`), its display label, its metric extractor if it has one, and its sentiment bucket. `category_definition()` and `artifact_type_for()` read them. `classify_document` did not change, so this stays in line with the classification implementation plan.
 
 Done in #56
 1. The real legacy keyword classifier, run from `dabaaf0` (the commit the baseline report names) over the 85 fixtures, reproduces the recorded baseline exactly. Its predictions are frozen in `tests/fixtures/classification/legacy_baseline.json`, and `evaluate_classification --classifier legacy-baseline` replays them. `current` is now the default. `parsing/classifier.py` and `--classifier legacy` are deleted.
 2. The four extractor classes that returned `{}` and the `CATEGORIES` list are deleted.
-3. Each definition has a label, an `artifact_type` and a proposed sentiment bucket. `parsing/extractors.py` and the local loader's `_CATEGORY_TO_ARTIFACT_TYPE` give way to the definitions. Adding a category now means one definition, plus an `ArtifactType` member if it needs its own stored type. The team decided the buckets are a proposal only, so the category sentiment view still buckets by keyword and no UI numbers change.
-4. The proposed mapping below is handed to 10.
+3. Each definition has a label, an `artifact_type` and its sentiment bucket. `parsing/extractors.py` and the local loader's `_CATEGORY_TO_ARTIFACT_TYPE` give way to the definitions. Adding a category now means one definition, plus an `ArtifactType` member if it needs its own stored type. The team decided the buckets are a proposal only, so the category sentiment view still buckets by keyword and no UI numbers change. After the team decided the mapping, 10 switched the view in #56.
+4. The mapping below was handed to 10, and the team decided it on 2026-10-13.
 
-| Category | Proposed bucket |
+| Category | Bucket |
 |---|---|
 | `quarterly_trading_update`, `guidance_update`, `half_year_results`, `full_year_results`, `annual_report` | revenue |
 | `dividend_announcement`, `capital_management` | dividend |
 | `corporate_action` | strategy |
+| `executive_transcript` | strategy (decided 2026-10-13) |
 | `leadership_change`, `governance_meeting` | organisational |
 | `regulatory_legal` | risk |
-| `security_notification`, `executive_transcript` | none proposed |
+| `security_notification` | none |
 
 Bug found on the way: `Dockerfile.analysis` did not copy `parsing/classification/`, `parsing/extractors.py` or `parsing/classification_metadata.py`, so the analysis handler could not be imported in the deployed image. It had been so on `main` since the rules engine landed (`9816ef6`). Step 1 deletes a file that Dockerfile copied, which is how it came up. The image now copies them, and `test_lambda_images.py` checks that every image ships the backend modules its handler imports and copies no missing path.
 
@@ -526,12 +544,11 @@ Tests
 - `test_category_taxonomy.py` checks every definition is complete, and pins every stored category name and artifact type.
 - `test_classification_evaluator.py` checks the frozen baseline still gives the recorded Macro F1, unknown false-positive rate and per-category F1.
 
-Behaviour changes: none from the taxonomy. Stored categories, artifact types and extracted data are unchanged, and the category sentiment view still buckets by keyword. The analysis image fix is a deploy change (see Left over).
+Behaviour changes: none from the taxonomy. Stored categories, artifact types and extracted data are unchanged, and the category sentiment view still buckets by keyword, until 10 switched it in #56. The analysis image fix is a deploy change (see Left over).
 
 Left over
 - Deploy and check that the analysis Lambda starts. On the current staging stack, search the analysis function's CloudWatch logs for `No module named 'parsing.classification'` to see whether analysis has been failing since `9816ef6`.
-- The API image ships only `app/`, so the category sentiment route cannot import the taxonomy. 10 step 3 needs one of two things: the analysis worker stores each artifact's bucket, or `Dockerfile.api` copies `parsing/classification` and `parsing/categories` (both pure Python).
-- Today an artifact with no keyword match falls into "strategy". The proposal leaves security notifications and executive transcripts without a bucket. The team decided on 2026-10-13 that executive transcripts count in strategy and security notifications in no bucket (see decisions).
+- The API image did not ship the taxonomy, so the category sentiment route could not import it. Done by 10 in #56: `Dockerfile.api` copies `parsing/__init__.py`, `parsing/categories` and `parsing/classification`, and the view counts each classified announcement in its category's one bucket, with executive transcripts in strategy and security notifications in none.
 - Only the local loader stored a category's own `artifact_type`, and the pipeline stored `asx_announcement_other` for every announcement. Done in #56 by 08: analysis stores the category's type, migration `86d9artifacttypes` sets it on older announcements, and `tools/reclassify_artifacts.py` keeps it in step for announcement rows.
 
 Where the code is: `backend/parsing/classification/taxonomy.py`, `backend/parsing/categories/`, `backend/parsing/analysis.py` (`apply_rules`), `backend/lambdas/artifact_analysis.py` and `backend/tools/reclassify_artifacts.py` (`artifact_type_for`), `backend/tools/evaluate_classification.py`, `backend/tests/fixtures/classification/legacy_baseline.json`, `backend/tests/test_category_taxonomy.py`, `backend/tests/test_lambda_images.py`, `backend/Dockerfile.analysis`.
@@ -573,7 +590,7 @@ Tests
   - documents: the full flow, reconciling, four kinds of untrusted notification, artifact types, and a downloaded document recorded exactly as the worker records the same bytes
   - alerts: every alertable label, a failed alert, the SQS sender's message and the alert switch in `deployed_ports`
   - summaries: `summarise` for each kind and for an answer with no text, and the repair's dry run, limit, complete-only rule, answer with no text, removed announcement and Bedrock guard
-  - one test that all three analysis paths give FinBERT the title and text, and a subprocess test that importing the handler builds no `Settings`
+  - one test that all three analysis paths give FinBERT the title and text, and a subprocess test that importing the handler builds no `Settings` (17 replaced it in #56 with one that covers all five worker handlers)
 - The analysis tests in `test_pipeline_stages.py` inject ports at `analysis.deployed_ports` and run a real text document, instead of patching `analyse_document` and boto3. New handler scenarios cover stored text, a summary request with and without an LLM, a summary request whose answer has no text (acknowledged, with the old summary kept), and a failed alert.
 - `test_llm_routes.py` runs the queued routes with a recording sender, and checks through FastAPI that the ticker route answers 422 for a `limit` of 0 or 51 and 202 for 50. `test_marketaux.py` runs the hook on Postgres, and `test_local_content_loader.py` runs the loader on Postgres with a fake adapter. `test_messages.py` covers the requests, and `test_artifact_type_migration.py` and `test_reclassify_artifacts.py` cover the types. 07's `test_summary_writers.py` now has the worker, the summary request, the repair and the local loader as its writers.
 - Deleted as replaced:
@@ -619,7 +636,7 @@ Left over
 - A failed summary request records nothing on the artifact. Its only traces are the log events and the message in the analysis dead-letter queue. The failure log lines carry no `artifact_id`, because a summary request has no subject; `summary_unavailable` and `completed` do.
 - The ticker route queues at most 50 summary requests, but the analysis event source has no `MaximumConcurrency`, so they can start 50 flex-tier Bedrock calls at once, and calling the routes again before the worker has drained them queues the same artifacts again. A throttled request is retried only after the 72-minute visibility timeout, and reaches the dead-letter queue after 5 receives. `MaximumConcurrency` on the analysis event source would bound this, but it would also slow pipeline analysis.
 - `POST /llm/categorise/recent` and the investor route `GET /reddit/ticker-sentiment/{t}` still generate inside the API's 30 seconds.
-- For 17: the worker's environment reads now sit in two places in `lambdas/artifact_analysis.py`, `deployed_ports` and the extraction call. They are `MAX_PDF_PAGES`, `MAX_OCR_PAGES`, `MAX_OCR_PIXELS_PER_PAGE`, `RAW_DOCUMENT_BUCKET`, `NOTIFICATIONS_ENABLED` and `NOTIFICATION_QUEUE_URL`. The four imports deferred there (the records, generation, the artifact summary rules and the sentiment service) and the subprocess import test can go once `Settings` is lazy.
+- The worker's six environment reads (`MAX_PDF_PAGES`, `MAX_OCR_PAGES`, `MAX_OCR_PIXELS_PER_PAGE`, `RAW_DOCUMENT_BUCKET`, `NOTIFICATIONS_ENABLED` and `NOTIFICATION_QUEUE_URL`) were left for 17. Done by 17 in #56: they come from `settings`, and generation and the sentiment service are imported at the top. The records and the artifact summary module stay imported on use, because the records module imports `artifact_analysis` and importing any model creates the engine.
 - The IAM Sid `EnqueuePublicDiscussionAnalysis` now also covers summary requests. Renaming it is optional.
 - Local databases keep the documents the old loader stored under text hashes, next to the new `document:` rows. Delete them by hand if they get in the way.
 
@@ -629,34 +646,84 @@ Where the code is: `backend/lambdas/artifact_analysis.py`, `backend/lambdas/arti
 
 ### 10 Ticker read-models
 
-Strong, size M. The bucket remap in step 3 is only worth exploring. Needs 01, 07, 09 and the citation branches merged. Test approach: real Postgres, plus a fake quote service.
+Strong, size M. Done in #56. Needs 01, 07 and 09, all done in #56. Unblocks the decision on collapsing 07's two summary stores. Test approach: real Postgres, with a fixed quote source in place of Yahoo.
 
-What is wrong
-- `ticker.py` is 597 lines with 22 commits, and mixes catalogue data, a Yahoo quote client and about 20 formatters.
-- Category buckets are guessed by matching keywords in LLM prose, ignoring the rules-v2 classification.
-- The watchlist builds its own read-model in the browser. It makes N+1 calls, downloads every artifact including `raw_text`, and dropped sentiment from the cards to cope.
+What was wrong
+- `ticker.py` was 342 lines. 01 had removed its catalogue data and 07 its card code, but it still mixed the Yahoo quote client and its module-level cache, eight formatters, the brief builder, the CRUD routes and three page reads. The brief's tests patched private functions (`_live_quote`, `_ticker_artifacts`, `_latest_sentiment_for_ticker`).
+- `category_sentiment.py` (434 lines) held the whole read inside the route file: the keyword table, the query, the bucketing and the weighting. Its lookup only upper-cased the symbol, so `/sentiment/BHP.AX` answered 404 where `/brief` did not. Its POST compatibility route either repeated the GET or answered 503, and the README still described a Bedrock and FinBERT pipeline it no longer ran.
+- Buckets were guessed from keywords in the title and summary lines, ignoring the rules-v2 classification. A classified announcement counted in every bucket its text matched, or in the strategy catch-all. 09's buckets went unread, because the API image did not ship `parsing/`.
+- The latest signal was the newest sentiment row of any artifact stored against the ticker (`_latest_sentiment_for_ticker`). The headline went to whichever artifact was analysed for the first time last: an older filing analysed after a newer one (for example in a batch analysed out of order, or on a retry), or a news story. Analysing a filing again never moved it, because analysis updates an artifact's one sentiment row in place and keeps the row's time. The UI calls it the latest filing signal, and the story beside it told the newest published record.
+- The watchlist page built its own read-model in the browser. It fetched `/auth/me`, `/watchlists/me` (taking the first of an unordered list) and `/watchlist-tickers/{id}`, then `/tickers/{id}` and `/artifacts/ticker/{id}` for each company. The last sent every artifact with its raw text, with no limit. To avoid more calls the cards showed no signal, and the page's private `fetchJson` silently ignored a failed add or remove.
+- Nothing read the brief's deprecated `public_sentiment_pct`, and the frontend filtered out the key numbers that repeated the price and day change. Once #42 deleted `DeepDiveTimeline.jsx`, nothing showed the deep-dive event's `month`, `metrics` or `tone`. `DeepDiveNotebook.jsx` fell back to `month` only when `date` was missing, and `date` is always set. It hid every metric that starts "Source:", which is the only kind sent. Nothing read the constant `tone: "green"`. The search page kept a dead `{tickers: [...]}` branch.
+- The check that the API never runs FinBERT searched the text of `Dockerfile.api` and the route file.
 
-What to build
+What was built
 
-Ticker brief, category sentiment and watchlist summary become read-model modules outside the route files, sharing the card view from 07. Quotes come through an interface with a Yahoo adapter and a fake.
+`app/read_models/` holds the read-models. Each answers one page's question from stored data (the brief also uses a live quote) and writes nothing. Its route only translates HTTP: it reads the parameters, calls one read function, turns `TickerNotFound` into a 404 and declares the response schema. `ticker_records` finds the ticker (`find_ticker` accepts any case and a `.AX` suffix) and reads its records, the artifacts stored against it, newest published first. `recent_artifacts` loads each record with its summary and platform, in two more statements however many records there are. `latest_artifacts` gives every ticker's newest record in one query plus the load of its summaries. `read_news_feed` and `read_deep_dive` build the feed and the research history from 07's artifact card (`artifact_card`, `tag` and `sources`) and summary views. `ticker_brief.read_ticker_brief(db, symbol, quotes=...)` builds the brief from one quote and five statements: the ticker lookup, the artifact query with the loads of its summaries and platforms, and the signal query. `ticker_sentiment` is the one definition of a ticker's sentiment. `latest_signals` reads the latest filing signal of any number of tickers in one query, and `read_category_sentiment` returns the existing `CategorySentimentResponse`. Its bucket rule, `buckets_for`, asks the taxonomy first (`taxonomy_buckets_for`): a discussion post counts in public discussion, and an announcement stored under a taxonomy category counts in that category's one bucket, or in none. Keywords (`keyword_buckets_for`) place the rest. `counted_label` decides which stored labels count. The API image ships `parsing/__init__.py`, `parsing/categories` and `parsing/classification`, which use only the standard library, so each stored category's bucket is looked up at request time and a mapping change needs no backfill. `watchlist_summary.read_watchlist_summary` answers the watchlist page in five statements, whether one company is watched or many: the watchlist, its companies, their latest signals, and their newest records with those records' summaries.
+
+Quotes come through `app/services/quotes.py`. A `Quote` is a price and a previous close. `YahooQuotes` is the old client, with its transport and clock injectable and a cache of its own. `FixedQuotes` answers from a table in tests. `live_quotes` is the FastAPI dependency, and it keeps one `YahooQuotes` per process.
 
 Done in Phase 0
 - The `confidence or 1.0` weighting bug is fixed, and keywords match whole words only (#62).
 - The dead `category_sentiment.py` helpers and the `/overview` and `/brief-aside` routes are deleted (#64).
 
-Steps still to do
-1. Move brief building and the Yahoo client out of `ticker.py` into a ticker brief read-model behind a quote interface.
-2. Move `read_ticker_category_sentiment` into its own module. Fold in the headline "latest signal" (`ticker.py:330-338`), so ticker sentiment has one definition.
-3. The team agrees the mapping from taxonomy `primary_category` to bucket, because the numbers in the UI will change (see decisions). #56 records a proposed bucket on each category definition (see 09). Then replace the keyword matching. The API image cannot import the taxonomy today, so either store each artifact's bucket at analysis time or copy `parsing/classification` and `parsing/categories` into `Dockerfile.api`.
-4. Add a watchlist summary endpoint. Delete the page's private `fetchJson` and the dead `{tickers: [...]}` branch in search.
-5. Batch the deep-dive timeline's per-artifact summary query.
-6. Optional: drop `"tone": "green"` from the deep-dive payload after `DeepDiveTimeline.jsx` hard-codes `styles.green`.
+Done in #56
+1. The quote source. The brief gets it from `Depends(live_quotes)`, and a direct call of the route passes `quotes=`. The cache windows are unchanged: five minutes for a quote, one minute for a failure.
+2. The ticker sentiment read-model (the old step 2). Category sentiment and the latest signal moved out of the route files. `buckets_for` and `aggregate_bucket` are public and tested without a database. The discussion source types come from `PUBLIC_DISCUSSION_SOURCE_TYPES` and the labels from `SENTIMENT_LABELS`. Summaries are read through `artifact_summary.read` instead of the top-level metadata keys.
+3. The ticker brief read-model (the old step 1) and its `TickerBrief` schema. The brief drops `public_sentiment_pct` and the repeated "Current price" and "Day change" key numbers. `artifact_card.tag` is now the one tag of an artifact, shared by the card, the deep dive and the brief's "Latest type" and themes.
+4. The news feed and deep dive read through `ticker_records`, with `NewsFeedRecord` and `DeepDiveEvent` schemas. 07 had already batched the deep dive's summary query with `WITH_SUMMARY` (the old step 5).
+5. Deep-dive events drop `month`, `metrics` and `tone` (the old step 6). `DeepDiveNotebook.jsx` drops its fallback to `month` and its filter of `metrics`, neither of which ever showed anything. No frontend change was needed first.
+6. `GET /watchlists/me/summary`, and the watchlist page moved onto it (the old step 4, with 07's old step 4). The page asks for the investor, then the summary. `lib/api.js` gains the investor, summary and watchlist edit calls, and its `fetchJson` reports each message of a validation error. `lib/watchlists.js` gains `watchlistCard`. Each card's brief is 07's `brief` view of the company's newest record.
+7. The team decided to delete the two routes nothing calls once the page moved, in the same change: `GET /artifacts/ticker/{ticker_id}` with `crud.artifact.get_artifacts_by_ticker`, and `POST /sentiment/{ticker}` with `CategorySentimentRequest` and `RedditSummary`. The README lists `GET /sentiment/{ticker}` in place of the POST row.
+8. The search page's dead branch is gone. The market feed's company links already came from `tickers.json` (`fd5ad9c`).
+9. The team decided to look each bucket up at request time. `category_for_compatibility` finds a definition by the metadata category name it is stored under, and `artifact_type_for` reads the same table. The read-only `tools/compare_sentiment_buckets.py` prints the keyword rule and the taxonomy rule side by side for each catalogue ticker, with the keyword fallback's share and the artifacts that move. Like the view, it leaves out rows whose label is not a sentiment label, so each count it prints is the research summary's source count.
+10. The team decided the mapping on 2026-10-13, and the view now uses it: 09's table, with one bucket per classified announcement, executive transcripts in strategy and security notifications in no bucket. News and the announcements the taxonomy cannot place (no category, `UNKNOWN`, `news_article`, older rows whose category names no definition) keep keyword matching, and discussion posts stay in public discussion. An announcement the rules marked `needs_review` has a primary category but is stored as `UNKNOWN`, so it keeps keyword matching too.
+11. The team decided the latest filing signal on 2026-10-13: the sentiment of the ticker's most recently published ASX announcement with a valid label, ordered by `coalesce(published_at, created_at)`, then by the sentiment's time. It is one query for any number of tickers, and the brief and the watchlist cards both use it. Its analysis time is when that filing was first analysed, because analysing it again keeps its sentiment row's time.
+12. The team decided not to wait for the citation branches. The brief's sources and clarity, and the feed's cards, are unchanged.
 
 Tests
-- Replace `test_apis.py:34-270`, which patches internals, with Postgres read-model tests plus a fake quote service. Follow the style of `test_database.py:908-963`.
-- Replace the source-text assertions in `test_deployment_contracts.py:52-66` with a behaviour check: the API image cannot import `transformers`.
+- `test_quotes.py` (pure) gives `YahooQuotes` an httpx mock transport and a fake clock. It checks the request, the price, the previous close and its fallback, six answers that give no quote, both cache windows, `FixedQuotes` and the day change.
+- `test_ticker_read_models.py` grew from 07's `test_ticker_routes.py`. It reads every ticker read-model on Postgres. Six of its tests make torch and transformers impossible to import (`without_model_runtime`): the empty brief, the brief's latest signal, three category-sentiment reads and `latest_signals`. Neither library is installed outside the Docker image job, so elsewhere the fixture blocks nothing (see Left over). It covers:
+  - the brief: an empty brief, the quote and its one lookup, the latest signal, the story and clarity, the key numbers and themes, the `.AX` suffix, and its schema and 404 through TestClient;
+  - the records: the card fields, the summary text as the detail, the ten newest records newest first, the routes' schemas and 404, and the event's five keys;
+  - a statement count that reads one record and ten, each with its own platform, and expects the same number of queries (without the platform eager load the feed goes from 4 to 13);
+  - category sentiment: buckets, no analysis, a post linked only by a mention, the window, the `.AX` suffix, an unknown ticker, and a dividend announcement counting only in dividend, a security notification in none and news by keyword;
+  - the latest filing signal: an older filing analysed for the first time after a newer one, news, a discussion post and an invalid label never become it, and an undated filing counts by its collection date;
+  - the comparison tool, including that a row the view skips, such as one labelled "mixed", counts nowhere and is not listed as moved.
+  Pure cases cover each category's one bucket, the keyword fallback and the confidence weighting.
+- `test_watchlist_summary.py` runs on Postgres. It covers no watchlist, a company's signal and brief beside a bare one, an undated record, another investor's watchlist, the oldest watchlist, the added order, one company and three costing the same number of statements, the card and the brief showing the same signal, and the route's 401 and schema through TestClient.
+- `test_lambda_images.py` replaces the source-text check. The API image installs neither torch nor transformers, and the analysis image installs both, so the rule can fail. Every API image handler imports in a subprocess with both blocked. The parsing code the API image ships imports only the standard library, which CI's full install would otherwise hide. `test_category_taxonomy.py` finds each definition by its stored name.
+- Vitest covers the card's status, tone, brief and dates, the summary request's credentials, the validation message and a signed-out investor.
+- These replace the MagicMock brief, category sentiment and POST tests in `test_apis.py` (the old lines 34-90, 214-221 and 255-353), the Mastodon mention test and the two brief tests in `test_database.py`, `test_category_sentiment_buckets.py`, which imported private functions, and `test_deployment_contracts.py::test_api_image_does_not_own_finbert_inference`. No test patches a private ticker function now.
 
-Where the code is: `backend/app/api/routes/ticker.py:20-597`, `backend/app/api/routes/category_sentiment.py`, `backend/app/crud/announcement.py:25-162`, `backend/app/api/routes/artifact.py:18-23`, `backend/app/crud/artifact.py:30-31`, `frontend/src/app/watchlist/page.jsx:21-137,244`, `frontend/src/app/search/page.jsx:36-46`, `frontend/src/app/components/ticker/DeepDiveTimeline.jsx`.
+Behaviour changes
+- The category sentiment numbers change. A classified announcement counts in one bucket instead of every bucket its prose matched, or the strategy catch-all. Security notifications leave the topics. Strategy shrinks most, and a topic only the catch-all filled can become unavailable, which turns the status from available to partial. Each topic's label, source count, summary, evidence, confidence and dates change with it. Public discussion does not change, and news is placed as before.
+- An Appendix 2A notice ("Application for quotation of securities") is not classified as a security notification. Its "Total number of +securities on issue" line matches the security notification body rule `securities_on_issue`, which scores 0.2, below the 0.25 evidence threshold, so the rules call it unknown. If it also says "issue of ordinary securities", it scores 0.4 and needs review, with security notification as its primary category. Either way it is stored as `UNKNOWN`, so it keeps keyword matching and lands in strategy unless its summary names a keyword. It does not yet count in no bucket as the team decided (see Left over).
+- The latest signal on the brief and the watchlist cards is now the latest published filing's. Before, it was the sentiment of whichever artifact stored against the ticker was analysed for the first time last. News and public discussion never set it.
+- Watchlist cards show the latest signal again, for example "Positive Sentiment" in green, instead of "<sector> Monitoring". The page makes two API calls instead of three plus two per company, and downloads no raw text. Companies come in the order they were added, and the investor's oldest watchlist is the one shown. A failed add or remove now shows an error or reloads the list.
+- `/sentiment/{symbol}` accepts a `.AX` suffix, where it answered 404, and reports the stored symbol.
+- `GET /artifacts/ticker/{ticker_id}` answers 404 and `POST /sentiment/{ticker}` 405. A watchlist page from before this change shows no brief until the new frontend is published, so publish the frontend after the backend deploy, as the release order already does.
+- The brief no longer sends `public_sentiment_pct` or the "Current price" and "Day change" key numbers, and deep-dive events no longer send `month`, `metrics` or `tone`. The frontend dropped its filters and fallbacks for them.
+- Rolling the backend back past this change needs the frontend rolled back too, as `infra/README.md`'s rollback procedure already does. Against the old backend the new watchlist page fails outright: the old router has no `/watchlists/me/summary`, so it answers 404 and every investor sees "Your watchlist is unavailable right now". "Filing details" also shows the price and day change again.
+- The brief, news feed, deep dive and watchlist responses are checked against response schemas. Their JSON is otherwise unchanged.
+- The category summary paragraph and the keyword search read summaries through `artifact_summary.read`. For older rows that kept only the joined text, they now see the lines recovered from it.
+- The API image also ships `parsing/__init__.py`, `parsing/categories` and `parsing/classification`.
+- The quote cache belongs to the `YahooQuotes` instance. There is still one per process, with the same windows.
+
+Left over
+- Not checked locally, because the local database has no artifacts and no Lambda runs here:
+  - Run `python -m tools.compare_sentiment_buckets` against staging with read-only credentials, and share each ticker's before and after with the team.
+  - After deploying, check that ApiFunction and the Scheduler, Notification and PublicDiscussionScheduler functions, which share the image, start with no `ImportError`, that `GET /api/sentiment/BHP` answers, and that `GET /api/tickers/symbol/BHP/brief` still shows a live price from Lambda's network.
+  - After the backend deploy and the frontend publish, check that the staging watchlist page makes two API calls and shows signals.
+  - The "Backend Docker image build and test suite" job is the only run with torch installed, and with Python 3.11, the API image's version. It is the only place the blocked-import tests hide a real library.
+- Appendix 2A notices count by keyword. To leave them out of the topics as decided, `security_notification` needs the Appendix 2A form and its title phrase, with fixtures, an evaluator run and a classifier version bump, so that `tools.reclassify_artifacts` re-runs stored announcements. That is a rules change under the classification plan.
+- The brief's story, sources, clarity and `last_updated`, and the aside's "Latest filing" and "Latest type" key numbers, describe the ticker's newest record of any source type, which can be a Marketaux story. The latest filing signal beside them is always the newest ASX announcement's. So one brief can show a news story's date and type as its "Latest filing" next to a filing's signal. This was so before 10, and decision 3 makes it easier to see. Taking only the key numbers from the newest filing among the brief's 20 records would make them disagree with the story instead, and those records may hold no filing. The team can decide whether the brief tells the latest filing, which costs one more query, or whether the page calls these the latest record. Until then the read-model's docstring and the contract doc say what the key numbers describe.
+- Both readers that needed 07's top-level summary keys have moved: category sentiment reads through `artifact_summary.read`, and the watchlist reads the `brief` view through its summary. Only `/artifacts` and `/artifact-summaries` still return the stores raw, so the team can decide now whether to collapse them.
+- `components/sources/CitationLinks.jsx` and `components/ui/MetricCard.jsx` are still imported nowhere. Whether to delete them waits on how the chosen citation branch shows sources.
+- `AppFrame.jsx` and the sign-in and sign-up pages still read `/auth/me` and validation errors their own way. `lib/api.js` now has `fetchCurrentInvestor` and the error rule they could use.
+- `aggregate_bucket` still reports "Multiple stored models" for a topic whose rows name no model, as it did before.
+
+Where the code is: `backend/app/read_models/` (`ticker_records.py`, `ticker_brief.py`, `ticker_sentiment.py`, `watchlist_summary.py`), `backend/app/services/quotes.py`, `backend/app/services/artifact_card.py` (`tag`), `backend/app/schemas/ticker_brief.py`, `backend/app/schemas/ticker_records.py`, `backend/app/schemas/watchlist_summary.py`, `backend/app/schemas/category_sentiment.py`, `backend/app/api/routes/ticker.py`, `backend/app/api/routes/category_sentiment.py`, `backend/app/api/routes/watchlist.py`, `backend/parsing/classification/taxonomy.py`, `backend/Dockerfile.api`, `backend/tools/compare_sentiment_buckets.py`, `frontend/src/app/lib/api.js`, `frontend/src/app/lib/watchlists.js`, `frontend/src/app/watchlist/page.jsx`, `frontend/src/app/components/company/ResearchSummary.jsx`, `frontend/src/app/components/company/DeepDiveNotebook.jsx`, `docs/ticker-rebuild-contract.md`, `backend/tests/test_quotes.py`, `backend/tests/test_ticker_read_models.py`, `backend/tests/test_watchlist_summary.py`, `backend/tests/test_lambda_images.py`.
 
 ## Alerts track
 
@@ -688,7 +755,7 @@ Each caller decides what an outcome means. Notify records `Accepted` as sent and
 Done in #56
 1. The port, its outcomes, `check_message`, `SendPacer`, the dry-run and recording senders, and `BrevoEmailSender`.
 2. Notify sends through `configured_sender(paced=True)` and maps the outcome in `_send_rendered`. `_send_alert`, its lock and its pacing globals are gone. 12 (#56) then moved the mapping into alert delivery's `_Delivery._send`, and notify now asks for the paced sender once per invocation.
-3. `PUT /notifications/preferences` and `POST /notifications/preferences/resend-verification` get the sender from `Depends(current_sender)`. `_send_verification_email` maps the outcome through one table, `_UNSENT_VERIFICATION`, and logs only the outcome type and code, never the address. The callers' undo, which marks verification failed, is unchanged.
+3. `PUT /notifications/preferences` and `POST /notifications/preferences/resend-verification` get the sender from `Depends(current_sender)`. `_send_verification_email` maps the outcome through one table, `_UNSENT_VERIFICATION`, and logs only the outcome type and code, never the address. The callers' undo, which marks verification failed, is unchanged. 14 (#56) then moved the send into the alert subscription module, and the route turns its refusals into answers through `_refusals_answered`.
 4. `brevo_alerts.send_email` is deleted, along with `BrevoApiError`, `BrevoAlertConfigurationError`, `_safe_header`, `_safe_url`, `_mailbox`, `_api_base_url` and `_dry_run_message_id`. `DRY_RUN_SENDER` moved to `email_sender.py`.
 5. Review fixes:
    - The Brevo base URL now goes through the same `web_link` check as the unsubscribe link, and the adapter checks its settings in the same order the deleted `send_email` did. A malformed base URL therefore stores `invalid_notification_configuration`, as it did before.
@@ -700,14 +767,14 @@ Behaviour changes
 - A Brevo 401, 402 or 403 on a verification email answers 500 "Email verification is not configured" instead of 502.
 - An unexpected error while the Brevo adapter makes its request now answers 502 on the preferences routes, with verification marked failed, instead of an unhandled 500. Notify still records it as failed with `brevo_send_failed` and retries.
 - Notify's ledger statuses, error codes and retry decisions do not change.
-- Live alert sends stay at least one second apart within one Lambda container (see [Decisions still needed](#decisions-still-needed)). A dry run is never paced. Containers do not share the pacer, and the template no longer sets reserved concurrency (`test_deployment_contracts.py:163`), so this is not a global rate limit.
+- Live alert sends stay at least one second apart within one Lambda container (see [Decisions still needed](#decisions-still-needed)). A dry run is never paced. Containers do not share the pacer, and the template no longer sets reserved concurrency (`test_deployment_contracts.py:145`), so this is not a global rate limit.
 
 Tests
 - `test_email_sender.py` (pure) covers the recording sender and `check_message`, including links `urlsplit` rejects and HTTPS only when required. It also covers stable dry-run ids, `SendPacer`, and `configured_sender` following the dry-run switch, with `paced=True` sharing `ALERT_PACER`.
 - `test_brevo_alerts.py` is now the Brevo adapter test. It gives the adapter an `httpx.MockTransport` client, so nothing is patched. It covers the payload and the `List-Unsubscribe` header, each refusal class without Brevo's message text, a transport error, and a success without a message id. It also covers the settings and email checks made before any request, including empty, schemeless, angle-bracketed, multi-line and unparseable base URLs, and pacing.
 - `test_alert_delivery.py` drives `notify.handler` on Postgres, with savepoint sessions and the recording fake. It checks each outcome against the ledger row, the subscription mirror and `batchItemFailures`. It also covers a retried record sending exactly one alert, a dry run, a malformed Brevo base URL with the real sender, and notify asking for the paced sender.
 - `test_alert_subscriptions.py` calls the routes through `TestClient(main.app)` on Postgres. Enabling alerts emails a link that verifies the address. An unsent email answers 422, 502 or 500 by outcome, with verification failed. A refused resend answers 422, and a malformed Brevo base URL with the real sender answers 500.
-- `test_notify_database.py` uses the recording fake instead of patching `brevo_alerts.send_email`. `test_notify.py::test_runtime_configuration_load_precedes_configured_imports` now anchors on the `email_sender` import (17 deletes it later).
+- `test_notify_database.py` uses the recording fake instead of patching `brevo_alerts.send_email`. `test_notify.py::test_runtime_configuration_load_precedes_configured_imports` now anchors on the `email_sender` import (17 deleted it in #56).
 - Deleted:
   - the eight `send_email` tests in `test_brevo_alerts.py` and their transport fixtures;
   - in `test_notify.py`, `test_brevo_success_marks_the_delivery_sent`, `test_terminal_brevo_rejection_is_recorded_and_acknowledged`, `test_retryable_brevo_throttle_is_recorded_before_batch_retry` and `test_live_send_limiter_spaces_fanout_calls`, with the `_brevo_error` helper;
@@ -719,7 +786,7 @@ Left over
 - A global send limit needs Brevo's real send-rate limit for the account first.
 - Not checked locally: one real verification email and one real alert through Brevo on staging. That needs the Brevo key in SSM, a verified `ALERT_SENDER_EMAIL`, `NotificationsEnabled=true` and a deploy. Check that both emails link to the custom domain and that verification and unsubscribe work from a real inbox.
 
-Where the code is: `backend/app/services/email_sender.py`, `backend/app/services/brevo_alerts.py:94-171` (`BrevoEmailSender`), `backend/app/services/alert_delivery.py:483-495` (`_Delivery._send`, which was notify's `_send_rendered`), `backend/lambdas/notify.py:120` (the paced sender), `backend/app/api/routes/notification_preferences.py:65-81` (`_UNSENT_VERIFICATION`) and `:172-206` (`_send_verification_email`).
+Where the code is: `backend/app/services/email_sender.py`, `backend/app/services/brevo_alerts.py:94-171` (`BrevoEmailSender`), `backend/app/services/alert_delivery.py:475-487` (`_Delivery._send`, which was notify's `_send_rendered`), `backend/lambdas/notify.py:112` (the paced sender), `backend/app/api/routes/notification_preferences.py:90-103` (`_UNSENT_VERIFICATION`) and `backend/app/services/alert_subscriptions.py:544-579` (`_send_verification` and `_verification_outcome`, which replaced the route's `_send_verification_email` in 14).
 
 ### 12 Alert delivery
 
@@ -740,13 +807,13 @@ Behind it, `app/crud/alert_delivery.py` is the delivery ledger. `claim(kind)` co
 
 `app/alert_vocabulary.py` names `DeliveryKind`, `DeliveryStatus`, `VerificationStatus`, `DELIVERY_PROBLEM_STATUSES` and `DEFAULT_ALERT_MIN_CONFIDENCE`. `lambdas/notify.py` is the SQS adapter: it parses each record, asks for the paced sender once per invocation, logs budget suppressions from the results and keeps the `batchItemFailures` contract.
 
-Done in Phase 0: `app/alert_vocabulary.py` holds the alert labels and the default rule's labels, and neutral alerts work end to end. `test_notify_database.py` now runs for negative and neutral (#60). The default minimum confidence of 0.75 stayed in the schema and the rule model until #56. `Settings` still repeats it (17).
+Done in Phase 0: `app/alert_vocabulary.py` holds the alert labels and the default rule's labels, and neutral alerts work end to end. `test_notify_database.py` now runs for negative and neutral (#60). The default minimum confidence of 0.75 stayed in the schema and the rule model until #56. 17 (#56) takes the setting's default from the constant.
 
 Done in #56
 1. Handler scenarios on Postgres, written against the old code. `test_alert_delivery.py` drives `notify.handler` with savepoint sessions and the recording sender. `test_notify_database.py` checks with real commits that the claim is committed before the email goes out.
 2. The private-seam tests in `test_notify.py` and their copies in `test_alerts.py` are deleted. This had to come before the move, because they patch the functions it removes.
 3. The alert delivery module, with one decision for both kinds. `_load_context` moved whole as `_load_alert`, including 07's `alert_text` read. notify keeps only the SQS contract.
-4. The delivery and verification statuses and the default threshold are named once in the vocabulary. Both CHECK constraints are built from the enums and render exactly as migration `86d4k9m2p` created them, so no migration is needed. The response schema, the crud verification statuses and the schema and rule model defaults use the vocabulary. `Settings.ALERT_DEFAULT_MIN_CONFIDENCE` stays for 17.
+4. The delivery and verification statuses and the default threshold are named once in the vocabulary. Both CHECK constraints are built from the enums and render exactly as migration `86d4k9m2p` created them, so no migration is needed. The response schema, the crud verification statuses and the schema and rule model defaults use the vocabulary. `Settings.ALERT_DEFAULT_MIN_CONFIDENCE` stays, and 17 declares it with the constant as its default.
 5. The delivery ledger, with one claim for both kinds and one `record` for every outcome. The five `mark_*` functions, `claim_rollup`, `get_for_artifact`, `get_rollup`, `get_delivery`, the four counters and `alert_subscription.record_delivery_outcome` are deleted.
 6. The settings page names its `DELIVERY_PROBLEM_STATUSES`, and tests check it and the `VERIFICATION_COPY` keys against the vocabulary. The page's copy does not change.
 7. Review fixes:
@@ -782,8 +849,8 @@ Behaviour changes
 
 Left over
 - The settings page still shows raw status and code text, such as "The email service reported preferences_changed" and "Last delivery: suppressed_cap". Plain-language copy is a separate UI change.
-- `alert_delivery._links` builds the news and unsubscribe links until 14 moves link building into the alert subscription module.
-- `Settings.ALERT_DEFAULT_MIN_CONFIDENCE`, which the preferences route uses for an investor with no rule, repeats `DEFAULT_ALERT_MIN_CONFIDENCE`. 17 decides whether it stays.
+- `alert_delivery._links` built the news and unsubscribe links. Done by 14 in #56: alert delivery asks `alert_subscriptions.alert_links` for an alert's links, and `_links` is gone.
+- `Settings.ALERT_DEFAULT_MIN_CONFIDENCE` repeated `DEFAULT_ALERT_MIN_CONFIDENCE`. 17 kept it in #56, because `alert_subscriptions._preferences` reads it for an investor with no rule, and takes its default from the constant (see 14's Left over).
 - Live sends are still spaced one second apart per Lambda container (13). Brevo's real account limit is unknown.
 - Check that no manually created dashboard or alarm parses the old `rollup` field of the `suppressed` log line, or the `investor_skipped` event notify no longer logs.
 - `last_delivery_status` has no CHECK constraint. On staging, `SELECT last_delivery_status, count(*) FROM alert_subscriptions GROUP BY 1` should show only `DeliveryStatus` values.
@@ -793,30 +860,104 @@ Where the code is: `backend/app/services/alert_delivery.py`, `backend/app/crud/a
 
 ### 14 Alert subscription lifecycle
 
-Worth exploring, size M. Needs 13. Test approach: real Postgres with a fake email sender.
+Worth exploring, size M. Done in #56. With 12 and 13 done too, the alerts track is finished. Test approach: real Postgres with a fake email sender, through the routes with `TestClient`.
 
-What is wrong
-- The preferences route holds logic that belongs in a module: the verification state machine, the resend rate limit, token creation, resolving an unsubscribe, and undoing changes when sending fails.
-- In crud, `update_verification_state` takes 8 parameters, including three compare-and-set guards, and its five callers each pass a different mix.
-- Link building appears in both notify and the route. The SHA-256 regex appears three times. Email addresses are normalised two different ways.
+What was wrong
+- The preferences route (`notification_preferences.py:84-557`) held logic that belongs in a module. It decided when a verification email was due, kept the one-minute resend window and created the unsubscribe secret. It recorded a request before its email, undid it when the email was not sent, checked verification links and resolved unsubscribe tokens. It ended its transaction with `db.rollback()` before each send.
+- In crud, `update_verification_state` took 8 parameters, three of them compare-and-set guards. All five callers were in the route, and each passed a different mix. It also let a verified address go back to unverified or failed, which no code did.
+- The SHA-256 hash pattern was defined three times: in crud and in both token modules. The HMAC key and the base64url signer were written twice, and the route hashed raw tokens in two places. Links were built in two places: alert delivery's `_links` (12 moved it there from notify) and the route's `_send_verification_email`.
+- Email addresses were compared in two forms: the route's `strip().lower()` and crud's `email_validator` form (ASCII domain, lower case). The two agree for ASCII addresses. Sign-up keeps an internationalised domain in Unicode, so for such an address every save looked like an address change. It sent the pending verification email again inside the one-minute window. An address `email_validator` refuses, such as one with a non-ASCII name before the @, made the save raise an unhandled `ValueError`.
+- `test_notification_preferences.py` called the route functions with `MagicMock` sessions. It patched crud functions and the private `_send_verification_email` and `_load_preferences`, checked call order and read `main.py` as text. Nothing ran the lifecycle on a real database.
 
-What to build
+What was built
 
-One alert subscription module with five operations: save, request verification, confirm, unsubscribe, and build links. The route only translates HTTP, and notify asks the module for links.
+The alert subscription module, `app/services/alert_subscriptions.py`, owns an investor's opt-in to alerts. `read` gives the investor's `AlertPreferences`. Before anything is saved, alerts are off with the default rule. `save` stores the rule. When alerts are turned on and a verification is due, it records a verification request and emails the link. A new or changed address is due at once, and an unverified one at most once a minute. `save` returns `Saved`, which carries the raw unsubscribe token on the first enable only. `request_verification` sends a new link at most once a minute. `confirm` accepts only the newest request's link, within `ALERT_VERIFICATION_TOKEN_TTL_HOURS`, and not once that request is marked failed. Opening the link again once the address is verified changes nothing. `unsubscribe` takes a raw or signed token and never says whether it matched.
 
-Steps
-1. Write an end-to-end scenario on Postgres with a fake sender: enable alerts, verify, unsubscribe through the alert link, and end up disabled.
-2. Move the state machine, the rate limit and the undo logic from the route into the module.
-3. Merge the token key derivation and the hash regexes. Use one link builder, and prefer `SiteUrl`.
-4. Normalise email addresses one way, with `email_validator`.
+Each operation commits what it writes. One that sends an email commits its request and ends its transaction before it calls the sender. So no transaction or row lock is held while the email service answers, and another request already sees the new request. An email that is not sent marks its request failed. Refusals are `AlertSubscriptionError` kinds:
+- `AlertsSwitchedOff`;
+- `AlertsNotEnabled`;
+- `VerificationRequestedRecently`, with the seconds to wait;
+- `PreferencesChangedConcurrently`;
+- `VerificationEmailNotSent`, with the sender's outcome;
+- `InvalidVerificationLink`;
+- `SupersededVerificationLink`;
+- `AddressNotUsable`.
 
-Where the code is: `backend/app/api/routes/notification_preferences.py:59-536`, `backend/app/crud/alert_subscription.py:119-373`, `backend/app/services/verification_tokens.py`, `backend/app/services/unsubscribe_tokens.py`, `backend/lambdas/notify.py:493-512`.
+Each route is one call. `_refusals_answered` turns a refusal into its HTTP answer through `_REFUSALS` and 13's `_UNSENT_VERIFICATION`.
+
+`alert_links` gives alert delivery the news and unsubscribe links of an alert email. The private `_frontend_url` builds every link to the website from `FRONTEND_BASE_URL`, the verification link too. No `SiteUrl` setting is needed, because deploy already sets `FrontendBaseUrl` to the custom domain.
+
+`app/services/alert_tokens.py` holds one hash pattern (`is_token_hash`), one signing key and one signer. It also holds `new_unsubscribe_secret`, `hash_token`, and the v1 unsubscribe and v1c verification tokens. Both formats are unchanged, so links in emails already sent keep working.
+
+In crud, `reserve_verification`, `fail_verification` and `confirm_verification` replace `update_verification_state`. They share one private compare-and-set on the address, the status and the request time. `reserve_verification` writes only while the row still holds the `VerificationState` the caller read, and it refuses a verified address, so a verified address cannot be reserved again. `fail_verification` and `confirm_verification` write only while the request they finish is still pending, at its address and request time. crud's `normalise_email` gives the one form an alert address is stored and compared in. `email_sender.mailbox` applies the same `email_validator` rules but keeps the case, because it checks an address for sending.
+
+Done in Phase 0
+- #59 sets `FrontendBaseUrl` to `https://$SITE_DOMAIN_NAME` when that variable is set, so alert and verification links already used the custom domain. The old step 3's "prefer `SiteUrl`" was therefore done. 16's release module works the value out the same way: `https://` and `SiteDomainName`, or else the stack's `FrontendUrl` output.
+
+Done in #56
+1. Lifecycle scenarios run through `TestClient(main.app)` on Postgres with the recording sender, against the code as 12 left it. `test_alert_tokens.py` pins the exact unsubscribe and verification token strings.
+2. `test_notification_preferences.py` is deleted, with `test_alerts.py`'s unsubscribe test and `test_alert_crud.py`'s SQL-text unsubscribe test. The scenarios cover each behaviour they checked.
+3. The alert subscription module holds the state machine, the resend window and the undo. The route maps refusals through one handler. crud's three verification changes replace `update_verification_state`, and `backend/app/crud/README.md` now describes `alert_subscription.py`.
+4. `alert_tokens.py` replaces `verification_tokens.py` and `unsubscribe_tokens.py`, and crud uses its `is_token_hash` instead of `SHA256_HEX`. `alert_links` replaces alert delivery's `_links`. `README.md` now says `FRONTEND_BASE_URL` is the base of every link in alert and verification emails.
+5. crud's `normalise_email` is public. The module puts the account address in that form before every comparison and the upsert. When `email_validator` refuses the address, it raises `AddressNotUsable`, which answers 422. Stored addresses already have this form, so nothing is migrated.
+6. Review fixes:
+   - Two paths had no scenario, so removing either check left every test green. Scenarios now cover both: a link for a request marked failed answers 400, and a resend whose subscription is deleted while its email goes out answers 409. Each fails when its check is removed.
+   - The docstrings of `request_verification`, `confirm` and `InvalidVerificationLink` now list those refusals. The link rule test is named for both kinds of email it checks, and `_frontend_url`'s docstring names both.
+   - The crud README now says what each verification change expects to find: `reserve_verification` the state the caller read, the other two the pending request they finish.
+
+Tests
+- `test_alert_subscriptions.py` runs the lifecycle through the app on Postgres. An investor enables alerts, verifies with the emailed link and gets an alert from `notify.handler`. They unsubscribe through the alert's link, and the next artifact sends nothing and leaves no ledger row. Other scenarios cover:
+  - the defaults;
+  - the deployment switch: 503 for enabling or resending, while a save that keeps alerts off still works;
+  - the one-time unsubscribe token and its stored hash;
+  - one email for two saves within a minute;
+  - a resend within a minute, which answers 429 with a Retry-After of 1 to 60 seconds;
+  - a resend after the window, after which the old link answers 400;
+  - a link past its lifetime, and a link for a request marked failed, which both answer 400;
+  - a link sent to an address that was then replaced;
+  - every unsubscribe token form, which gets the same answer and disables only its own subscription;
+  - which routes need a session (401) and which do not;
+  - an internationalised address saved twice, which gets one email;
+  - an unusable address, which answers 422 and stores nothing;
+  - a resend whose subscription is deleted while its email goes out, which answers 409;
+  - every link an alert or verification email carries, which opens a page under `frontend/src/app` that the CloudFront route function serves.
+- One test there commits for real. While the email goes out, it checks that a save or a resend has already committed its request and holds no open transaction (it reads `pg_stat_activity`). 13's scenarios for an unsent email, a malformed Brevo setting and a refused resend stay.
+- `test_alert_tokens.py` pins both token strings. It holds the round-trip, tamper, expiry and shape tests from `test_verification_tokens.py` and `test_unsubscribe_tokens.py`, which are deleted, and checks that a new unsubscribe secret is stored only as its hash.
+- `test_alert_crud.py` runs the new verification changes on Postgres:
+  - a link for an old address cannot verify its replacement;
+  - a stale request cannot unverify a verified address;
+  - a failed request keeps its time, and only the newest request can fail;
+  - changing the address resets verification.
+  Pure tests check that `normalise_email` is idempotent, only trims and lower-cases an ASCII address, gives an internationalised domain in ASCII and refuses a non-ASCII name before the @. They also check that `reserve_verification` refuses a verified state and a request time without a timezone.
+- Deleted:
+  - the 11 remaining tests in `test_notification_preferences.py` (its schema test moved to `test_alert_subscriptions.py`);
+  - `test_alerts.py::test_unsubscribe_valid_and_invalid_tokens_share_the_public_response`;
+  - `test_alert_crud.py::test_disable_subscription_is_guarded_by_id_and_token_hash`, with its session double;
+  - `test_alert_crud.py::test_current_state_change_can_downgrade_a_verified_subscription`, because no operation does that any more;
+  - the `update_verification_state` cases of `test_alert_crud_validation_needs_no_database`.
+
+Behaviour changes
+- An account address with an internationalised domain is compared in its stored ASCII form. Saving preferences within a minute no longer sends the pending verification email again.
+- `PUT /notifications/preferences` with an account address `email_validator` refuses, such as one with a non-ASCII name before the @, answers 422 "The email address on your account cannot receive alerts." and stores nothing. It used to fail with an unhandled 500.
+- A save sends a verification email only after its request was recorded. Before, a lost reservation sent an email whose link could never work. The save's row lock made that case unreachable, so no answer changes in practice.
+- If the subscription disappears while a resend's email goes out, the resend answers 409 "Notification preferences changed concurrently", as a save already did, instead of an unhandled error.
+- Stored data, token formats and link paths do not change. There is no migration.
+
+Left over
+- Account addresses are still stored as sign-up gives them (`crud/investor.py`, `core/cognito.py`). The module normalises them where they enter alerts, which was the scope here.
+- The default threshold that GET shows still comes from `settings.ALERT_DEFAULT_MIN_CONFIDENCE`, now read in `alert_subscriptions._preferences`. The schema and model defaults use `DEFAULT_ALERT_MIN_CONFIDENCE`. 17 kept the setting and takes its default from that constant, so the two differ only when a deployment sets it. Reading the constant in `_preferences` instead would let the setting, its `.env.example` line, its README row and its configuration-test lines go.
+- As decided, the raw-token form of `POST /notifications/unsubscribe` and the one-time `unsubscribe_token` in the PUT response stay. No client reads the token.
+- The settings page still shows raw last-delivery codes such as `preferences_changed` (see 12).
+- `save` raises `PreferencesChangedConcurrently` if its reservation loses. The upsert's row lock makes that unreachable today. The check keeps the rule that an email goes out only for a recorded request.
+- Not checked locally: one real verification email and one real alert through Brevo on staging, opened from a real inbox, with both emails linking to the custom domain (shared with 13's Left over). Optionally, run `SELECT count(*) FROM alert_subscriptions s JOIN investors i ON i.id = s.investor_id WHERE s.email <> lower(trim(i.email))` on staging. It counts the subscriptions whose address has an internationalised domain or no longer matches the account.
+
+Where the code is: `backend/app/services/alert_subscriptions.py`, `backend/app/services/alert_tokens.py`, `backend/app/crud/alert_subscription.py:22-39` (`normalise_email`) and `:175-318` (`VerificationState` and the three verification changes), `backend/app/api/routes/notification_preferences.py`, `backend/app/services/alert_delivery.py:441` (`_compose` asks `alert_links`), `backend/tests/test_alert_subscriptions.py`, `backend/tests/test_alert_tokens.py`, `backend/tests/test_alert_crud.py`.
 
 ## Deploy and configuration track
 
 ### 16 Release parameters
 
-Strong, size M. Done in #56. Unblocks 18, and 17's secrets registry builds on its `gated_secrets()`. Test approach: a service we own. Every AWS read goes through an `Aws` port that tests replace with a fake account that records each call, and `apply --dry-run` prints the deploy without calling AWS.
+Strong, size M. Done in #56. Unblocks 18. Test approach: a service we own. Every AWS read goes through an `Aws` port that tests replace with a fake account that records each call, and `apply --dry-run` prints the deploy without calling AWS.
 
 What was wrong
 - `deploy-staging.yml` wrote each switch and limit 7 to 8 times: the dispatch input (whose default copied the template default), the AUTO_* and MANUAL_* mappings, the dispatch and push assignments, the validation, the GITHUB_ENV export and the `sam deploy` override. The push path's fallbacks copied the template defaults again.
@@ -895,30 +1036,86 @@ Where the code is: `backend/tools/release.py`, `backend/tools/template_model.py`
 
 ### 17 Runtime configuration
 
-Worth exploring, size M to L. Needs 15. Test approach: a service we own (SSM behind an interface).
+Worth exploring, size M to L. Done in #56. Needs 15. Test approach: a service we own. SSM sits behind a `ParameterStore` interface with an SSM adapter and an in-memory one. Configuration tests build settings from plain dicts, and template rules check `infra/template.yaml` against the declarations.
 
-What is wrong
-- `Settings` is built when `app.core.config` is first imported, so SSM secrets must be loaded before anything imports it. Only comments state that rule, and `test_notify.py:846-856` enforces it by comparing where lines sit in the source file.
-- The Lambdas skip `Settings` and read the environment again with their own defaults. (The source-URL override that applied to manual scrapes but not scheduled ones is gone in #56.)
+What was wrong
+- `Settings` was built when `app.core.config` was first imported, so SSM secrets had to be loaded before anything imported it. Only comments stated that rule, in `lambdas/common.py`, `lambda_api.py`, `lambdas/notify.py`, `lambdas/schedule.py`, `lambdas/public_discussion_schedule.py`, `lambdas/pipeline_stage.py` and `lambdas/artifact_analysis.py`. One test compared where lines sat in `notify.py`, and a subprocess test checked that importing the analysis handler loaded no configuration.
+- `load_runtime_configuration` hard-coded six SSM-backed values and wrote them into `os.environ`, where discovery's Chromium inherited the database URL. Nothing tied the six names to the template.
+- Code outside `Settings`, mostly in the Lambdas, read 17 more variables itself, and each reader handled bad input its own way. 15 had their own `os.getenv` defaults. `DOWNLOAD_QUEUE_URL` and `RAW_DOCUMENT_BUCKET` had none, and their `os.environ[...]` reads raised `KeyError` when they were missing. The two schedule limits fell back to 10 on a value that was not a whole number and were clamped to 1 to 25. The discovery limits were raised to 1 but failed on a value that was not a whole number. The byte, page and OCR limits failed only when used. The search query was cut to 100 characters, and unknown tickers and sources were dropped. (The source-URL override that applied to manual scrapes but not scheduled ones is gone in #56.)
+- Defaults drifted. `MAX_PDF_PAGES` was 100 in code and in `.env.example`, while the template has deployed 500 since `01e7b8c`, the same drift #62 fixed for the size limits. `extract_pdf` kept a third copy of the OCR limits, with 20 pages. #62 deleted `NOTIFICATION_QUEUE_URL` from `Settings` as unread, but the analysis worker read it with `os.getenv`. `NOTIFICATIONS_ENABLED` and `DISCOVERY_QUEUE_URL` were each read both through `Settings` and from `os.environ`.
+- AnalysisFunction and PublicDiscussionSchedulerFunction could read every parameter under `${ParameterPathPrefix}` but named only 1 and 4 of them. The analysis worker, which reads untrusted PDFs, could read the Brevo key, the Marketaux token and the Reddit credentials.
 
-What to build
+What was built
 
-One configuration module that is built the first time it is used. It declares every setting once, with its limits, and resolves `*_PARAMETER` secrets itself. A secrets registry lists each secret, and the template model (15) checks that registry against the environment variables and IAM grants.
+`backend/app/core/config.py` is the runtime configuration. Each setting is a field of the `Settings` dataclass, named after its environment variable and declared once with its default and limits (`text`, `flag`, `integer`, `fraction` and `names`). `settings` is a proxy that builds them from the environment the first time any setting is read, and checks the whole set then. A malformed value, or one outside its limits, raises `ConfigurationError`. It is not a `ValueError`, it lists every bad variable with the limit it broke, and it never shows a value; neither does the repr of `Settings` or `settings`. Reading, setting and deleting an attribute of `settings` act on the built settings, so `patch.object`, `patch.multiple` and `monkeypatch.setattr` keep working: the 26 modules that imported `settings` keep their imports, and the 91 test calls that patched it (63 `monkeypatch.setattr`, 23 `patch.object` and 5 `patch.multiple`, in 21 files) did not change. `Settings.from_environment(environ, parameters=...)` builds settings from any mapping and never writes to `os.environ`. `Settings.required(name)` reads a queue URL or a bucket that must be set.
+
+`SECRETS` registers the six secrets: each one's setting, its SSM parameter and `may_be_missing`. A parameter that does not exist reads as empty for a secret that may be missing, which switches its feature off, and is a `ConfigurationError` for the database URL and the Marketaux token. That is separate from gating: the Marketaux token is a gated secret (read only while `MarketauxEnabled` is on) but must exist whenever its variable names it, and the Reddit credentials may be missing although no switch gates them. When `<SETTING>_PARAMETER` names a parameter and `<SETTING>` is not set, the build reads the value through the `ParameterStore` interface, in whatever process builds the settings. `SsmParameterStore` is the AWS adapter and `InMemoryParameterStore` the test one. The queue-wiring CI job imports the configuration, so `app/core/config.py` and what it loads (`app/__init__.py`, `app/core/__init__.py`, `app/alert_vocabulary.py` and `app/sources.py`) need only the standard library, and the job's path filters list all five. boto3 is imported at the first SSM read.
+
+`declared_settings()` exposes each declaration. The template rules in `test_queue_wiring.py` check every function's environment against the declarations and `SECRETS`. Every variable must be declared or name a registered secret, each `*_PARAMETER` must name its secret's parameter, and each secret must be deployed. A function may read only the secrets it names. A literal value must equal the declared default unless the difference is deliberate, and every value a stack parameter allows must be one its setting accepts. That rule tries the parameter's default, allowed values and bounds, and each value of a fixed sample (`PARAMETER_PROBES`: every whole number and half from 0 to 100, a negative number, empty text and a word) that `Parameter.problems` says the stack accepts.
 
 Done in Phase 0
 - The 15 unread `Settings` fields and the stale `GROQ_API_KEY_PARAMETER` in `.env.example` are deleted (#65, #62). So is `ALERT_ONE_CLICK_UNSUBSCRIBE_ENABLED` (#62).
-- The document size limits now come from `lambdas/download_validation.py`, and `MAX_ANALYSIS_CHARS` from `sentiment.sentiment_input` (#62).
+- #62 made `lambdas/download_validation.py` the home of the document size limits, matching the template, and made `sentiment.sentiment_input` cap the FinBERT input at `MAX_ANALYSIS_CHARS`. Superseded by 17: both size limits are settings, and `document_size_limit` and `docx_uncompressed_limit` are deleted (step 8).
 - `BEDROCK_MAX_OUTPUT_TOKENS` is gone. Each summary kind sets its own output budget (06, #56).
-- Side effect: a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashes the API at import. The Lambdas that read them still fail on bad input.
+- Side effect of deleting the fields: a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value no longer crashed the API at import. Superseded by 17: every setting is checked at the first build, and the API builds at import (`main.py` reads `CORS_ORIGINS`), so a malformed `MAX_*` or `DISCOVERY_LOOKBACK_DAYS` value in the API's environment stops it at import again. In AWS the API's environment holds none of them (see Behaviour changes).
 
-Steps still to do
-1. Move the Lambda-only `os.getenv` settings into `Settings`, one at a time.
-2. Add a secrets registry that `load_runtime_configuration` loops over, plus a template-model test that ties it to the environment variables and IAM grants.
-3. Make `settings` lazy behind a module-level proxy, and delete the source-position test.
+Done in #56
+1. `Settings` is built at the first read, behind the `settings` proxy. The 47 existing fields keep their parsing and limits, the `MARKETAUX_API_KEY` alias and the Cognito checks. `ALERT_DEFAULT_MIN_CONFIDENCE` stays, because `alert_subscriptions._preferences` (14) reads it for an investor with no rule, and it now takes its default from `DEFAULT_ALERT_MIN_CONFIDENCE`. The unused re-export in `app/core/__init__.py` is deleted.
+2. The build reads the secrets itself, and `load_runtime_configuration` only built the settings until the next step deleted it. Template rules tie every `*_PARAMETER` variable to `SECRETS`. The queue-wiring CI job now runs when the configuration or a module it imports changes. A test imports the configuration with no site-packages and checks the job's path filters against the modules that import loads.
+3. The load-before-import rule is gone: `load_runtime_configuration`, its calls, the rule's comments and `noqa` markers, the source-position test and the analysis handler's subprocess test, which checked that `app.core.config` was not imported at all. `lambda_api.py` and `notify.py` import normally, and the analysis module imports generation and the sentiment service at the top. The workers still import the database layer where they use it. `app/database/__init__.py` imports `connection.py`, so importing a model creates the engine; keeping those imports on use leaves the workers' first settings read inside the stage. A subprocess test now checks that importing any of the five worker handlers builds no settings and does not load the engine module.
+4. Two template rules check literal values against the declared defaults, and the values each stack parameter allows against the declared limits. AnalysisFunction's `flex` Bedrock tier and ApiFunction's secure session cookie differ on purpose. Review found that `MarketauxPerTickerLimit` and `PublicDiscussionPerSourceLimit` were `Number` parameters, which CloudFormation and the release plan accept as any number from 1 to 25, fractions too, while the settings refuse a fraction. They are now `String` parameters with the pattern `^([1-9]|1[0-9]|2[0-5])$`, like the two alert limit parameters, and the parameter rule's probes catch a `Number` parameter that feeds a whole-number setting.
+5. The weekly schedule reads `SCHEDULED_TICKERS`, `MARKETAUX_ENABLED` and `MARKETAUX_PER_TICKER_LIMIT` (1 to 25) from settings, and `DISCOVERY_QUEUE_URL` with `Settings.required`.
+6. The public discussion schedule reads its sources, its per-source limit (1 to 25) and its search query (at most 100 characters, `ASX` when empty) from settings.
+7. Discovery reads `DISCOVERY_LOOKBACK_DAYS` and `MAX_DOCUMENTS_PER_RUN` (each at least 1), and `DOWNLOAD_QUEUE_URL` with `Settings.required`.
+8. Download, the raw document store, the analysis worker and the local loader read `MAX_DOCUMENT_BYTES`, `MAX_DOCX_UNCOMPRESSED_BYTES` and `RAW_DOCUMENT_BUCKET`. `document_size_limit`, `docx_uncompressed_limit` and their constants are deleted.
+9. `sentiment.sentiment_input` reads `MAX_ANALYSIS_CHARS` from settings.
+10. The analysis worker reads `MAX_PDF_PAGES`, `MAX_OCR_PAGES`, `MAX_OCR_PIXELS_PER_PAGE`, `NOTIFICATIONS_ENABLED` and `NOTIFICATION_QUEUE_URL` from settings. The team decided that `MAX_PDF_PAGES` defaults to 500, as the template deploys. `extract_pdf` drops its own OCR defaults.
+11. Every variable is declared once. A template rule fails on a function variable nothing declares. A sweep fails when runtime code outside `config.py` reads the environment, except for the facts AWS sets about the process. A test fails when `.env.example` names a variable nothing declares. The README's environment table lists the moved settings and their limits, and its local setup section points at `config.py` for every variable.
+12. The team decided to narrow the grants. AnalysisFunction may read only `database-url`, and PublicDiscussionSchedulerFunction only `database-url`, the two Reddit credentials and the feed URLs. A rule fails when a function may read a secret its environment does not name. ApiFunction names all six and keeps its wildcard. The change set must be reviewed on staging before it is executed.
 
-Watch out for: about 30 modules import `settings`, and many tests use `patch.object(settings, ...)`. The proxy has to keep that working.
+The team also decided: a bad value is rejected when the settings are built, by the same rule for every setting, with no per-Lambda clamping; the whole `Settings` is checked at its first build; the `MARKETAUX_API_KEY` alias stays as a declared alias; and a secret resolves from SSM in any process that names its parameter.
 
-Where the code is: `backend/app/core/config.py`, `backend/lambdas/common.py:71-123`, `backend/lambda_api.py:5-13`, `backend/lambdas/schedule.py:32-61`, `backend/lambdas/notify.py:36-39`, `backend/lambdas/public_discussion_schedule.py:39-64`, `backend/.env.example`.
+Tests
+- `test_runtime_configuration.py` builds settings from plain dicts. It covers:
+  - the defaults and how each kind of value is read;
+  - every minimum, maximum, choice, length and non-empty limit, a fractional limit, the alias, the Cognito checks and `Settings.required`;
+  - each secret read from its parameter, or not read when it is set, even to an empty value;
+  - a missing parameter, for a secret that may be missing and for one that must exist;
+  - the SSM adapter against a fake client;
+  - the first read resolving a secret;
+  - patching through the proxy, and that no repr shows a value;
+  - a bad value failing at the first read rather than at import;
+  - in a subprocess, that importing the discovery, download, analysis, schedule and public discussion schedule handlers builds no settings and does not load `app.database.connection`. It names the first handler that does.
+  It also holds the environment sweep and the `.env.example` check.
+- `test_queue_wiring.py` gains six rules, each broken on purpose by at least one breakage: `parameter_variables_name_registered_secrets`, `functions_read_only_the_secrets_they_name`, `registered_secrets_are_deployed`, `template_literals_match_declared_defaults`, `template_parameters_fit_declared_limits` and `template_variables_are_declared`. The parameter rule's breakages lower a default below its limit, put back a `Number` limit parameter and loosen a limit's pattern. Its CI section imports the configuration with no site-packages. `test_release.py` and `test_deployment_contracts.py` now expect the limits' pattern, and the release plan refuses `MarketauxPerTickerLimit=12.5`.
+- They replace `test_config_aliases.py` (the private `_first_env`) and `test_document_size_limits.py`. They also replace the SSM tests in `test_notify.py` and `test_document_workers.py`, which patched `boto3.client` and the private loaded flag, the source-position test, and the two schedule tests that called `_enabled_tickers`. The worker import test replaces 08's analysis handler test in `test_artifact_analysis.py`. The clamping checks in `test_schedule.py` and `test_public_discussion_schedule.py` became rejection tests in the configuration. Tests that set a Lambda's variables in the environment now patch `settings`.
+
+Behaviour changes
+- Importing `app.core.config` reads no setting. It still loads `backend/.env` into the environment for local runs, without overriding what is set. A bad value fails at the first settings read with `ConfigurationError`, which lists every bad variable, instead of a `ValueError` at import. The API and notify still fail during Lambda init, because they read settings when they are imported.
+- Secret values stay in `settings` and are no longer copied into `os.environ`, so discovery's Chromium no longer inherits `DATABASE_URL`.
+- Any process resolves a secret from SSM when `<SETTING>_PARAMETER` is set and `<SETTING>` is not, not only the Lambda entry points; for example, `alembic` with `DATABASE_URL_PARAMETER` and AWS credentials. `.env.example` leaves every `*_PARAMETER` empty, so local runs are unaffected. A missing parameter for a secret that must exist is a `ConfigurationError` naming its variable instead of a `ClientError`.
+- An out-of-limit or malformed value is rejected instead of clamped or replaced. A `MARKETAUX_PER_TICKER_LIMIT` or `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` of 999 used to become 25, and `abc` or `12.5` became 10. A `DISCOVERY_LOOKBACK_DAYS` or `MAX_DOCUMENTS_PER_RUN` of 0 used to become 1. A search query over 100 characters used to be cut. The template allows none of these, a fraction included, and the rules check that.
+- `MarketauxPerTickerLimit` and `PublicDiscussionPerSourceLimit` must be a whole number from 1 to 25. As `Number` parameters they also took a fraction or a value such as `10.0`. `PublicDiscussionPerSourceLimit=12.5` deployed and the schedule fell back to 10; with the new settings it would have stopped every scheduled run. `MarketauxPerTickerLimit=12.5` already stopped the API at import through `NEWS_FETCH_LIMIT`. The release plan and CloudFormation now refuse both. The release plan reports `MarketauxPerTickerLimit '26' does not match ^([1-9]|1[0-9]|2[0-5])$` instead of `MarketauxPerTickerLimit must be at most 25, not 26`. The deployed values do not change.
+- Worker-only settings are checked in every process that builds the settings. A malformed `MAX_PDF_PAGES` in a shared local `backend/.env` now stops the local API at its first settings read. In AWS each function gets only its own variables.
+- A missing `DISCOVERY_QUEUE_URL`, `DOWNLOAD_QUEUE_URL` or `RAW_DOCUMENT_BUCKET` raises `ConfigurationError` naming the variable instead of `KeyError`. In discovery and download it is still a retryable failure of the stage.
+- `MAX_PDF_PAGES` defaults to 500 instead of 100 for a run that does not set it. The deployed value, and the 100 that `docker-compose.local-pipeline.yml` sets, do not change.
+- AnalysisFunction can read only `database-url`, and PublicDiscussionSchedulerFunction only `database-url`, `reddit-client-id`, `reddit-client-secret` and `public-discussion-feed-urls`.
+
+Left over
+- Staging checks that need AWS:
+  - Review the change set before executing it. Of 17's changes, it should show only AnalysisFunction's and PublicDiscussionSchedulerFunction's `ReadRuntimeParameters` statements and the two limit parameters. Those change from `Number` to `String` with the same values, so they change no function's environment.
+  - After the deploy, confirm all seven functions start and resolve their secrets: an API login and a database read, one dry-run alert, one event for each schedule, and one scrape run end to end. Search CloudWatch for `ConfigurationError`, `ParameterNotFound` and `AccessDeniedException`.
+  - Optionally, confirm that the discovery Lambda's Chromium environment no longer carries `DATABASE_URL`.
+- Run "Infra and queue wiring CI" on GitHub. cfn-lint and `sam validate --lint`, including the two `String` limit parameters, were not run locally. The pytest job was only approximated, with only pytest and PyYAML importable. The Docker test job runs Python 3.11; locally, every changed file was parsed and the configuration built under 3.11.
+- A deployment that sets `ALERT_DEFAULT_MIN_CONFIDENCE` shows a threshold that a save without one does not store, because the schema default is the constant. Reading `DEFAULT_ALERT_MIN_CONFIDENCE` in `alert_subscriptions._preferences` instead would let the setting go (see 14's Left over).
+- Unknown scheduled tickers and sources are still dropped, not rejected. Rejecting them would make a typo in `ScheduledTickers` fail every weekly run, so it is a team choice.
+- The workers import the database layer where they use it. If importing a model did not create the engine, they could import it at the top.
+- ApiFunction keeps its `${ParameterPathPrefix}/*` grant and names all six secrets. The least-privilege rule already flags it for any secret registered later that it does not name, but no rule can see a parameter that is not registered. Listing the six would stop ApiFunction reading those; it would not change what the rule catches.
+- `NEWS_FETCH_LIMIT` (the API's on-demand fetch) and `MARKETAUX_PER_TICKER_LIMIT` come from the same `MarketauxPerTickerLimit` parameter, but only the scheduler's setting has the 1 to 25 limit.
+- The parameter rule's probes are a sample. A pattern that lets in a whole number over 100 that its setting refuses would pass it.
+- Nothing fails when a test sets an environment variable for a setting; the module docstring and `backend/app/core/README.md` ask tests to patch `settings` instead.
+
+Where the code is: `backend/app/core/config.py`, `backend/app/core/README.md`, `backend/lambdas/common.py`, `backend/lambda_api.py`, `backend/lambdas/notify.py`, `backend/lambdas/schedule.py`, `backend/lambdas/public_discussion_schedule.py`, `backend/lambdas/pipeline_stage.py`, `backend/lambdas/discovery.py`, `backend/lambdas/download.py`, `backend/lambdas/download_validation.py`, `backend/lambdas/raw_documents.py`, `backend/lambdas/artifact_analysis.py`, `backend/parsing/analysis.py`, `backend/app/services/sentiment.py`, `backend/scripts/populate_local_content.py`, `backend/.env.example`, `README.md` (the environment table and local setup), `infra/template.yaml` (the two `ReadRuntimeParameters` statements and the two limit parameters), `.github/workflows/ci-infra-queue-wiring.yml`, `deployment.md`, `backend/tests/test_runtime_configuration.py`, `backend/tests/test_queue_wiring.py`, `backend/tests/test_release.py`, `backend/tests/test_deployment_contracts.py`.
 
 ### 18 OIDC role pair
 
@@ -967,6 +1164,37 @@ Left over
 
 Where the code is: `infra/github-oidc.yaml`, `backend/tools/template_model.py` (`Statement`, `TemplateModel.role_statements`), `backend/tests/test_github_oidc.py`, `backend/tests/test_template_model.py`, `backend/tests/test_queue_wiring.py`, `.github/workflows/ci-infra-queue-wiring.yml`, `infra/README.md` §10, `docs/adr/0001-remove-the-deployment-test-deploy-roles.md`, and `deployment-test.yml` on the `origin/deployment-test` branch.
 
+## Checks before and after merging #56
+
+None of these could run locally: each needs staging, AWS or a GitHub Actions run. They come from the candidates' Left over lists, which have the detail. A push to `main` deploys staging straight away, so merging #56 starts its first release, and the first group has to come before the merge. The `staging` environment accepts only `main` today, so the two workflow runs from a branch need it to accept that branch while they run.
+
+Before merging
+- "Validate branch" passes on the PR. Its backend job runs the schema-drift script. Its Docker job, the only run on Python 3.11 with torch installed, mounts `frontend/` and `infra/` for the tests that read them ([08](#08-artifact-analysis), [10](#10-ticker-read-models), [12](#12-alert-delivery), [13](#13-email-sender-port), [14](#14-alert-subscription-lifecycle), [16](#16-release-parameters)).
+- "Infra and queue wiring CI" passes on the PR. Its cfn-lint and `sam validate --lint` have not yet seen 17's template change ([17](#17-runtime-configuration), [18](#18-oidc-role-pair)).
+- Run the #59 "Prepare staging backend rollback" once from `bugfix/release_workflow_parameters`. It only creates a change set, which should change only the three image URIs ([Phase 0](#left-over-from-phase-0), [16](#16-release-parameters)).
+- Run "Deploy staging release" by hand from the PR branch with every input at `keep`, which only creates a change set. Against a stack that runs `main`, it should change only the images, perhaps `FrontendBaseUrl`, the variables 01 and 06 removed, and 17's two `ReadRuntimeParameters` statements and two limit parameters ([16](#16-release-parameters), [17](#17-runtime-configuration)).
+- On the current staging stack, search the analysis function's logs for `No module named 'parsing.classification'` ([09](#09-category-taxonomy-ownership)).
+- Run `python -m tools.compare_sentiment_buckets` against staging with read-only credentials, and share each ticker's before and after with the team ([10](#10-ticker-read-models)).
+- Check that staging has `uq_artifact_summaries_artifact`, which `ON CONFLICT` needs ([07](#07-artifact-summary)).
+- Before applying #56's migrations, record the `artifact_type` counts of `asx_announcement` rows ([08](#08-artifact-analysis)) and a dry-run repair's `missing_before` ([07](#07-artifact-summary)).
+
+After the first deploy
+- The first push to `main` runs `plan --execute`, `apply`, the health check and, on a failure, the rollback trigger. Then run the module's "Prepare staging backend rollback" and compare it with the #59 change set, and run "Execute approved staging change set" once ([16](#16-release-parameters)).
+- Run the `86d9artifacttypes` backfill again now that the new analysis image is live, and compare the counts with the first reading ([08](#08-artifact-analysis)).
+- All seven functions start and resolve their secrets: an API login and a database read, one dry-run alert, one event for each schedule and one scrape run end to end. CloudWatch shows no `ImportError`, `ConfigurationError`, `ParameterNotFound` or `AccessDeniedException` ([09](#09-category-taxonomy-ownership), [10](#10-ticker-read-models), [17](#17-runtime-configuration)).
+- One analysis records `model_used`, `prompt_version` and all six summary keys, its log events keep their fields, and a notification still reaches its queue. A dry-run repair gives the same `missing_before` as before ([07](#07-artifact-summary), [08](#08-artifact-analysis)).
+- `POST /llm/summarise/artifact/{id}` answers 202 and the worker logs `completed`. `POST /llm/summarise/ticker/{symbol}` with `limit=50` sets off no throttling or dead-letter alarm, and stories from `POST /news/fetch/{symbol}` gain sentiment rows ([08](#08-artifact-analysis)).
+- `GET /api/sentiment/BHP` answers, `GET /api/tickers/symbol/BHP/brief` shows a live price, and the watchlist page makes two API calls and shows signals ([10](#10-ticker-read-models)).
+- The market feed, home page, source library, research summary and deep dive show the empty-summary states ([07](#07-artifact-summary)).
+- With `NotificationsEnabled` on, send one real verification email and one real alert through Brevo, and open both from a real inbox. Their links use the custom domain, verify and unsubscribe work, and a replay sends no second alert ([07](#07-artifact-summary), [12](#12-alert-delivery), [13](#13-email-sender-port), [14](#14-alert-subscription-lifecycle)).
+- Run "Verify staging queue wiring" once ([15](#15-template-model)).
+- If every status value is in `app/status.py`, validate the three CHECK constraints ([04](#04-scrape-run-lifecycle)). `last_delivery_status` should hold only `DeliveryStatus` values ([12](#12-alert-delivery)).
+- No hand-made dashboard or alarm reads the `suppressed` log line's old `rollup` field or the `investor_skipped` event ([12](#12-alert-delivery)).
+- Check BHP from staging: record its pages if AWS is not blocked, or give it a new listing ([02](#02-source-adapter-per-company)).
+- Deploy the OIDC stack by hand after reviewing its change set, then run a staging workflow. Delete `AWS_DEPLOY_TEST_ROLE_ARN` and any deployment-test leftovers ([18](#18-oidc-role-pair)).
+- The `infra/README.md` commands were only planned against a fake account, so check each one the first time it runs ([16](#16-release-parameters)).
+- Optional: confirm discovery's Chromium no longer gets `DATABASE_URL` ([17](#17-runtime-configuration)), count subscriptions whose address differs from the account's ([14](#14-alert-subscription-lifecycle)), count legacy summary rows whose artifact has no `about` ([07](#07-artifact-summary)), run IAM Access Analyzer on the deploy roles ([18](#18-oidc-role-pair)) and find Brevo's real send-rate limit ([13](#13-email-sender-port)).
+
 ## Decisions still needed
 
 | Decision | Candidate | Status |
@@ -976,14 +1204,21 @@ Where the code is: `infra/github-oidc.yaml`, `backend/tools/template_model.py` (
 | How to handle one-click unsubscribe | 13 | Decided for now: stop sending the header (#62). An API-backed endpoint is optional later and stays out of scope in #56. |
 | What the preferences routes answer when the provider refuses a verification email's recipient | 13 | Decided in #56: 422, with a message to check the account email. Unavailable answers 502 and misconfigured 500, and verification is marked failed in every case. |
 | Whether live alert sends stay one second apart per Lambda container | 13 | Decided in #56: keep it, through the module-level `ALERT_PACER`, which only alert fan-out uses. A dry run never paces. Brevo's real rate limit is still to be found. |
-| Whether to keep the raw-token form of `POST /notifications/unsubscribe` and the one-time `unsubscribe_token` in the PUT response | 14 | Decided: keep both for now. |
-| Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Decided on 2026-10-13: 09's proposed table, with one bucket per classified announcement. Executive transcripts count in strategy. Security notifications (Appendix 2A, 3G and 3H) count in no bucket. News and unclassified announcements keep keyword matching. 10 step 3 makes the switch, so the UI numbers change then. Until then the view buckets by keyword: #62 fixed the matching, and 09 in #56 records the proposed bucket on each category definition. |
-| What the latest filing signal on the brief and watchlist shows | 10 | Decided on 2026-10-13: the sentiment of the most recently published ASX announcement. Today it is the most recently analysed sentiment of any artifact stored against the ticker, which can be a news article. |
+| Whether to keep the raw-token form of `POST /notifications/unsubscribe` and the one-time `unsubscribe_token` in the PUT response | 14 | Decided in #56: keep both for now. `alert_subscriptions.unsubscribe` accepts both forms, and `save` returns the token on the first enable only. |
+| How alert email addresses are normalised | 14 | Decided in #56: one way, with `email_validator` through crud's `normalise_email` (ASCII domain, lower case). Stored addresses already have that form, so there is no migration. An address it refuses answers 422. |
+| Whether alert links need a `SiteUrl` setting | 14 | Decided in #56: no. Every link is built from `FRONTEND_BASE_URL` in one place, and deploy sets it to the custom domain (#59, and 16's release module). |
+| Whether the unsubscribe (v1) and verification (v1c) token formats may change | 14 | Decided in #56: no. Links in emails already sent depend on them, and golden tests in `test_alert_tokens.py` pin both. |
+| Mapping from taxonomy category to sentiment bucket, and whether one artifact may count in several buckets | 10 | Decided on 2026-10-13: 09's proposed table, with one bucket per classified announcement. Executive transcripts count in strategy. Security notifications (Appendix 2A, 3G and 3H) count in no bucket. News and unclassified announcements keep keyword matching. Done in #56. Appendix 2A notices are stored as `UNKNOWN` today, so they still count by keyword (see 10's Left over). |
+| What the latest filing signal on the brief and watchlist shows | 10 | Decided on 2026-10-13: the sentiment of the most recently published ASX announcement. Done in #56, ordered by `coalesce(published_at, created_at)`, then by the sentiment's time. |
+| Where the category sentiment view finds each artifact's bucket | 10 | Decided in #56: at request time, from the taxonomy the API image now ships. There is no backfill, and a mapping change is one edit. |
+| Whether 10 deletes `POST /sentiment/{ticker}` and `GET /artifacts/ticker/{ticker_id}` | 10 | Decided in #56: delete both, in the change that moves the watchlist page. |
+| Whether 10 waits for the citation branches | 10 | Decided in #56: no. The brief's sources and clarity and the feed's cards are unchanged. |
+| What the brief's "Latest filing" and "Latest type" key numbers describe | 10 | Open. They describe the ticker's newest record of any type, which can be a news story, while the latest filing signal beside them is the newest announcement's. The brief could tell the latest filing, at one more query, or the page could call them the latest record (see 10's Left over). |
 | Whether `source_url` on Queue A is authoritative | 04 | Decided in #56: the ticker catalogue is authoritative. The `{TICKER}_SOURCE_URL` override is removed and Queue A records the catalogue's page. |
 | How to count a malformed public-discussion post: failure or duplicate | 05 | Decided in #56: a failure. It counts in `items_failed` and its run ends partial. |
 | Which meaning `SUPPORTED_TICKERS` keeps, and what the other meaning is renamed to | 01 | Decided in #56: it means "enabled for manual scraping" (the `Settings` field and env var). The analysis worker's copy is gone; it accepts catalogue tickers directly. Revisit if the team wants a different name. |
 | When to rename the `/gemini` routes | 06 | Decided in #56: now, to `/llm/...`, with no alias. The frontend never called them. |
-| Whether to collapse the two summary stores after the views land | 07 | Decided for now in #56: keep both stores; the artifact summary module hides them. Look again after 10 steps 3 and 4. If they are collapsed, make the summary row the one store. |
+| Whether to collapse the two summary stores after the views land | 07 | Decided for now in #56: keep both stores; the artifact summary module hides them. Look again now: 10 moved both readers in #56. If they are collapsed, make the summary row the one store. |
 | What a feed card, the brief story and the deep-dive detail show with no summary | 07 | Decided in #56: null everywhere, never placeholder or raw text. The frontend's placeholder lists are deleted. |
 | Whether 07 waits for the claim-traceability branches | 07 | Decided in #56: no. The chosen branch adds its field through `SummaryExtension` and the artifact card. |
 | Whether to delete `POST /artifact-summaries/` | 07 | Decided in #56: delete it, with its crud functions and `ArtifactSummaryCreate`. |
@@ -999,6 +1234,12 @@ Where the code is: `infra/github-oidc.yaml`, `backend/tools/template_model.py` (
 | What to call the analysis message that also carries news | 08 | Decided in #56: rename `PublicDiscussionAnalysisMessage` to `StoredTextAnalysisMessage` now, keeping the wire name `public_discussion_analysis` that queued messages carry. |
 | Whether the analysis worker keeps publishing `NotificationMessage` | 08 | Decided in #56: yes, unchanged. |
 | Which delivery outcomes the alert settings page reports | 12 | Decided in #56: failed and rejected, with the raw status text. The list is named `DELIVERY_PROBLEM_STATUSES` and a test pins it. Plain-language copy is a separate UI change. |
-| Whether the default minimum alert confidence stays configurable | 12, 17 | Decided in #56 for the schema and model defaults: one constant, `DEFAULT_ALERT_MIN_CONFIDENCE` in `app/alert_vocabulary.py`. 17 decides whether `Settings.ALERT_DEFAULT_MIN_CONFIDENCE` stays. |
+| Whether the default minimum alert confidence stays configurable | 12, 17 | Decided in #56: `DEFAULT_ALERT_MIN_CONFIDENCE` in `app/alert_vocabulary.py` is the one value. `Settings.ALERT_DEFAULT_MIN_CONFIDENCE` stays, because `alert_subscriptions._preferences` reads it for an investor with no rule, and takes its default from the constant. |
+| How a malformed or out-of-limit setting is handled | 17 | Decided in #56: it is rejected when the settings are built, with `ConfigurationError` (not a `ValueError`, and never showing the value), by the same rule for every setting and with no clamping in each Lambda. Unknown scheduled tickers and sources are still dropped; rejecting them is a team choice (see 17's Left over). |
+| When settings are checked | 17 | Decided in #56: the whole `Settings`, at its first build. |
+| The `MAX_PDF_PAGES` default | 17 | Decided in #56: 500, as the template deploys. |
+| Whether AnalysisFunction and PublicDiscussionSchedulerFunction keep wildcard SSM grants | 17 | Decided in #56: no. Each may read only the secrets it names, and a least-privilege rule holds that. ApiFunction keeps its wildcard. Review the staging change set before it is executed. |
+| Whether to keep the `MARKETAUX_API_KEY` alias | 17 | Decided in #56: keep it, as a declared alias. |
+| Where secrets resolve from SSM | 17 | Decided in #56: in any process, when `<SETTING>_PARAMETER` is set and `<SETTING>` is not. |
 | Whether the deployment-test stack is still needed | 18 | Decided on 2026-10-13: no. Done in #56: 18 deleted the two deployment-test roles and their outputs. Nothing on `main` used them, and `docs/adr/0001-remove-the-deployment-test-deploy-roles.md` records the evidence. |
 | Whether to stop the GitHub role reading the values of the two gated secrets | 18 | Open. Deny `kms:Decrypt` to the role, or move the Brevo and Marketaux secrets to a customer managed key. Either changes what is deployed (see 18's Left over). |
