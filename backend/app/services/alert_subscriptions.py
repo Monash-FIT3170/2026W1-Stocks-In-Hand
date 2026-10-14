@@ -6,7 +6,8 @@ verification request and emails a verification link. ``request_verification``
 sends a new link at most once a minute. A request whose email is not sent is
 marked failed. ``confirm`` accepts only the newest request's link, while it is
 fresh. ``unsubscribe`` turns alerts off for whoever holds an unsubscribe token,
-and never says whether the token matched.
+and never says whether the token matched. ``alert_links`` gives alert delivery
+the links an alert email carries; every link to the website is built here.
 
 Each operation commits what it writes. One that sends an email commits its
 request and ends its transaction before it calls the sender, so no
