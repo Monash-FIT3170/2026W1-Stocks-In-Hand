@@ -234,15 +234,19 @@ def test_the_github_role_can_push_every_release_image_but_never_delete_one() -> 
             assert not _may(GITHUB_ROLE, action, arn, values), (action, repository)
 
 
-def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -> None:
+def test_the_github_role_can_read_only_the_secrets_a_release_checks() -> None:
     """The release plan checks that each secret behind a switch that is on is a SecureString.
 
-    The role may read that metadata and nothing more: no other parameter the
-    application reads, such as the database URL, through any of the four SSM
-    actions that return a value, and no secret's value, because it has no
-    kms:Decrypt. GetParametersByPath is allowed or refused on the path it is
+    So the role may read those secrets and no other parameter the application
+    reads, such as the database URL, through any of the four SSM actions that
+    return a value. GetParametersByPath is allowed or refused on the path it is
     given, which returns every parameter below it, so each path above the
     parameters is checked.
+
+    The plan asks only for the type, but the role could read the two values
+    too. They are encrypted with the AWS managed aws/ssm key, which lets every
+    principal in the account decrypt through SSM, so the role needs no
+    kms:Decrypt of its own to do it.
     """
     app = template_model()
     prefix = {"ParameterPathPrefix": PARAMETER_PATH_PREFIX}
@@ -272,9 +276,6 @@ def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -
     assert paths == ["/", "/stocks-in-hand", PARAMETER_PATH_PREFIX]
     for path in paths:
         assert not _may(GITHUB_ROLE, "ssm:GetParametersByPath", _parameter_arn(path), values), path
-    assert not any(
-        statement.allows("kms:Decrypt") for statement in _oidc().role_statements(GITHUB_ROLE)
-    )
 
 
 def test_the_github_role_can_read_only_the_application_queue_attributes() -> None:

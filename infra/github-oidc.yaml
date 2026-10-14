@@ -320,6 +320,9 @@ Resources:
                 Effect: Allow
                 Action: cloudformation:GetTemplateSummary
                 Resource: "*"
+              # GetParameter also returns the value, decrypted on request: the
+              # AWS managed aws/ssm key lets every principal in the account
+              # decrypt through SSM. The release plan asks only for the type.
               - Sid: ReadBrevoParameterMetadata
                 Effect: Allow
                 Action: ssm:GetParameter
