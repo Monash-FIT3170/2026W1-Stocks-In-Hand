@@ -83,11 +83,11 @@ The deployment starts with these fixed limits:
 | Noncurrent frontend versions | 14 days |
 | CloudWatch log retention | 7 days |
 | ECR images retained per repository | 2 |
-| Discovery concurrency | 1 |
+| Discovery concurrency | Not capped (one message per invocation) |
 | Download concurrency | 2 |
-| Analysis concurrency | 1 |
+| Analysis concurrency | Not capped (one message per invocation) |
 | Notification delivery | Disabled by default |
-| Notification concurrency | 1 |
+| Notification concurrency | Not capped (up to 10 messages per invocation) |
 | Alert commitments per 24 hours | 180 |
 | Direct alerts per investor and run | 5, then one rollup |
 
@@ -104,7 +104,8 @@ These notifications are not a hard spending cap and billing data can be
 delayed. The only zero-charge Bedrock setting is `BedrockEnabled=false`, which
 omits model invocation permission from the API and analysis Lambdas. The
 immediate cost controls are the disabled schedule, bounded document counts,
-short retention, API throttling, and Lambda reserved concurrency.
+short retention, API throttling, and the download event source's maximum
+concurrency of two.
 
 Bedrock is restricted to on-demand `openai.gpt-oss-120b-1:0` in Sydney. No
 Provisioned Throughput is created. API requests use Standard tier. Queued
@@ -181,9 +182,8 @@ schedule runs at 9:00 AM each Monday. The public discussion schedule runs at
 
 Enable only sources that have passed an AWS smoke test. If BHP still times out,
 leave BHP available for manual runs but omit it from `ScheduledTickers`.
-Public discussion collection defaults to Bluesky and Mastodon, ten items each,
-with one concurrent scheduler invocation. Reddit and blogs require their SSM
-settings before they are included.
+Public discussion collection defaults to Bluesky and Mastodon, ten items each.
+Reddit and blogs require their SSM settings before they are included.
 
 Marketaux articles, scheduled or fetched on demand, and public discussion posts
 use the analysis queue for sentiment and summary generation. General ASX posts do

@@ -393,7 +393,8 @@ these values:
 
 Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
 the feed allowlist exists. Each EventBridge event has a stable idempotency key,
-the Lambda has reserved concurrency one, and at most five blog feeds run.
+so a retried event does not collect again what that event already collected.
+At most five blog feeds run, and the Lambda has no reserved concurrency.
 Collected public posts are queued for analysis even when they discuss the ASX
 market generally and do not name one of the supported company tickers.
 
@@ -507,7 +508,10 @@ summaries and evidence categorisation:
 - the API and analysis Lambdas receive permission only when Bedrock is enabled;
 - IAM permits only regional `openai.gpt-oss-120b-1:0`;
 - API requests use Standard tier and cost-bearing routes require authentication;
-- queued analysis uses Flex tier, concurrency one, and SQS batch size one;
+- queued analysis uses Flex tier and SQS batch size one, with no concurrency
+  cap on its event source, so a burst such as the ticker summary route's 50
+  requests can start up to 50 analysis Lambdas and as many flex-tier Bedrock
+  calls at once;
 - prompts are capped at 30,000 characters and completions at 4,096 tokens; and
 - responses must pass the existing strict JSON schemas before storage.
 
