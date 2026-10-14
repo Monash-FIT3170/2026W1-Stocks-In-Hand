@@ -422,8 +422,12 @@ def summarise(
     Raises ``PermanentDocumentError`` with ``artifact_not_found`` when the
     artifact does not exist and ``no_extractable_text`` when it has no text.
     """
+    # Imported on use: importing the database layer creates the engine.
+    from app.services import artifact_summary
+
     facts = _facts(artifact_id, ports)
-    text = (facts.raw_text or "").strip()
+    # The summary routes use the same rule, so they never queue an artifact this refuses.
+    text = artifact_summary.text_to_summarise(facts.raw_text)
     if not text:
         raise PermanentDocumentError(
             "Artifact has no text to summarise",

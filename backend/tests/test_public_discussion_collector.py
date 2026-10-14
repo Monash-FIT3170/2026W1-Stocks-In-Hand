@@ -14,12 +14,12 @@ import importlib.util
 import sys
 import uuid
 from collections.abc import Iterator
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, event, func, null, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -96,6 +96,22 @@ def _collect(source: str, raw_posts: list[dict], db: Session, monkeypatch, *, ru
 
 def _stored(db: Session, identity: str) -> Artifact:
     return db.query(Artifact).filter(Artifact.content_hash == _hash(identity)).one()
+
+
+@contextmanager
+def _statements(db: Session) -> Iterator[list[str]]:
+    """The SQL statements the session sends inside the block."""
+    statements: list[str] = []
+
+    def record(_connection, _cursor, statement, _parameters, _context, _executemany) -> None:
+        statements.append(statement)
+
+    connection = db.connection()
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
 
 
 def _unique(prefix: str) -> str:
@@ -371,6 +387,20 @@ def test_a_post_already_stored_counts_as_a_duplicate(
     assert again.mentions_linked == 1
 
 
+def test_a_collection_reads_the_tickers_once_however_many_posts_it_stores(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    """Storing a post commits, which would make loaded tickers read again for the next post."""
+    posts = [bluesky_post(f"at://x/{_unique('b')}") for _ in range(5)]
+
+    with _statements(db_session) as statements:
+        result = _collect("bluesky", posts, db_session, monkeypatch)
+
+    assert (result.saved, result.mentions_linked) == (5, 5)
+    assert len([statement for statement in statements if "FROM tickers" in statement]) == 1
+
+
 def test_a_source_that_cannot_be_fetched_fails_its_run(
     db_session: Session,
 ) -> None:
@@ -513,3 +543,34 @@ def test_backfilled_engagement_matches_what_each_source_stores(
     db_session.refresh(artifact)
 
     assert artifact.artifact_metadata["engagement"] == post.engagement
+
+
+@pytest.mark.parametrize(
+    ("metadata", "stored_as"),
+    [(None, "null"), (null(), None)],
+    ids=["JSON null", "SQL NULL"],
+)
+def test_a_post_stored_without_metadata_is_backfilled_with_zero_engagement(
+    db_session: Session,
+    metadata,
+    stored_as: str | None,
+) -> None:
+    """Metadata set to None is stored as a JSON null, which is not an object."""
+    artifact = Artifact(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="$BHP shares rise",
+        content_hash=f"backfill-{uuid.uuid4()}",
+        artifact_metadata=metadata,
+    )
+    db_session.add(artifact)
+    db_session.commit()
+    stored = select(func.jsonb_typeof(Artifact.artifact_metadata)).where(
+        Artifact.id == artifact.id
+    )
+    assert db_session.scalar(stored) == stored_as
+
+    db_session.execute(text(_backfill_migration().BACKFILL))
+    db_session.refresh(artifact)
+
+    assert artifact.artifact_metadata == {"engagement": 0}

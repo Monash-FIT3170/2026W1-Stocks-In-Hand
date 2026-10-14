@@ -1,5 +1,5 @@
 """
-CLI tool for manually testing ASX scraper implementations.
+CLI tool for manually testing the ASX source adapters.
 
 INSTRUCTIONS TO RUN:
 
@@ -10,7 +10,9 @@ INSTRUCTIONS TO RUN:
 > cd backend
 > docker compose exec backend python test_scrapers.py
 
-Reports will save to output folder for that specific company
+Each chosen company's adapter lists its documents, as discovery does, and
+downloads each one, as the download worker does. Documents save to the output
+folder for that specific company.
 
 """
 import asyncio
@@ -20,8 +22,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scrapers.registry import available_tickers, scrape
+from app.core.config import settings
+from app.sources import SOURCES
 from cli_config import OUTPUT_DIR
+from scrapers.adapter import DocumentRequest
+from scrapers.base import Announcement
+from scrapers.registry import adapter_for, discover
 
 SEP = "-" * 60
 
@@ -76,6 +82,34 @@ def print_results(ticker: str, announcements: list, elapsed: float) -> None:
     print(SEP)
 
 
+async def download(announcement: Announcement, directory: Path) -> Path:
+    """Fetch one listed document through its adapter and save it in ``directory``."""
+    downloaded = await adapter_for(announcement.ticker).fetch_document(
+        DocumentRequest(
+            document_url=announcement.pdf_url,
+            title=announcement.title,
+            metadata=announcement.metadata,
+        ),
+        max_bytes=settings.MAX_DOCUMENT_BYTES,
+    )
+    clean_title = "".join(
+        character if character.isalnum() or character in "._-" else "_"
+        for character in announcement.title
+    ).strip("_")[:120] or "announcement"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{announcement.date:%Y-%m-%d}_{clean_title}.{downloaded.extension}"
+    path.write_bytes(downloaded.content)
+    return path
+
+
+async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
+    """List a company's documents and save each one in ``output_dir/<ticker>``."""
+    announcements = await discover(ticker)
+    for announcement in announcements:
+        announcement.local_path = await download(announcement, output_dir / ticker)
+    return announcements
+
+
 async def run_scraper(ticker: str) -> None:
     print(f"\nRunning {ticker} scraper...")
     start = time.monotonic()
@@ -89,7 +123,7 @@ async def run_scraper(ticker: str) -> None:
 
 
 async def main() -> None:
-    tickers = available_tickers()
+    tickers = list(SOURCES)
     if not tickers:
         print("No scrapers registered.")
         return

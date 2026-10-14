@@ -64,7 +64,7 @@ def verify_unsubscribe_token(token: str, token_hash: str) -> UUID | None:
     subscription_id = unsubscribe_token_subscription(token)
     if subscription_id is None:
         return None
-    if not hmac.compare_digest(str(token), unsubscribe_token(subscription_id, token_hash)):
+    if not _matches(token, unsubscribe_token(subscription_id, token_hash)):
         return None
     return subscription_id
 
@@ -122,7 +122,7 @@ def verify_verification_token(
     if requested_at > now + _FUTURE_LEEWAY or now - requested_at > ttl:
         return None
     expected = verification_token(subscription_id, token_hash, requested_at)
-    if not hmac.compare_digest(str(token), expected):
+    if not _matches(token, expected):
         return None
     return subscription_id
 
@@ -135,6 +135,15 @@ def _signed(token_hash: str, payload: str) -> str:
         hashlib.sha256,
     ).digest()
     return f"{payload}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def _matches(token: str, expected: str) -> bool:
+    """Whether ``token`` is the ``expected`` signed token, compared in constant time.
+
+    Compares bytes, because ``hmac.compare_digest`` raises ``TypeError`` for
+    text with a non-ASCII character, and a token from a request may have one.
+    """
+    return hmac.compare_digest(str(token).encode("utf-8"), expected.encode("ascii"))
 
 
 def _signing_key(token_hash: str) -> bytes:

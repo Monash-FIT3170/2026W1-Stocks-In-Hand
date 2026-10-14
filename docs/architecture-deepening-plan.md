@@ -382,7 +382,7 @@ Done in #56
 1. Postgres characterisation tests pin the content-hash formats `reddit:{id}`, `bluesky:{uri}`, `mastodon:{url}` (or `mastodon:{instance}:{id}`) and `blog:{feed}:{id}`, and the stored fields.
 2. The collector was built from the Bluesky copy, then Mastodon, Reddit and blogs moved onto it, one commit each. The team decided a malformed post is a failure: it counts in `items_failed` and its run ends partial. `items_found` counts every fetched post. The unused contract scaffolding (`PublicDiscussionAdapter`, `CollectionStatus` and friends) is replaced by the real `DiscussionSource` interface, and the `ExampleAdapter` test is now a contract test every real source keeps.
 3. The scheduler calls the collector, validates each target with its source, and no longer imports route functions or works out URLs and limits again.
-4. The collector loads the tickers once per collection, and `analysis_queue.queue_stored_text` is the one "queue stored text for analysis" function for public discussion, Marketaux and the pending-analysis requeue.
+4. The collector loads the tickers once per collection, as plain rows that the commit after each stored post does not expire, and `analysis_queue.queue_stored_text` is the one "queue stored text for analysis" function for public discussion, Marketaux and the pending-analysis requeue.
 5. The collector stores each post's engagement, and migration `86d9engagement` fills it in for posts stored before. `get_discussion_posts_for_ticker` replaces the three "posts for ticker" queries; the two dead ones are deleted.
 
 Tests
