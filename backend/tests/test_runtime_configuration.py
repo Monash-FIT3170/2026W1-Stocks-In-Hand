@@ -97,6 +97,9 @@ def test_an_empty_environment_gives_the_documented_defaults() -> None:
     assert (defaults.SESSION_COOKIE_SECURE, defaults.SESSION_COOKIE_SAMESITE) == (False, "lax")
     assert defaults.SCHEDULED_TICKERS == scheduled_tickers()
     assert (defaults.MARKETAUX_ENABLED, defaults.MARKETAUX_PER_TICKER_LIMIT) == (False, 10)
+    assert defaults.SCHEDULED_PUBLIC_DISCUSSION_SOURCES == ["bluesky", "mastodon"]
+    assert defaults.PUBLIC_DISCUSSION_PER_SOURCE_LIMIT == 10
+    assert defaults.PUBLIC_DISCUSSION_SEARCH_QUERY == "ASX"
 
 
 def test_values_are_read_as_the_backend_always_read_them() -> None:
@@ -131,6 +134,21 @@ def test_the_schedule_keeps_only_catalogue_tickers_in_catalogue_order() -> None:
     assert read.SCHEDULED_TICKERS == ["ANZ", "WES"]
 
 
+def test_the_public_discussion_schedule_keeps_only_known_sources() -> None:
+    read = Settings.from_environment(
+        {"SCHEDULED_PUBLIC_DISCUSSION_SOURCES": "blog, Reddit,unknown,"}
+    )
+
+    assert read.SCHEDULED_PUBLIC_DISCUSSION_SOURCES == ["reddit", "blog"]
+
+
+@pytest.mark.parametrize(("value", "query"), [(" asx 200 ", "asx 200"), ("  ", "ASX"), ("", "ASX")])
+def test_an_empty_search_query_reads_as_asx(value: str, query: str) -> None:
+    read = Settings.from_environment({"PUBLIC_DISCUSSION_SEARCH_QUERY": value})
+
+    assert read.PUBLIC_DISCUSSION_SEARCH_QUERY == query
+
+
 def test_a_required_setting_must_be_set() -> None:
     assert Settings.from_environment(
         {"DISCOVERY_QUEUE_URL": "https://sqs.example/queue-a"}
@@ -160,6 +178,10 @@ def test_a_required_setting_must_be_set() -> None:
         ("MARKETAUX_PER_TICKER_LIMIT", "0", "must be at least 1"),
         ("MARKETAUX_PER_TICKER_LIMIT", "26", "must be at most 25"),
         ("MARKETAUX_PER_TICKER_LIMIT", "abc", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "0", "must be at least 1"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "26", "must be at most 25"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "abc", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_SEARCH_QUERY", "x" * 101, "must be at most 100 characters"),
     ],
 )
 def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:

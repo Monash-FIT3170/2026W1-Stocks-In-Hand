@@ -203,6 +203,8 @@ def text(
     rstrip: str = "",
     choices: Sequence[str] = (),
     non_empty: bool = False,
+    max_length: int | None = None,
+    empty_means_default: bool = False,
     aliases: Sequence[str] = (),
 ) -> str:
     """A text setting. Each alias is read in turn when the variable is empty."""
@@ -211,10 +213,14 @@ def text(
         value = raw.strip() if strip else raw
         value = value.lower() if lower else value
         value = value.rstrip(rstrip) if rstrip else value
+        if empty_means_default and not value:
+            return default
         if choices and value not in choices:
             raise ValueError(f"must be one of {', '.join(choices)}")
         if non_empty and not value:
             raise ValueError("must not be empty")
+        if max_length is not None and len(value) > max_length:
+            raise ValueError(f"must be at most {max_length} characters")
         return value
 
     return cast(str, _setting(default, parse, aliases=aliases))
@@ -361,6 +367,16 @@ class Settings:
     MARKETAUX_ENABLED: bool = flag()
     # News stories the weekly schedule asks Marketaux for, per ticker.
     MARKETAUX_PER_TICKER_LIMIT: int = integer(10, minimum=1, maximum=25)
+    # The sources the public discussion schedule collects. An unknown source
+    # is dropped.
+    SCHEDULED_PUBLIC_DISCUSSION_SOURCES: list[str] = names(
+        ("bluesky", "mastodon"), case="lower", keep_only=("reddit", "bluesky", "mastodon", "blog")
+    )
+    PUBLIC_DISCUSSION_PER_SOURCE_LIMIT: int = integer(10, minimum=1, maximum=25)
+    # What the scheduled Reddit, Bluesky and Mastodon searches look for.
+    PUBLIC_DISCUSSION_SEARCH_QUERY: str = text(
+        "ASX", strip=True, max_length=100, empty_means_default=True
+    )
 
     @classmethod
     def from_environment(

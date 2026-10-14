@@ -45,7 +45,7 @@ def scheduled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Session:
 
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
-    monkeypatch.setenv("SCHEDULED_PUBLIC_DISCUSSION_SOURCES", "bluesky")
+    monkeypatch.setattr(settings, "SCHEDULED_PUBLIC_DISCUSSION_SOURCES", ["bluesky"])
     return db_session
 
 
@@ -69,12 +69,15 @@ def _runs(db: Session, event_id: str) -> list[ScrapeRun]:
     )
 
 
-def test_schedule_defaults_to_bounded_keyless_sources(monkeypatch) -> None:
-    monkeypatch.setenv(
+def test_schedule_skips_reddit_without_credentials_and_blogs_without_feeds(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        settings,
         "SCHEDULED_PUBLIC_DISCUSSION_SOURCES",
-        "reddit,bluesky,mastodon,blog,unknown",
+        ["reddit", "bluesky", "mastodon", "blog"],
     )
-    monkeypatch.setenv("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "500")
+    monkeypatch.setattr(settings, "PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", 25)
     monkeypatch.setattr(settings, "REDDIT_CLIENT_ID", "")
     monkeypatch.setattr(settings, "REDDIT_CLIENT_SECRET", "")
     monkeypatch.setattr(settings, "PUBLIC_DISCUSSION_FEED_URLS", [])
@@ -130,7 +133,7 @@ def test_a_configured_target_its_source_rejects_counts_as_failed(
     scheduled: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SCHEDULED_PUBLIC_DISCUSSION_SOURCES", "blog")
+    monkeypatch.setattr(settings, "SCHEDULED_PUBLIC_DISCUSSION_SOURCES", ["blog"])
     monkeypatch.setattr(settings, "PUBLIC_DISCUSSION_FEED_URLS", ["http://insecure.test/feed"])
     monkeypatch.setattr(BLOG, "fetch", lambda _target, _limit: [])
 

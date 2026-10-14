@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -39,30 +38,11 @@ def _event_key(event: dict) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _enabled_sources() -> set[str]:
-    return {
-        source.strip().lower()
-        for source in os.getenv(
-            "SCHEDULED_PUBLIC_DISCUSSION_SOURCES",
-            "bluesky,mastodon",
-        ).split(",")
-        if source.strip()
-    } & {"reddit", "bluesky", "mastodon", "blog"}
-
-
-def _collection_limit() -> int:
-    try:
-        configured = int(os.getenv("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "10"))
-    except ValueError:
-        return 10
-    return min(max(configured, 1), 25)
-
-
 def _collections() -> list[Collection]:
     """The enabled collections. Each source validates its target when collected."""
-    enabled = _enabled_sources()
-    limit = _collection_limit()
-    query = os.getenv("PUBLIC_DISCUSSION_SEARCH_QUERY", "ASX").strip()[:100] or "ASX"
+    enabled = settings.SCHEDULED_PUBLIC_DISCUSSION_SOURCES
+    limit = settings.PUBLIC_DISCUSSION_PER_SOURCE_LIMIT
+    query = settings.PUBLIC_DISCUSSION_SEARCH_QUERY
     wanted: list[tuple[Any, str]] = []
     if "reddit" in enabled and REDDIT.configured():
         wanted.append((REDDIT, query))
@@ -137,7 +117,7 @@ def handler(event: dict, _context) -> dict:
         started_at=started_at,
         level=logging.ERROR if results["failed"] else logging.INFO,
         event_id=event_key,
-        enabled_sources=sorted(_enabled_sources()),
+        enabled_sources=sorted(settings.SCHEDULED_PUBLIC_DISCUSSION_SOURCES),
         collectors=len(collections),
         **results,
     )

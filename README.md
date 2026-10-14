@@ -94,9 +94,9 @@ export) shows up locally instead of only after a deploy.
 | `BLUESKY_IDENTIFIER` | No | Bluesky handle for authenticated search. Leave empty for public search. |
 | `BLUESKY_APP_PASSWORD` | No | Bluesky app password. Must be set with `BLUESKY_IDENTIFIER`. |
 | `PUBLIC_DISCUSSION_FEED_URLS` | For blogs | Comma-separated HTTPS RSS or Atom feed allowlist. |
-| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset. Defaults to `bluesky,mastodon`. |
-| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source. Defaults to `10` and is capped at `25`. |
-| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value. Defaults to `ASX`. |
+| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset of `reddit`, `bluesky`, `mastodon` and `blog`. Other names are ignored. Defaults to `bluesky,mastodon`. |
+| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source, from `1` to `25`. Defaults to `10`. |
+| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value, at most 100 characters. Defaults to `ASX`, also when empty. |
 | `LLM_PROVIDER` | No | Defaults to `bedrock`. `groq` remains available only for an explicit local rollback. |
 | `BEDROCK_ENABLED` | For generated summaries | Must be `true` before the app invokes Bedrock. Defaults to `false`. |
 | `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
