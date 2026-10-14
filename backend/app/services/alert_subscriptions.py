@@ -103,7 +103,7 @@ class VerificationEmailNotSent(AlertSubscriptionError):
 
 
 class InvalidVerificationLink(AlertSubscriptionError):
-    """The verification link is malformed, forged, expired or not the newest one."""
+    """The link is malformed, forged, expired, not the newest one, or its request failed."""
 
 
 class SupersededVerificationLink(AlertSubscriptionError):
@@ -246,7 +246,9 @@ def request_verification(
     ``AlertsSwitchedOff`` while the deployment sends no alerts,
     ``AlertsNotEnabled`` when the investor has alerts off,
     ``VerificationRequestedRecently`` within a minute of the last request,
-    and ``VerificationEmailNotSent`` when the link was not sent.
+    ``VerificationEmailNotSent`` when the link was not sent, and
+    ``PreferencesChangedConcurrently`` when the subscription or its rule is
+    deleted while the link goes out.
     """
     if not settings.NOTIFICATIONS_ENABLED:
         raise AlertsSwitchedOff()
@@ -282,11 +284,11 @@ def confirm(db: Session, token: str) -> None:
     """Verify the address a verification link was sent to.
 
     Only the newest request's link works, for
-    ``ALERT_VERIFICATION_TOKEN_TTL_HOURS`` after the request. Opening it again
-    once the address is verified changes nothing. Raises
-    ``InvalidVerificationLink`` for any other link, and
-    ``SupersededVerificationLink`` when the request changed while it was being
-    verified.
+    ``ALERT_VERIFICATION_TOKEN_TTL_HOURS`` after the request, and not once
+    that request is marked failed. Opening it again once the address is
+    verified changes nothing. Raises ``InvalidVerificationLink`` for any
+    other link, and ``SupersededVerificationLink`` when the request changed
+    while it was being verified.
     """
     claims = verification_token_claims(token)
     if claims is None:
