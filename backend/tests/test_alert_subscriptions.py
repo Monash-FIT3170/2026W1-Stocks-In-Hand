@@ -202,6 +202,28 @@ def test_an_unsent_verification_email_answers_by_its_outcome(
     assert preferences["verification_status"] == "failed"
 
 
+def test_a_malformed_brevo_setting_answers_500_and_fails_verification(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real Brevo sender answers Misconfigured before any request."""
+    monkeypatch.setattr(settings, "NOTIFICATIONS_DRY_RUN", False, raising=False)
+    monkeypatch.setattr(settings, "BREVO_API_KEY", "test-api-key", raising=False)
+    monkeypatch.setattr(settings, "ALERT_SENDER_EMAIL", "alerts@example.com", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "BREVO_API_BASE_URL",
+        "https://[api.brevo.com/v3",
+        raising=False,
+    )
+
+    response = api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Email verification is not configured"}
+    assert api.preferences()["verification_status"] == "failed"
+
+
 def test_a_resend_the_provider_refuses_answers_422(
     api: Api,
     monkeypatch: pytest.MonkeyPatch,

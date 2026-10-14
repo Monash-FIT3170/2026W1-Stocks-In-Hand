@@ -152,7 +152,11 @@ def web_link(value: str, *, require_https: bool) -> str | None:
     text = _single_line(value)
     if text is None or "<" in text or ">" in text:
         return None
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        # urlsplit raises for some malformed hosts, such as an unclosed "[".
+        return None
     schemes = {"https"} if require_https else {"http", "https"}
     if parts.scheme not in schemes or not parts.netloc:
         return None

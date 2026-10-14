@@ -290,6 +290,30 @@ def test_a_record_retried_after_a_temporary_refusal_sends_one_alert(
     assert _delivery(session, watched).status == "sent"
 
 
+def test_a_malformed_brevo_setting_fails_the_alert_and_retries_the_record(
+    session: SessionFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real Brevo sender answers Misconfigured before any request."""
+    monkeypatch.setattr(settings, "BREVO_API_KEY", "test-api-key", raising=False)
+    monkeypatch.setattr(settings, "ALERT_SENDER_EMAIL", "alerts@example.com", raising=False)
+    monkeypatch.setattr(
+        settings,
+        "BREVO_API_BASE_URL",
+        "https://[api.brevo.com/v3",
+        raising=False,
+    )
+    watched = _watched_artifact(session)
+
+    assert _deliver(watched) == watched.retry
+
+    delivery = _delivery(session, watched)
+    assert (delivery.status, delivery.error_code) == (
+        "failed",
+        "invalid_notification_configuration",
+    )
+
+
 def test_a_dry_run_records_the_alert_as_sent_with_a_dry_run_id(
     session: SessionFactory,
     monkeypatch: pytest.MonkeyPatch,

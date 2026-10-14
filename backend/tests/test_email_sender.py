@@ -93,6 +93,9 @@ def test_a_checked_email_comes_back_ready_to_send() -> None:
         (replace(ALERT, unsubscribe_url="/unsubscribe/?t=signed"), INVALID_MESSAGE),
         (replace(ALERT, unsubscribe_url="https://app.example.test/<x>"), INVALID_MESSAGE),
         (replace(ALERT, unsubscribe_url="mailto:unsubscribe@example.com"), INVALID_MESSAGE),
+        # urlsplit raises for these hosts, and the checks must answer instead.
+        (replace(ALERT, unsubscribe_url="https://[app.example.test/"), INVALID_MESSAGE),
+        (replace(ALERT, unsubscribe_url="https://[not-an-ip]/"), INVALID_MESSAGE),
     ],
 )
 def test_check_message_stops_an_email_no_sender_may_send(
