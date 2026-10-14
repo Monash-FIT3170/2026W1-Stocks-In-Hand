@@ -683,7 +683,6 @@ def test_the_lambda_sends_alerts_only_when_notifications_are_enabled(
     enabled: str,
     alerts: bool,
 ) -> None:
-    monkeypatch.setattr(artifact_analysis, "load_runtime_configuration", lambda: None)
     monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
     monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
     monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")

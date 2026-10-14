@@ -258,7 +258,6 @@ def test_schedule_requests_each_enabled_ticker_once_per_event(
     monkeypatch.setenv("SCHEDULED_TICKERS", "CSL,ANZ")
     monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
     monkeypatch.setenv("MARKETAUX_ENABLED", "false")
-    monkeypatch.setattr(schedule, "load_runtime_configuration", lambda: None)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(schedule.boto3, "client", lambda _service: sqs)
     event = {"id": f"scheduled-{uuid.uuid4()}"}

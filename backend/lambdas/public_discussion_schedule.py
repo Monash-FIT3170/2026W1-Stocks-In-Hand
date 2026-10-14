@@ -10,8 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.config import settings
+from app.services.discussion_sources.blog import BLOG
+from app.services.discussion_sources.bluesky import BLUESKY
+from app.services.discussion_sources.mastodon import MASTODON
+from app.services.discussion_sources.reddit import REDDIT
 from app.status import ScrapeRunStatus
-from lambdas.common import database_session, load_runtime_configuration, log_event
+from lambdas.common import database_session, log_event
 
 STAGE = "public_discussion_schedule"
 MAX_FEEDS = 5
@@ -55,13 +60,6 @@ def _collection_limit() -> int:
 
 def _collections() -> list[Collection]:
     """The enabled collections. Each source validates its target when collected."""
-    # Imported after load_runtime_configuration so settings sees the SSM values.
-    from app.core.config import settings
-    from app.services.discussion_sources.blog import BLOG
-    from app.services.discussion_sources.bluesky import BLUESKY
-    from app.services.discussion_sources.mastodon import MASTODON
-    from app.services.discussion_sources.reddit import REDDIT
-
     enabled = _enabled_sources()
     limit = _collection_limit()
     query = os.getenv("PUBLIC_DISCUSSION_SEARCH_QUERY", "ASX").strip()[:100] or "ASX"
@@ -114,7 +112,6 @@ def _collect(collection: Collection, event_key: str) -> str:
 def handler(event: dict, _context) -> dict:
     """Collect each enabled source once for one EventBridge event."""
     started_at = time.monotonic()
-    load_runtime_configuration()
     event_key = _event_key(event)
     results = {"completed": 0, "failed": 0, "skipped": 0}
     collections = _collections()

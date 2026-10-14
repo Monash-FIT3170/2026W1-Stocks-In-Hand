@@ -25,10 +25,9 @@ including generation's ``RuntimeError`` and ``ValueError``, is worth
 retrying, so ``pipeline_stage.run_stage`` still decides between a retry and
 a final failure.
 
-The Lambda imports this module before it loads its configuration from SSM,
-so nothing imported at the top of this file builds ``Settings``. Generation,
-the artifact summary rules, FinBERT and the Postgres records are imported
-where they are used.
+The Postgres records and the artifact summary rules are imported where they
+are used: importing the database layer creates the engine, and the records
+module imports this one.
 """
 
 from __future__ import annotations
@@ -44,12 +43,10 @@ import boto3
 
 from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.messages import NotificationMessage
+from app.services import generation
+from app.services import sentiment as sentiment_service
 from app.sources import adapter_matches_ticker
-from lambdas.common import (
-    PermanentDocumentError,
-    database_session,
-    load_runtime_configuration,
-)
+from lambdas.common import PermanentDocumentError, database_session
 from lambdas.download_validation import DocumentFormat, DownloadedDocument
 from lambdas.raw_documents import (
     DocumentLocation,
@@ -189,10 +186,7 @@ class FinBertScorer:
     """FinBERT, loaded from ``FINBERT_MODEL`` the first time it scores a text."""
 
     def score(self, text: str) -> Sentiment:
-        # Imported on use: the sentiment service builds Settings.
-        from app.services import sentiment
-
-        result = sentiment.analyse_text(text)
+        result = sentiment_service.analyse_text(text)
         return Sentiment(
             label=result["sentiment_label"],
             stance=result.get("label"),
@@ -435,7 +429,6 @@ def summarise(
             "Artifact has no text to summarise",
             code="no_extractable_text",
         )
-    generation = _generation()
     generated = generation.generate(
         _summary_request(
             facts,
@@ -499,7 +492,7 @@ def repair_missing_summaries(
             "artifact_ids": [str(artifact_id) for artifact_id in artifact_ids],
         }
 
-    provider = ports.provider or _generation().providers.configured_provider()
+    provider = ports.provider or generation.providers.configured_provider()
     if not provider.name.startswith("bedrock:"):
         raise RuntimeError("Structured summary repair requires Amazon Bedrock")
     bedrock = replace(ports, provider=provider)
@@ -540,9 +533,7 @@ def sqs_alert_sender(queue_url: str, client: Any | None = None) -> AlertSender:
 
 def deployed_ports() -> AnalysisPorts:
     """The ports the analysis Lambda runs with, from its environment."""
-    load_runtime_configuration()
-    # Imported once DATABASE_URL is loaded: the records import the crud
-    # layer, which builds Settings.
+    # Imported on use: the records module imports this one and the database layer.
     from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 
     notifications_enabled = os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
@@ -652,7 +643,6 @@ def _summary_request(
 
     Only an announcement's summary reads its category and extracted fields.
     """
-    generation = _generation()
     if facts.kind == "news":
         return generation.NewsSummary(
             title=title,
@@ -687,8 +677,8 @@ def _analysis(  # pylint: disable=too-many-arguments
     FinBERT reads the title and source text, never the summary, so a retry
     or a new summary cannot change the artifact's sentiment.
     """
-    sentiment = ports.scorer.score(_sentiment_input(title, text))
-    summary = _generation().generate(request, provider=ports.provider)
+    sentiment = ports.scorer.score(sentiment_service.sentiment_input(title, text))
+    summary = generation.generate(request, provider=ports.provider)
     return AnalysisResult(
         raw_text=text,
         metadata=metadata,
@@ -730,23 +720,9 @@ def _sqs_client() -> Any:
     return boto3.client("sqs")
 
 
-def _sentiment_input(title: str, text: str) -> str:
-    # Imported on use: the sentiment service builds Settings.
-    from app.services import sentiment
-
-    return sentiment.sentiment_input(title, text)
-
-
 def _has_text(generated: Generated[dict[str, object]]) -> bool:
     """Whether a summary answer has a text line; one without is never recorded."""
-    # Imported on use: the artifact summary module imports generation.
+    # Imported on use: importing the database layer creates the engine.
     from app.services import artifact_summary
 
     return bool(artifact_summary.from_generated(generated).lines)
-
-
-def _generation():
-    # Imported on use: generation builds Settings.
-    from app.services import generation
-
-    return generation

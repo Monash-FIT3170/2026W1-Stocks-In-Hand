@@ -43,7 +43,6 @@ def scheduled(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> Session:
     def test_session():
         yield db_session
 
-    monkeypatch.setattr(schedule, "load_runtime_configuration", lambda: None)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(settings, "ANALYSIS_QUEUE_URL", "")
     monkeypatch.setenv("SCHEDULED_PUBLIC_DISCUSSION_SOURCES", "bluesky")

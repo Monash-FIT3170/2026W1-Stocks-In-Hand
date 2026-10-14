@@ -12,7 +12,7 @@ import boto3
 
 from app.messages import QueueAMessage
 from app.sources import SOURCES, scheduled_tickers
-from lambdas.common import database_session, load_runtime_configuration, log_event
+from lambdas.common import database_session, log_event
 
 STAGE = "schedule"
 MAX_MARKETAUX_TICKERS_PER_RUN = 5
@@ -50,7 +50,7 @@ def _marketaux_limit() -> int:
 
 
 def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
-    """Collect a bounded Marketaux batch after SSM configuration is loaded."""
+    """Collect a bounded Marketaux batch for the first scheduled tickers."""
     result = {
         "marketaux_tickers": 0,
         "marketaux_created": 0,
@@ -60,7 +60,7 @@ def _collect_marketaux_news(tickers: list[str]) -> dict[str, int]:
     if os.getenv("MARKETAUX_ENABLED", "false").lower() != "true":
         return result
 
-    # Import after load_runtime_configuration so settings sees the SSM token.
+    # Imported on use: importing the database layer creates the engine.
     from app.services import marketaux
 
     for ticker in tickers[:MAX_MARKETAUX_TICKERS_PER_RUN]:
@@ -104,7 +104,6 @@ def _request_run(
 ) -> bool:
     """Request one scheduled run; False when this event already queued it."""
     with database_session() as db:
-        # Imported after load_runtime_configuration so settings sees the SSM values.
         from app.services.scrape_runs import request_scrape_run
 
         requested = request_scrape_run(
@@ -140,7 +139,6 @@ def _fail_abandoned_work() -> None:
 def handler(event: dict, _context) -> dict:
     """Create one durable run per ticker for a single EventBridge event."""
     started_at = time.monotonic()
-    load_runtime_configuration()
     queue_url = os.environ["DISCOVERY_QUEUE_URL"]
     sqs = boto3.client("sqs")
 

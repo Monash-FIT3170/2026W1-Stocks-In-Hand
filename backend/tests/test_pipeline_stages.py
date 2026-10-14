@@ -1227,7 +1227,6 @@ def test_schedule_fails_abandoned_work_before_requesting_runs(
     monkeypatch.setenv("SCHEDULED_TICKERS", "")
     monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
     monkeypatch.setenv("MARKETAUX_ENABLED", "false")
-    monkeypatch.setattr(schedule, "load_runtime_configuration", lambda: None)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(schedule.boto3, "client", lambda _service: FakeSqs())
 

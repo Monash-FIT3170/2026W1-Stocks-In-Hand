@@ -1,8 +1,8 @@
 """Contracts for the Brevo watchlist notification worker.
 
 How the worker delivers alerts is tested through its handler on Postgres in
-``test_alert_delivery.py``. These tests cover the message parser, the image
-and the cold-start order.
+``test_alert_delivery.py``. These tests cover the message parser and the
+image.
 """
 
 # pylint: disable=protected-access
@@ -119,16 +119,3 @@ def test_api_image_packages_the_notification_worker() -> None:
     )
     assert "lambdas/notify.py" in lambda_copy
     assert "requirements-analysis.txt" not in dockerfile
-
-
-def test_runtime_configuration_load_precedes_configured_imports() -> None:
-    """Cold starts must resolve SSM before settings and DB code are imported."""
-    source = (
-        REPOSITORY_ROOT / "backend" / "lambdas" / "notify.py"
-    ).read_text(encoding="utf-8")
-
-    load_position = source.index("\nload_runtime_configuration()\n")
-    settings_position = source.index("\nfrom app.core.config import settings")
-    sender_position = source.index("\nfrom app.services import email_sender")
-
-    assert load_position < settings_position < sender_position

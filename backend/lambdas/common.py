@@ -7,8 +7,6 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app.core.config import get_settings
-
 LOGGER = logging.getLogger("document_pipeline")
 LOGGER.setLevel(logging.INFO)
 # Matches maxReceiveCount on every pipeline queue's RedrivePolicy in
@@ -74,16 +72,11 @@ def correlation_id(record: dict[str, Any]) -> str:
     return str(record.get("messageId") or "unknown")
 
 
-def load_runtime_configuration() -> None:
-    """Build the settings, reading their secrets from SSM, before the database layer."""
-    get_settings()
-
-
 @contextmanager
 def database_session() -> Iterator[Any]:
-    load_runtime_configuration()
-    # Import after DATABASE_URL has been loaded because settings are evaluated
-    # when the database module is imported.
+    # Imported on use: importing the database layer creates the engine, which
+    # builds the settings, so a configuration error surfaces in the stage
+    # that first opens a session.
     from app.database.connection import SessionLocal
 
     session = SessionLocal()

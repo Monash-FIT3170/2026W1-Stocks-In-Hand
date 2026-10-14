@@ -53,8 +53,7 @@ class StageSubject:
 
 
 def _scrape_runs():
-    # Imported on use: the crud layer reads settings, which database_session()
-    # loads from SSM first.
+    # Imported on use: importing the database layer creates the engine.
     from app.crud import scrape_run
 
     return scrape_run
