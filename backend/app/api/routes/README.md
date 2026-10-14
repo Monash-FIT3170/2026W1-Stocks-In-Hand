@@ -96,10 +96,12 @@ Ticker routes:
 
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
   endpoints the frontend reads (`/brief`, `/news-feed`,
-  `/deep-dive-timeline`). The brief is the ticker brief read-model
-  (`app/read_models/ticker_brief.py`). Its prices come live from Yahoo
-  through the quote source (`app/services/quotes.py`) rather than being
-  stored, so there is no market data route. Each news-feed item is the
+  `/deep-dive-timeline`). Each of those is one read-model call: the brief
+  is the ticker brief (`app/read_models/ticker_brief.py`), and the news feed
+  and deep dive are the ticker's records
+  (`app/read_models/ticker_records.py`). The brief's prices come live from
+  Yahoo through the quote source (`app/services/quotes.py`) rather than
+  being stored, so there is no market data route. Each news-feed item is the
   artifact's card (`app/services/artifact_card.py`), and the deep dive reads
   summaries through the artifact summary module.
 

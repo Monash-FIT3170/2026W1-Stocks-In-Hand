@@ -5,20 +5,14 @@ from sqlalchemy.orm import Session
 
 from app.crud import ticker as crud
 from app.database.connection import get_db
-from app.read_models import ticker_brief
-from app.read_models.ticker_records import TickerNotFound, recent_artifacts, record_date
+from app.read_models import ticker_brief, ticker_records
+from app.read_models.ticker_records import TickerNotFound
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 from app.schemas.ticker_brief import TickerBrief
-from app.services import artifact_card, artifact_summary
+from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
 from app.services.quotes import QuoteSource, live_quotes
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
-
-
-def _format_month(value):
-    if not value:
-        return "Recent"
-    return value.strftime("%b %Y")
 
 
 @router.post("/", response_model=TickerResponse)
@@ -82,47 +76,19 @@ def get_ticker_brief(
         raise HTTPException(status_code=404, detail="Ticker not found") from exc
 
 
-@router.get("/symbol/{symbol}/news-feed")
+@router.get("/symbol/{symbol}/news-feed", response_model=list[NewsFeedRecord])
 def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    artifacts = recent_artifacts(db, ticker.id, limit=10)
-    return [
-        {
-            "id": str(artifact.id),
-            "ticker": ticker.symbol,
-            "time": record_date(artifact),
-            **artifact_card.artifact_card(artifact).fields(),
-            "sources": artifact_card.sources(artifact),
-        }
-        for artifact in artifacts
-    ]
+    """A ticker's newest records, each as its artifact card."""
+    try:
+        return ticker_records.read_news_feed(db, symbol)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc
 
 
-@router.get("/symbol/{symbol}/deep-dive-timeline")
+@router.get("/symbol/{symbol}/deep-dive-timeline", response_model=list[DeepDiveEvent])
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
-    """Return only persisted filing events; an empty history stays empty."""
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    artifacts = recent_artifacts(db, ticker.id, limit=10)
-    timeline = []
-    for artifact in artifacts:
-        summary = artifact_summary.read(artifact)
-        timeline.append(
-            {
-                "month": _format_month(artifact.published_at),
-                "tag": artifact_card.tag(artifact),
-                "title": artifact.title or f"{ticker.symbol} update",
-                "date": record_date(artifact),
-                "detail": summary.text if summary else None,
-                "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
-                "tone": "green",
-                "sources": artifact_card.sources(artifact),
-            }
-        )
-
-    return timeline
+    """A ticker's research history from its stored records; with none it is empty."""
+    try:
+        return ticker_records.read_deep_dive(db, symbol)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc

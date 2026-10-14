@@ -29,17 +29,18 @@ from sqlalchemy.orm import Session, sessionmaker
 import app.models  # noqa: F401
 import main
 from app.api.routes import category_sentiment
-from app.api.routes import ticker as ticker_route
 from app.core.config import settings
 from app.database.connection import get_db
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_ticker_mention import ArtifactTickerMention
+from app.models.information_platform import InformationPlatform
 from app.models.ticker import Ticker
-from app.read_models import ticker_brief, ticker_sentiment
-from app.read_models.ticker_records import TickerNotFound
+from app.read_models import ticker_brief, ticker_records, ticker_sentiment
+from app.read_models.ticker_records import PAGE_RECORDS, TickerNotFound
 from app.schemas.public_discussion import PublicDiscussionSource
 from app.schemas.ticker_brief import KeyNumber, TickerBrief, TickerOverview
+from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
 from app.services import artifact_summary
 from app.services.artifact_summary import Summary
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
@@ -346,12 +347,22 @@ def test_the_deep_dive_detail_is_the_recorded_summary_text(db_session: Session) 
     _artifact(db_session, ticker, day=3, title="Unsummarised update")
 
     timeline = {
-        event["title"]: event
-        for event in ticker_route.get_ticker_deep_dive_timeline(ticker.symbol, db=db_session)
+        event.title: event for event in ticker_records.read_deep_dive(db_session, ticker.symbol)
     }
 
-    assert timeline["Half-year result"]["detail"] == summary.text
-    assert timeline["Unsummarised update"]["detail"] is None
+    assert timeline["Half-year result"].detail == summary.text
+    assert timeline["Unsummarised update"].detail is None
+
+
+def test_the_deep_dive_shows_the_ten_newest_records_newest_first(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    for day in range(1, 12):
+        _artifact(db_session, ticker, day=day)
+
+    timeline = ticker_records.read_deep_dive(db_session, ticker.symbol)
+
+    assert [event.title for event in timeline] == [f"Update {day}" for day in range(11, 1, -1)]
+    assert [event.date for event in timeline[:2]] == ["Jan 11, 2040", "Jan 10, 2040"]
 
 
 def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:
@@ -367,6 +378,14 @@ def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:
         artifact_metadata={"source_name": "publisher.example"},
     )
     _record(db_session, news, NEWS_ANSWER)
+    unnamed = _artifact(
+        db_session,
+        ticker,
+        day=1,
+        source_type="news",
+        artifact_type="news_article",
+        title="Unattributed story",
+    )
     filing = _artifact(
         db_session,
         ticker,
@@ -375,13 +394,10 @@ def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:
         url="https://example.test/filing",
     )
 
-    feed = {
-        item["id"]: item
-        for item in ticker_route.get_ticker_news_feed(ticker.symbol.lower(), db=db_session)
-    }
+    feed = {item.id: item for item in ticker_records.read_news_feed(db_session, ticker.symbol)}
     card_fields = ("tag", "source_name", "source_label", "about", "changed", "matters")
 
-    assert {key: feed[str(news.id)][key] for key in card_fields} == {
+    assert feed[news.id].model_dump(include=set(card_fields)) == {
         "tag": "News Article",
         "source_name": "publisher.example",
         "source_label": "View original at publisher.example",
@@ -389,7 +405,11 @@ def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:
         "changed": NEWS_ANSWER["changed"],
         "matters": NEWS_ANSWER["matters"],
     }
-    assert {key: feed[str(filing.id)][key] for key in card_fields} == {
+    assert (feed[unnamed.id].source_name, feed[unnamed.id].source_label) == (
+        None,
+        "View original source",
+    )
+    assert feed[filing.id].model_dump(include=set(card_fields)) == {
         "tag": "Asx Announcement Other",
         "source_name": "ASX",
         "source_label": "View original ASX filing",
@@ -397,8 +417,54 @@ def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:
         "changed": None,
         "matters": None,
     }
+    assert (feed[filing.id].ticker, feed[filing.id].time) == (ticker.symbol, "Jan 3, 2040")
     # The raw text is still offered, but only as the original's evidence.
-    assert [source["evidence_text"] for source in feed[str(filing.id)]["sources"]] == [RAW_TEXT]
+    assert [source.evidence_text for source in feed[filing.id].sources] == [RAW_TEXT]
+
+
+@pytest.mark.parametrize("read", [ticker_records.read_news_feed, ticker_records.read_deep_dive])
+def test_reading_records_runs_the_same_queries_however_many_there_are(
+    db_session: Session,
+    read,
+) -> None:
+    counts = []
+    for records in (1, PAGE_RECORDS):
+        ticker = _ticker(db_session)
+        for day in range(1, records + 1):
+            platform = InformationPlatform(name=f"Publisher {day}", platform_type="news")
+            db_session.add(platform)
+            db_session.flush()
+            news = _artifact(
+                db_session,
+                ticker,
+                day=day,
+                source_type="news",
+                artifact_type="news_article",
+                platform_id=platform.id,
+            )
+            _record(db_session, news, NEWS_ANSWER)
+        symbol = ticker.symbol
+        db_session.expire_all()
+        with _statements(db_session) as statements:
+            assert len(read(db_session, symbol)) == records
+        counts.append(len(statements))
+
+    assert counts[0] == counts[1]
+
+
+def test_the_record_routes_answer_their_schemas(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    _record(db_session, _artifact(db_session, ticker, url="https://example.test/a"), NEWS_ANSWER)
+
+    with _api(db_session) as client:
+        feed = client.get(f"/tickers/symbol/{ticker.symbol.lower()}/news-feed")
+        history = client.get(f"/tickers/symbol/{ticker.symbol}.AX/deep-dive-timeline")
+        missing = client.get("/tickers/symbol/NOT-A-TICKER/news-feed")
+
+    assert feed.status_code == history.status_code == 200
+    assert set(feed.json()[0]) == set(NewsFeedRecord.model_fields)
+    assert set(history.json()[0]) == set(DeepDiveEvent.model_fields)
+    assert missing.status_code == 404
 
 
 @pytest.mark.usefixtures("without_model_runtime")

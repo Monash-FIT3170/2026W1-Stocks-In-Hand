@@ -12,7 +12,7 @@ Read components/layout/AppFrame.jsx and AppFrame.module.css for nav/tokens/fonts
 
 ## API reads
 
-Frontend /api proxies to localhost:8000. Both servers and Supabase are running. Use existing fetch helpers only. The authoritative backend contracts are the response schemas in backend/app/schemas (ticker_brief.py, category_sentiment.py, public_discussion.py) and, for records and history, backend/app/api/routes/ticker.py. A migrated database already holds every supported ticker. 404, empty arrays, nulls and request failures need independent honest handling. Do not run POST scrape/generate routes.
+Frontend /api proxies to localhost:8000. Both servers and Supabase are running. Use existing fetch helpers only. The authoritative backend contracts are the response schemas in backend/app/schemas: ticker_brief.py, ticker_records.py, category_sentiment.py and public_discussion.py. A migrated database already holds every supported ticker. 404, empty arrays, nulls and request failures need independent honest handling. Do not run POST scrape/generate routes.
 
 ### Brief: fetchTickerBrief(symbol)
 
@@ -30,7 +30,7 @@ Source = `{label,title,url,published_at:ISO|null,evidence_text:string|null}`. Ke
 
 GET /tickers/symbol/{symbol}/news-feed -> Record[] (up to ten persisted records, newest first; not exhaustive, no server pagination).
 
-Record = `{ticker,tag,time,title,about,changed,matters,url,source_type,source_name,source_label,sources:Source[]}`. time is DISPLAY date, no stable id/ISO date supplied. Preserve context, change, research angle, provenance and original-source link. Distinguish official filings, publisher news, public discussion. about, changed and matters are null until the record's summary has that line; never put raw text or invented summaries in their place. source_name is ASX for filings, the platform for Reddit posts, else the publisher or provider, or null. Client-side search/filter/reader selection welcome; start fresh rather than copying announcement-card composition.
+Record = `{id,ticker,tag,time,title,about,changed,matters,url,source_type,source_name,source_label,sources:Source[]}`. id is the record's stable artifact id. time is DISPLAY date; no ISO date is supplied. Preserve context, change, research angle, provenance and original-source link. Distinguish official filings, publisher news, public discussion. about, changed and matters are null until the record's summary has that line; never put raw text or invented summaries in their place. source_name is ASX for filings, the platform for Reddit posts, else the publisher or provider, or null. Client-side search/filter/reader selection welcome; start fresh rather than copying announcement-card composition.
 
 ### History: fetchTickerDeepDive(symbol)
 

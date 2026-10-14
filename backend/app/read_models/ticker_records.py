@@ -1,4 +1,10 @@
-"""Ticker records: which ticker a page asks about, and which artifacts are its records."""
+"""Ticker records: which ticker a page asks about, and the artifacts that are its records.
+
+A ticker's records are the artifacts stored against it, newest published
+first. Its news feed shows each as its artifact card, and its deep dive as
+an entry of its research history with the summary's text. Both read the
+summaries loaded with the records, so neither runs a query per record.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.crud import ticker as ticker_crud
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
-from app.services import artifact_summary
+from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
+from app.services import artifact_card, artifact_summary
+
+# How many records the news feed and the deep dive show.
+PAGE_RECORDS = 10
 
 
 class TickerNotFound(LookupError):
@@ -25,6 +35,50 @@ def find_ticker(db: Session, symbol: str) -> Ticker:
     if ticker is None:
         raise TickerNotFound(f"Ticker '{symbol}' not found")
     return ticker
+
+
+def read_news_feed(db: Session, symbol: str) -> list[NewsFeedRecord]:
+    """The ticker's newest records, each as its artifact card.
+
+    Raises ``TickerNotFound`` for a symbol with no ticker.
+    """
+    ticker = find_ticker(db, symbol)
+    return [
+        NewsFeedRecord(
+            id=artifact.id,
+            ticker=ticker.symbol,
+            time=record_date(artifact),
+            **artifact_card.artifact_card(artifact).fields(),
+            sources=artifact_card.sources(artifact),
+        )
+        for artifact in recent_artifacts(db, ticker.id, limit=PAGE_RECORDS)
+    ]
+
+
+def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
+    """The ticker's newest records as its research history. No records, no history.
+
+    Raises ``TickerNotFound`` for a symbol with no ticker.
+    """
+    ticker = find_ticker(db, symbol)
+    events: list[DeepDiveEvent] = []
+    for artifact in recent_artifacts(db, ticker.id, limit=PAGE_RECORDS):
+        summary = artifact_summary.read(artifact)
+        events.append(
+            DeepDiveEvent(
+                month=(
+                    artifact.published_at.strftime("%b %Y") if artifact.published_at else "Recent"
+                ),
+                tag=artifact_card.tag(artifact),
+                title=artifact.title or f"{ticker.symbol} update",
+                date=record_date(artifact),
+                detail=summary.text if summary else None,
+                metrics=[f"Source: {artifact.source_type or artifact.artifact_type}"],
+                tone="green",
+                sources=artifact_card.sources(artifact),
+            )
+        )
+    return events
 
 
 def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifact]:
