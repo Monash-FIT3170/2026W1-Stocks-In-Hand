@@ -1,52 +1,69 @@
 # Core Implementation
 
-The `core` folder contains backend-wide configuration and shared application
-settings.
+The `core` folder holds the runtime configuration: every setting a backend
+process runs with.
 
 ## Files
 
 `config.py`
 
-Defines the `Settings` class and creates the shared `settings` object.
-
-The most important setting currently is:
-
-`DATABASE_URL`
-
-This value tells SQLAlchemy and Alembic which database to connect to.
+Declares the `Settings` dataclass and the shared `settings` object.
 
 ## How Configuration Works
 
-The backend reads configuration from environment variables first:
+Each setting is declared once, as a field of `Settings` named after its
+environment variable, with its default and its limits:
 
 ```python
-os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/spike")
+ALERT_DAILY_BUDGET: int = integer(180, minimum=0)
+AUTH_PROVIDER: str = text("legacy", strip=True, lower=True, choices=("legacy", "dual", "cognito"))
 ```
 
-That means:
+The declaration helpers are `text`, `flag`, `integer`, `fraction` and
+`names` (a comma-separated list).
 
-1. If `DATABASE_URL` is set in the environment, the backend uses it.
-2. If it is not set, the backend falls back to the local Postgres URL.
+`settings` is built the first time any setting is read, not when the module
+is imported:
 
-Docker compose files set `DATABASE_URL` for container runs, so the backend
-connects to the Postgres service inside Docker instead of trying to use
-`localhost`.
+1. A variable that is set is read, even when it is empty.
+2. A variable that is not set keeps the declared default.
+3. The whole set is checked at that first read. A malformed value, or one
+   outside its limits, raises `ConfigurationError`. The error names every bad
+   variable and the limit it broke, never the value.
+
+`ConfigurationError` is not a `ValueError`, so a route's `except ValueError`
+cannot turn a broken deployment into a 400.
+
+For local runs, importing `config.py` loads `backend/.env` into the
+environment without overriding variables that are already set. Docker
+compose files set their own values, such as `DATABASE_URL`, so containers
+connect to their own services instead of `localhost`.
 
 ## Where It Is Used
 
-`settings.DATABASE_URL` is used by:
+Modules import the shared object and read it where they need a value:
 
-- `app/database/connection.py` to create the SQLAlchemy engine.
-- `alembic/env.py` to run database migrations against the correct database.
+```python
+from app.core.config import settings
+
+settings.DATABASE_URL
+```
+
+A few modules read a setting when they are imported, such as
+`app/database/connection.py` (`DATABASE_URL`) and `main.py`
+(`CORS_ORIGINS`). That builds the settings at that point.
+
+## Tests
+
+Patch `settings` with `patch.object` or `monkeypatch.setattr`. Do not set an
+environment variable for a setting: the first read keeps whatever the
+environment held then, so the value would leak into later tests. A test of
+how a value is read calls `Settings.from_environment({...})`, as
+`tests/test_runtime_configuration.py` does.
 
 ## When To Add More Settings
 
-Add new values here when they are application-level configuration, such as:
-
-- database URLs;
-- API keys;
-- model names;
-- allowed frontend origins;
-- environment-specific feature flags.
-
-Avoid hard-coding those values directly in route, CRUD, or model files.
+Declare a new value here when it is configuration, such as a URL, a key, a
+model name, a limit or a feature switch. Give it its limits in the
+declaration, so a bad value fails at the first read instead of where it is
+used, and read it through `settings`, never with `os.getenv`.

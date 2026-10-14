@@ -1,8 +1,35 @@
-"""Environment-backed application settings."""
+"""The runtime configuration: every setting a backend process runs with.
+
+Each setting is declared once, as a field of ``Settings`` named after its
+environment variable, with its default and its limits. ``settings`` is built
+from the environment the first time any setting is read, and the whole set is
+checked then: a malformed value, or one outside its limits, raises
+``ConfigurationError``, which names every bad variable and never its value.
+
+Two rules follow from building on first use:
+
+- Importing this module reads no setting, so any module may import
+  ``settings`` at the top, in any order.
+- Tests patch ``settings`` with ``patch.object`` or ``monkeypatch.setattr``
+  and never set an environment variable for a setting: the first read keeps
+  whatever the environment held then. A test of how a value is read builds
+  its own ``Settings.from_environment``.
+
+Only the standard library and ``app`` modules that need nothing else are
+imported here, because the queue-wiring CI job imports this module with just
+pytest and PyYAML installed.
+"""
+
+from __future__ import annotations
 
 import os
+import threading
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import Any, Literal, cast
 
+from app.alert_vocabulary import DEFAULT_ALERT_MIN_CONFIDENCE
 from app.sources import SOURCES
 
 
@@ -26,191 +53,261 @@ def _load_local_env() -> None:
 _load_local_env()
 
 
-def _env_int(name: str, default: int, *, minimum: int) -> int:
-    value = int(os.getenv(name, str(default)))
-    if value < minimum:
-        raise ValueError(f"{name} must be at least {minimum}")
-    return value
+class ConfigurationError(Exception):
+    """The environment holds settings the backend cannot run with.
 
-
-def _env_confidence(name: str, default: float) -> float:
-    value = float(os.getenv(name, str(default)))
-    if not 0 <= value <= 1:
-        raise ValueError(f"{name} must be between 0 and 1")
-    return value
-
-
-def _first_env(*names: str) -> str:
-    """Return the first non-empty value from equivalent environment names."""
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value:
-            return value
-    return ""
-
-
-class Settings:
-    """Application configuration loaded from environment variables.
-
-    The database layer reads ``DATABASE_URL`` from this settings object. In
-    Docker this value is supplied by the compose file. During local development,
-    if no environment variable is set, the backend falls back to the local
-    Postgres URL below.
+    It is deliberately not a ValueError, so no ``except ValueError`` can take
+    it for a bad request. ``problems`` names each bad variable and the limit
+    it broke, never the value, because a value may be a secret.
     """
 
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://user:password@localhost:5432/spike"
-    )
-    AWS_REGION: str = os.getenv("AWS_REGION", "ap-southeast-2")
-    AUTH_PROVIDER: str = os.getenv("AUTH_PROVIDER", "legacy").strip().lower()
-    COGNITO_USER_POOL_ID: str = os.getenv("COGNITO_USER_POOL_ID", "").strip()
-    COGNITO_APP_CLIENT_ID: str = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
-    COGNITO_ISSUER: str = os.getenv("COGNITO_ISSUER", "").strip()
-    COGNITO_JWKS_CACHE_SECONDS: int = int(
-        os.getenv("COGNITO_JWKS_CACHE_SECONDS", "300")
-    )
-    COGNITO_LINK_EXISTING_BY_EMAIL: bool = (
-        os.getenv("COGNITO_LINK_EXISTING_BY_EMAIL", "false").lower() == "true"
-    )
-    DISCOVERY_QUEUE_URL: str = os.getenv("DISCOVERY_QUEUE_URL", "")
-    ANALYSIS_QUEUE_URL: str = os.getenv("ANALYSIS_QUEUE_URL", "")
-    NOTIFICATIONS_ENABLED: bool = (
-        os.getenv("NOTIFICATIONS_ENABLED", "false").lower() == "true"
-    )
-    NOTIFICATIONS_DRY_RUN: bool = (
-        os.getenv("NOTIFICATIONS_DRY_RUN", "false").lower() == "true"
-    )
-    ALERT_SENDER_EMAIL: str = os.getenv("ALERT_SENDER_EMAIL", "")
-    ALERT_SENDER_NAME: str = os.getenv("ALERT_SENDER_NAME", "Stocks In Hand")
-    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
-    BREVO_API_BASE_URL: str = os.getenv(
-        "BREVO_API_BASE_URL",
-        "https://api.brevo.com/v3",
-    )
-    ALERT_DAILY_BUDGET: int = _env_int(
-        "ALERT_DAILY_BUDGET",
-        180,
-        minimum=0,
-    )
-    ALERT_MAX_PER_INVESTOR_PER_RUN: int = _env_int(
-        "ALERT_MAX_PER_INVESTOR_PER_RUN",
-        5,
-        minimum=1,
-    )
-    ALERT_DEFAULT_MIN_CONFIDENCE: float = _env_confidence(
-        "ALERT_DEFAULT_MIN_CONFIDENCE",
-        0.75,
-    )
-    ALERT_CLAIM_STALE_MINUTES: int = _env_int(
-        "ALERT_CLAIM_STALE_MINUTES",
-        15,
-        minimum=1,
-    )
-    ALERT_VERIFICATION_TOKEN_TTL_HOURS: int = _env_int(
-        "ALERT_VERIFICATION_TOKEN_TTL_HOURS",
-        24,
-        minimum=1,
-    )
-    FRONTEND_BASE_URL: str = os.getenv(
-        "FRONTEND_BASE_URL",
-        "http://localhost:3000",
-    )
-    SUPPORTED_TICKERS: list[str] = [
-        ticker.strip().upper()
-        for ticker in os.getenv(
-            "SUPPORTED_TICKERS",
-            ",".join(SOURCES),
-        ).split(",")
-        if ticker.strip()
-    ]
-    REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "")
-    REDDIT_CLIENT_SECRET: str = os.getenv("REDDIT_CLIENT_SECRET", "")
-    REDDIT_USER_AGENT: str = os.getenv(
-        "REDDIT_USER_AGENT",
-        "windows:stocks-in-hand:1.0.0 (read-only ASX market research)",
-    )
-    BLUESKY_IDENTIFIER: str = os.getenv("BLUESKY_IDENTIFIER", "")
-    BLUESKY_APP_PASSWORD: str = os.getenv("BLUESKY_APP_PASSWORD", "")
-    BLUESKY_SERVICE_URL: str = os.getenv(
-        "BLUESKY_SERVICE_URL",
-        "https://bsky.social",
-    ).rstrip("/")
-    BLUESKY_PUBLIC_API_URL: str = os.getenv(
-        "BLUESKY_PUBLIC_API_URL",
-        "https://public.api.bsky.app",
-    ).rstrip("/")
-    PUBLIC_DISCUSSION_FEED_URLS: list[str] = [
-        url.strip()
-        for url in os.getenv("PUBLIC_DISCUSSION_FEED_URLS", "").split(",")
-        if url.strip()
-    ]
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "bedrock").strip().lower()
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-    BEDROCK_ENABLED: bool = (
-        os.getenv("BEDROCK_ENABLED", "false").lower() == "true"
-    )
-    BEDROCK_MODEL_ID: str = os.getenv(
-        "BEDROCK_MODEL_ID",
-        "openai.gpt-oss-120b-1:0",
-    ).strip()
-    BEDROCK_SERVICE_TIER: str = os.getenv(
-        "BEDROCK_SERVICE_TIER",
-        "default",
-    ).strip().lower()
-    BEDROCK_MAX_PROMPT_CHARS: int = _env_int(
-        "BEDROCK_MAX_PROMPT_CHARS",
-        30000,
-        minimum=1000,
-    )
-    FINBERT_MODEL: str = os.getenv("FINBERT_MODEL", "/app/finbert")
-    MARKETAUX_API_TOKEN: str = _first_env(
-        "MARKETAUX_API_TOKEN",
-        "MARKETAUX_API_KEY",
-    )
-    MARKETAUX_BASE_URL: str = os.getenv(
-        "MARKETAUX_BASE_URL",
-        "https://api.marketaux.com/v1",
-    )
-    NEWS_FETCH_LIMIT: int = int(os.getenv("NEWS_FETCH_LIMIT", "10"))
+    def __init__(self, problems: Sequence[str]) -> None:
+        self.problems = tuple(problems)
+        super().__init__("Invalid runtime configuration: " + "; ".join(self.problems))
 
-    CORS_ORIGINS: list[str] = [
-        origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-        if origin.strip()
-    ]
-    SESSION_COOKIE_NAME: str = os.getenv("SESSION_COOKIE_NAME", "stonks_session")
-    SESSION_EXPIRE_DAYS: int = int(os.getenv("SESSION_EXPIRE_DAYS", "7"))
-    SESSION_COOKIE_SECURE: bool = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
-    SESSION_COOKIE_SAMESITE: str = os.getenv("SESSION_COOKIE_SAMESITE", "lax")
 
-settings = Settings()
+# Reads one variable's text. It raises ValueError saying which limit the text
+# breaks, without the text.
+Parse = Callable[[str], Any]
 
-if settings.AUTH_PROVIDER not in {"legacy", "dual", "cognito"}:
-    raise ValueError("AUTH_PROVIDER must be 'legacy', 'dual', or 'cognito'")
 
-if settings.LLM_PROVIDER not in {"bedrock", "groq"}:
-    raise ValueError("LLM_PROVIDER must be 'bedrock' or 'groq'")
+def _setting(default: Any, parse: Parse, *, aliases: Sequence[str] = ()) -> Any:
+    metadata = {"parse": parse, "aliases": tuple(aliases)}
+    if isinstance(default, list):
+        return field(default_factory=lambda: list(default), metadata=metadata)
+    return field(default=default, metadata=metadata)
 
-if settings.BEDROCK_SERVICE_TIER not in {"default", "flex", "priority"}:
-    raise ValueError(
-        "BEDROCK_SERVICE_TIER must be 'default', 'flex', or 'priority'"
+
+def text(
+    default: str = "",
+    *,
+    strip: bool = False,
+    lower: bool = False,
+    rstrip: str = "",
+    choices: Sequence[str] = (),
+    non_empty: bool = False,
+    aliases: Sequence[str] = (),
+) -> str:
+    """A text setting. Each alias is read in turn when the variable is empty."""
+
+    def parse(raw: str) -> str:
+        value = raw.strip() if strip else raw
+        value = value.lower() if lower else value
+        value = value.rstrip(rstrip) if rstrip else value
+        if choices and value not in choices:
+            raise ValueError(f"must be one of {', '.join(choices)}")
+        if non_empty and not value:
+            raise ValueError("must not be empty")
+        return value
+
+    return cast(str, _setting(default, parse, aliases=aliases))
+
+
+def flag(default: bool = False) -> bool:
+    """A switch: "true" in any case turns it on, anything else turns it off."""
+    return cast(bool, _setting(default, lambda raw: raw.lower() == "true"))
+
+
+def integer(default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    """A whole number within its limits."""
+
+    def parse(raw: str) -> int:
+        try:
+            value = int(raw)
+        except ValueError:
+            raise ValueError("must be a whole number") from None
+        if minimum is not None and value < minimum:
+            raise ValueError(f"must be at least {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"must be at most {maximum}")
+        return value
+
+    return cast(int, _setting(default, parse))
+
+
+def fraction(default: float) -> float:
+    """A number from 0 to 1."""
+
+    def parse(raw: str) -> float:
+        try:
+            value = float(raw)
+        except ValueError:
+            raise ValueError("must be a number") from None
+        if not 0 <= value <= 1:
+            raise ValueError("must be from 0 to 1")
+        return value
+
+    return cast(float, _setting(default, parse))
+
+
+def names(default: Sequence[str], *, case: Literal["upper", "lower", "keep"]) -> list[str]:
+    """A comma-separated list. Each entry is trimmed and empty entries are dropped."""
+    convert: Callable[[str], str] = {
+        "upper": str.upper,
+        "lower": str.lower,
+        "keep": lambda entry: entry,
+    }[case]
+
+    def parse(raw: str) -> list[str]:
+        return [convert(entry.strip()) for entry in raw.split(",") if entry.strip()]
+
+    return cast(list[str], _setting(list(default), parse))
+
+
+def _raw(environ: Mapping[str, str], variables: Sequence[str]) -> str | None:
+    """The first of ``variables`` that is set and not empty, or the first set.
+
+    None when none of them is set, so the setting keeps its default.
+    """
+    present = [environ[variable] for variable in variables if variable in environ]
+    if not present:
+        return None
+    return next((value for value in present if value.strip()), present[0])
+
+
+@dataclass(repr=False, eq=False)
+class Settings:
+    """Every setting with its default and limits. Read them through ``settings``.
+
+    ``repr`` is the plain object one, so no log line can show a value.
+    """
+
+    DATABASE_URL: str = text("postgresql://user:password@localhost:5432/spike")
+    AWS_REGION: str = text("ap-southeast-2")
+    AUTH_PROVIDER: str = text(
+        "legacy", strip=True, lower=True, choices=("legacy", "dual", "cognito")
     )
+    COGNITO_USER_POOL_ID: str = text(strip=True)
+    COGNITO_APP_CLIENT_ID: str = text(strip=True)
+    COGNITO_ISSUER: str = text(strip=True)
+    COGNITO_JWKS_CACHE_SECONDS: int = integer(300)
+    COGNITO_LINK_EXISTING_BY_EMAIL: bool = flag()
+    DISCOVERY_QUEUE_URL: str = text()
+    ANALYSIS_QUEUE_URL: str = text()
+    NOTIFICATIONS_ENABLED: bool = flag()
+    NOTIFICATIONS_DRY_RUN: bool = flag()
+    ALERT_SENDER_EMAIL: str = text()
+    ALERT_SENDER_NAME: str = text("Stocks In Hand")
+    BREVO_API_KEY: str = text()
+    BREVO_API_BASE_URL: str = text("https://api.brevo.com/v3")
+    ALERT_DAILY_BUDGET: int = integer(180, minimum=0)
+    ALERT_MAX_PER_INVESTOR_PER_RUN: int = integer(5, minimum=1)
+    # The threshold the preferences page shows before an investor saves a rule.
+    ALERT_DEFAULT_MIN_CONFIDENCE: float = fraction(float(DEFAULT_ALERT_MIN_CONFIDENCE))
+    ALERT_CLAIM_STALE_MINUTES: int = integer(15, minimum=1)
+    ALERT_VERIFICATION_TOKEN_TTL_HOURS: int = integer(24, minimum=1)
+    FRONTEND_BASE_URL: str = text("http://localhost:3000")
+    # The tickers an admin may scrape by hand.
+    SUPPORTED_TICKERS: list[str] = names(tuple(SOURCES), case="upper")
+    REDDIT_CLIENT_ID: str = text()
+    REDDIT_CLIENT_SECRET: str = text()
+    REDDIT_USER_AGENT: str = text("windows:stocks-in-hand:1.0.0 (read-only ASX market research)")
+    BLUESKY_IDENTIFIER: str = text()
+    BLUESKY_APP_PASSWORD: str = text()
+    BLUESKY_SERVICE_URL: str = text("https://bsky.social", rstrip="/")
+    BLUESKY_PUBLIC_API_URL: str = text("https://public.api.bsky.app", rstrip="/")
+    PUBLIC_DISCUSSION_FEED_URLS: list[str] = names((), case="keep")
+    LLM_PROVIDER: str = text("bedrock", strip=True, lower=True, choices=("bedrock", "groq"))
+    GROQ_API_KEY: str = text()
+    GROQ_MODEL: str = text("openai/gpt-oss-120b")
+    BEDROCK_ENABLED: bool = flag()
+    BEDROCK_MODEL_ID: str = text("openai.gpt-oss-120b-1:0", strip=True, non_empty=True)
+    BEDROCK_SERVICE_TIER: str = text(
+        "default", strip=True, lower=True, choices=("default", "flex", "priority")
+    )
+    BEDROCK_MAX_PROMPT_CHARS: int = integer(30000, minimum=1000)
+    FINBERT_MODEL: str = text("/app/finbert")
+    MARKETAUX_API_TOKEN: str = text(strip=True, aliases=("MARKETAUX_API_KEY",))
+    MARKETAUX_BASE_URL: str = text("https://api.marketaux.com/v1")
+    NEWS_FETCH_LIMIT: int = integer(10)
+    CORS_ORIGINS: list[str] = names(("http://localhost:3000",), case="keep")
+    SESSION_COOKIE_NAME: str = text("stonks_session")
+    SESSION_EXPIRE_DAYS: int = integer(7)
+    SESSION_COOKIE_SECURE: bool = flag()
+    SESSION_COOKIE_SAMESITE: str = text("lax")
 
-if not settings.BEDROCK_MODEL_ID:
-    raise ValueError("BEDROCK_MODEL_ID must not be empty")
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str]) -> Settings:
+        """The settings ``environ`` holds. ``environ`` is only read.
 
-if settings.AUTH_PROVIDER in {"dual", "cognito"}:
-    missing_cognito_settings = [
-        name
-        for name in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID")
-        if not getattr(settings, name)
-    ]
-    if missing_cognito_settings:
-        raise ValueError(
-            "Cognito authentication requires: "
-            + ", ".join(missing_cognito_settings)
-        )
-    if settings.COGNITO_JWKS_CACHE_SECONDS <= 0:
-        raise ValueError("COGNITO_JWKS_CACHE_SECONDS must be greater than zero")
+        A variable that is set is read even when it is empty. Every bad value
+        is reported in one ConfigurationError.
+        """
+        values: dict[str, Any] = {}
+        problems: list[str] = []
+        for setting in fields(cls):
+            raw = _raw(environ, (setting.name, *setting.metadata["aliases"]))
+            if raw is None:
+                continue
+            try:
+                values[setting.name] = setting.metadata["parse"](raw)
+            except ValueError as error:
+                problems.append(f"{setting.name} {error}")
+        built = cls(**values)
+        problems.extend(built._sign_in_problems())
+        if problems:
+            raise ConfigurationError(problems)
+        return built
+
+    def _sign_in_problems(self) -> list[str]:
+        """Cognito sign-in needs its user pool, its app client and a JWKS cache."""
+        if self.AUTH_PROVIDER not in {"dual", "cognito"}:
+            return []
+        when = f"when AUTH_PROVIDER is {self.AUTH_PROVIDER}"
+        problems = [
+            f"{name} must be set {when}"
+            for name in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID")
+            if not getattr(self, name)
+        ]
+        if self.COGNITO_JWKS_CACHE_SECONDS <= 0:
+            problems.append(f"COGNITO_JWKS_CACHE_SECONDS must be greater than zero {when}")
+        return problems
+
+
+_lock = threading.Lock()
+_built: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """This process's settings, built from its environment at the first call."""
+    global _built
+    built = _built
+    if built is None:
+        with _lock:
+            built = _built
+            if built is None:
+                built = _built = Settings.from_environment(os.environ)
+    return built
+
+
+def reset_settings() -> None:
+    """Forget the built settings, so the next read builds them again. For tests."""
+    global _built
+    with _lock:
+        _built = None
+
+
+class _SettingsProxy:
+    """Stands in for the built Settings, so importing this module builds nothing.
+
+    Reading, setting or deleting an attribute builds the settings first, then
+    acts on them, so ``patch.object(settings, ...)`` and
+    ``monkeypatch.setattr(settings, ...)`` patch the real values.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_settings(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(get_settings(), name, value)
+
+    def __delattr__(self, name: str) -> None:
+        delattr(get_settings(), name)
+
+    def __repr__(self) -> str:
+        return "<settings, built from the environment at the first read>"
+
+
+settings: Settings = cast(Settings, _SettingsProxy())
