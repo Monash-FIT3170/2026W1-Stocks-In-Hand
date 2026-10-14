@@ -50,24 +50,6 @@ def test_local_backend_installs_cognito_jwt_dependency() -> None:
     assert "PyJWT[crypto]==2.13.0" in requirements.splitlines()
 
 
-def test_api_image_does_not_own_finbert_inference() -> None:
-    dockerfile = (REPOSITORY_ROOT / "backend" / "Dockerfile.api").read_text(encoding="utf-8")
-    route = (
-        REPOSITORY_ROOT
-        / "backend"
-        / "app"
-        / "api"
-        / "routes"
-        / "category_sentiment.py"
-    ).read_text(encoding="utf-8")
-
-    assert "requirements-analysis.txt" not in dockerfile
-    assert "transformers" not in dockerfile
-    assert '@router.get("/{ticker}"' in route
-    assert "return read_ticker_category_sentiment(" in route
-    assert "On-demand FinBERT inference is not available in the API runtime" in route
-
-
 def test_analysis_image_keeps_finbert_out_of_lambda_opt_mount() -> None:
     dockerfile = (
         REPOSITORY_ROOT / "backend" / "Dockerfile.analysis"

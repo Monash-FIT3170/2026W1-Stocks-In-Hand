@@ -8,6 +8,11 @@ RUN pip install \
 
 COPY app ${LAMBDA_TASK_ROOT}/app
 COPY lambdas/__init__.py lambdas/common.py lambdas/schedule.py lambdas/notify.py lambdas/public_discussion_schedule.py ${LAMBDA_TASK_ROOT}/lambdas/
+# The category sentiment view looks up each stored category's sentiment
+# bucket in the taxonomy. Both packages use only the standard library.
+COPY parsing/__init__.py ${LAMBDA_TASK_ROOT}/parsing/
+COPY parsing/categories ${LAMBDA_TASK_ROOT}/parsing/categories
+COPY parsing/classification ${LAMBDA_TASK_ROOT}/parsing/classification
 COPY main.py lambda_api.py viewer.html ${LAMBDA_TASK_ROOT}/
 
 CMD ["lambda_api.handler"]

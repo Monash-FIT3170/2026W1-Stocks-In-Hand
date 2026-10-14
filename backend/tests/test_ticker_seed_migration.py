@@ -18,9 +18,10 @@ from sqlalchemy.orm import Session, sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.models  # noqa: F401
-from app.api.routes import category_sentiment, ticker as ticker_route
+from app.api.routes import ticker as ticker_route
 from app.core.config import settings
 from app.models.ticker import Ticker
+from app.read_models import ticker_sentiment
 from app.services import public_discussion
 from app.sources import SOURCES
 
@@ -91,8 +92,7 @@ def test_read_routes_find_every_ticker_on_a_migrated_database(
     assert ticker_route.get_ticker_news_feed(symbol, db=db_session) == []
     assert ticker_route.get_ticker_deep_dive_timeline(symbol, db=db_session) == []
     assert ticker_route.get_ticker_by_symbol(symbol, db=db_session).symbol == symbol
-    category = category_sentiment.read_ticker_category_sentiment(symbol, db=db_session)
-    assert category["ticker"] == symbol
+    assert ticker_sentiment.read_category_sentiment(db_session, symbol).ticker == symbol
     status = public_discussion.public_discussion_status(db_session, symbol)
     assert status["ticker"] == symbol
 

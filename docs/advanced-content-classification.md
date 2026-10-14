@@ -34,7 +34,9 @@ consumers.
 ## Adding or changing a category
 
 1. Add or update the declarative definition in
-   `backend/parsing/classification/taxonomy.py`.
+   `backend/parsing/classification/taxonomy.py`. Keep `parsing/classification`
+   and `parsing/categories` to the standard library: the API image ships them
+   with nothing else, to look up each stored category's sentiment bucket.
 2. Use stable lowercase identifiers and keep the compatibility mapping explicit.
 3. Prefer strong title phrases and ASX form identifiers. Add body support,
    negative evidence and whole-token patterns where needed.
@@ -96,3 +98,20 @@ The JSON summary reports scanned, changed, unchanged, ambiguous, unknown and
 failed counts. Repeating the command for `rules-v2` skips already current rows.
 Unrelated metadata is preserved. Existing extracted data is retained and marked
 stale when its compatibility category changes.
+
+## Comparing sentiment buckets
+
+Each definition names the one sentiment bucket its announcements count in on a
+ticker's research summary, or none. Keywords still place news, announcements
+the rules could not classify and rows with no category. Changing a definition's
+bucket changes every stored announcement of that category at once, with no
+backfill. The comparison prints, for each catalogue ticker, how many analysed
+artifacts each bucket holds and their dominant label under the keyword rule the
+view used to follow and under the taxonomy rule, how many of the taxonomy
+rule's came from its keyword fallback, and each artifact whose buckets differ.
+It runs in a read-only transaction and writes nothing.
+
+```bash
+cd backend
+python -m tools.compare_sentiment_buckets --ticker CSL --days 365
+```

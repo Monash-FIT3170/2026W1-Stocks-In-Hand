@@ -171,7 +171,7 @@ signed email link, so they do not need to be added to Brevo first. See the
 | Method | Path | Description |
 |---|---|---|
 | POST | `/analyse` | Run FinBERT on raw text. Body: `{ "text": "..." }`. Returns label (positive/negative/neutral), confidence score, and full distribution |
-| POST | `/sentiment/{ticker}` | Admin-only full pipeline: pulls recent ASX artifacts plus relevant Reddit, Bluesky and Mastodon posts, runs Bedrock categorisation and summarisation, then FinBERT on each category. Returns per-category sentiment breakdown and stores an aggregate sentiment for the latest ticker artifact. Params include `reddit_limit`, `bluesky_limit` and `mastodon_limit` |
+| GET | `/sentiment/{ticker}` | A ticker's stored sentiment in each sentiment bucket (revenue, strategy, risk, dividend, organisational) and in public discussion, read from what the analysis worker stored. Never runs FinBERT. Params: `days` (default: 365), `limit` (default: 250) |
 
 ### Reddit (PRAW)
 | Method | Path | Description |

@@ -12,7 +12,8 @@ Route modules should:
 - define URL paths and HTTP methods;
 - receive request data;
 - get a database session with `Depends(get_db)`;
-- call CRUD functions;
+- call CRUD functions, or the one read-model function (`app/read_models/`)
+  that answers a page's question;
 - raise `HTTPException` for HTTP-specific errors;
 - return response objects that match the Pydantic response schemas.
 
@@ -88,17 +89,24 @@ Investor and watchlist routes:
 
 - `investor.py`: create, read, update, and delete investors.
 - `auth.py`: sign up, sign in, sign out, and current-identity lookup.
-- `watchlist.py`: create, read, update, and delete watchlists.
+- `watchlist.py`: create, read, update, and delete watchlists, plus
+  `/watchlists/me/summary`, the watchlist page's one read
+  (`app/read_models/watchlist_summary.py`): the investor's oldest watchlist
+  and each company's latest signal and brief line.
 - `watchlist_ticker.py`: add/list/remove tickers in a watchlist.
 
 Ticker routes:
 
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
   endpoints the frontend reads (`/brief`, `/news-feed`,
-  `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
-  stored, so there is no market data route. Each news-feed item is the
-  artifact's card (`app/services/artifact_card.py`), and the brief and deep
-  dive read summaries through the artifact summary module.
+  `/deep-dive-timeline`). Each of those is one read-model call: the brief
+  is the ticker brief (`app/read_models/ticker_brief.py`), and the news feed
+  and deep dive are the ticker's records
+  (`app/read_models/ticker_records.py`). The brief's prices come live from
+  Yahoo through the quote source (`app/services/quotes.py`) rather than
+  being stored, so there is no market data route. Each news-feed item is the
+  artifact's card (`app/services/artifact_card.py`), and the deep dive reads
+  summaries through the artifact summary module.
 
 Source content routes:
 
@@ -112,7 +120,9 @@ Source content routes:
 
 Analysis routes:
 
-- `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
+- `category_sentiment.py`: `GET /sentiment/{ticker}`, a ticker's stored
+  sentiment in each sentiment bucket, read through the ticker sentiment
+  read-model (`app/read_models/ticker_sentiment.py`). It never runs FinBERT.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
 - `llm.py`: admin category splits generated on request, and admin summary
   requests queued for the analysis worker.

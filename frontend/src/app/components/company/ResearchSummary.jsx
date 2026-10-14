@@ -49,7 +49,7 @@ export function ResearchSummary() {
   const activeResult = categories.data?.categories?.[activeTopic]
   const activeName = topics.find((topic) => topic.key === activeTopic)?.name
   const clarity = overview.clarity
-  const numbers = (aside?.key_numbers || []).filter((item) => !["Current price", "Day change"].includes(item.label))
+  const numbers = aside?.key_numbers || []
   return <div className={styles.summaryDocument}>
     <header className={styles.pageHeading}><h1>Research summary</h1><p>The latest stored research for {overview.company_name || symbol}, with the evidence kept close.</p></header>
     <div className={styles.summaryLayout}>

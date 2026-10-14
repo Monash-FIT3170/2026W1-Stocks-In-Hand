@@ -32,8 +32,8 @@ Alembic discover the database schema.
 ## Main Groups
 
 The schema is deliberately small: ten tables, listed below. Prices are read live
-from Yahoo in `api/routes/ticker.py` rather than stored, so there is no market
-data table.
+from Yahoo through `services/quotes.py` rather than stored, so there is no
+market data table.
 
 Investor and watchlist models:
 

@@ -4,137 +4,16 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CloseIcon, PlusIcon } from "../components/icons"
-import { apiFetch } from "../lib/api"
-import { buildWatchlistCreatePayload } from "../lib/watchlists"
+import {
+  addWatchlistTicker,
+  createWatchlist,
+  fetchCurrentInvestor,
+  fetchJson,
+  fetchWatchlistSummary,
+  removeWatchlistTicker,
+} from "../lib/api"
+import { watchlistCard } from "../lib/watchlists"
 import styles from "../page.module.css"
-
-function getErrorMessage(data, fallback) {
-  if (Array.isArray(data.detail)) {
-    return data.detail.map((error) => error.msg).join(", ")
-  }
-  if (typeof data.detail === "string") {
-    return data.detail
-  }
-  return fallback
-}
-
-async function fetchJson(path, fallback, options = {}) {
-  try {
-    const response = await apiFetch(path, {
-      credentials: "include",
-      ...options,
-    })
-    const data = await response.json().catch(() => null)
-
-    if (response.status === 404 && fallback !== undefined) {
-      return fallback
-    }
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(data || {}, "Could not complete request"))
-    }
-
-    return data
-  } catch (err) {
-    if (fallback !== undefined) {
-      return fallback
-    }
-    throw err
-  }
-}
-
-async function fetchCurrentInvestor() {
-  const response = await apiFetch("/auth/me", { credentials: "include" })
-  const data = await response.json().catch(() => null)
-  if (response.status === 401) {
-    return null
-  }
-  if (!response.ok) {
-    throw new Error(getErrorMessage(data || {}, "Could not verify your session"))
-  }
-  return data?.investor || null
-}
-
-function getStatusTone(status) {
-  const value = status.toLowerCase()
-  if (value.includes("negative") || value.includes("bearish") || value.includes("critical")) {
-    return "red"
-  }
-  if (value.includes("positive") || value.includes("bullish") || value.includes("high conviction")) {
-    return "green"
-  }
-  return "orange"
-}
-
-function formatStatusLabel(value) {
-  const cleaned = value.replace(/[_-]/g, " ").trim()
-  if (!cleaned) {
-    return "Monitoring"
-  }
-  const label = cleaned.replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-  return label.toLowerCase().includes("sentiment") ? label : `${label} Sentiment`
-}
-
-function getStockBrief(stock) {
-  const about = stock.latestArtifact?.artifact_metadata?.about
-  if (about && typeof about === "string") {
-    return about.length > 150 ? `${about.slice(0, 147)}…` : about
-  }
-  return null
-}
-
-function getTickerStatus(ticker) {
-  if (ticker.latestSentiment?.sentiment_label) {
-    return formatStatusLabel(ticker.latestSentiment.sentiment_label)
-  }
-  if (ticker.latestSentiment?.stance) {
-    return formatStatusLabel(ticker.latestSentiment.stance)
-  }
-  if (ticker.sector) {
-    return `${ticker.sector} Monitoring`
-  }
-  return "Monitoring"
-}
-
-function getArtifactDate(artifact) {
-  return artifact?.published_at || artifact?.created_at || artifact?.scraped_at || null
-}
-
-function formatRelativeDate(value) {
-  if (!value) {
-    return "Not available"
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return "Not available"
-  }
-  const diffMs = Date.now() - date.getTime()
-  const diffDays = Math.floor(diffMs / 86400000)
-
-  if (diffDays <= 0) return "Today"
-  if (diffDays === 1) return "Yesterday"
-  return `${diffDays} days ago`
-}
-
-async function loadTickerDetails(watchlistTicker) {
-  const ticker = await fetchJson(`/tickers/${watchlistTicker.ticker_id}`, null)
-  if (!ticker) return null
-
-  const artifacts = await fetchJson(`/artifacts/ticker/${watchlistTicker.ticker_id}`, [])
-  const sortedArtifacts = Array.isArray(artifacts)
-    ? [...artifacts].sort((a, b) => new Date(getArtifactDate(b) || 0) - new Date(getArtifactDate(a) || 0))
-    : []
-
-  const latestArtifact = sortedArtifacts[0] || null
-
-  return {
-    ...ticker,
-    added_at: watchlistTicker.added_at,
-    latestArtifact,
-    latestSentiment: null, // Avoid N+1 sentiment waterfall calls
-    lastBriefAt: getArtifactDate(latestArtifact),
-  }
-}
 
 export default function WatchlistRoute() {
   const router = useRouter()
@@ -143,7 +22,7 @@ export default function WatchlistRoute() {
     investor: null,
     investorId: null,
     isLoading: true,
-    tickers: [],
+    companies: [],
     watchlist: null,
   })
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -170,24 +49,15 @@ export default function WatchlistRoute() {
         return
       }
 
-      // Use the newly authenticated /watchlists/me endpoint
-      const watchlists = await fetchJson("/watchlists/me", [])
-      const watchlist = watchlists[0] || null
-      const watchlistTickers = watchlist
-        ? await fetchJson(`/watchlist-tickers/${watchlist.id}`, [])
-        : []
-
-      const tickersData = await Promise.all(
-        watchlistTickers.map((item) => loadTickerDetails(item))
-      )
+      const summary = await fetchWatchlistSummary()
 
       setState({
         error: "",
         investor,
         investorId,
         isLoading: false,
-        tickers: tickersData.filter(Boolean),
-        watchlist,
+        companies: summary.companies,
+        watchlist: summary.watchlist,
       })
     } catch {
       setState((current) => ({
@@ -215,8 +85,8 @@ export default function WatchlistRoute() {
   }, [loadWatchlist])
 
   const watchedTickerIds = useMemo(
-    () => new Set(state.tickers.map((ticker) => ticker.id)),
-    [state.tickers]
+    () => new Set(state.companies.map((company) => company.ticker_id)),
+    [state.companies]
   )
 
   const filteredAvailableTickers = useMemo(() => {
@@ -299,11 +169,7 @@ export default function WatchlistRoute() {
       throw new Error("Could not identify the signed-in investor.")
     }
 
-    const watchlist = await fetchJson("/watchlists/", undefined, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildWatchlistCreatePayload(state.investorId)),
-    })
+    const watchlist = await createWatchlist(state.investorId)
     setState((current) => ({ ...current, watchlist }))
     return watchlist
   }
@@ -314,9 +180,7 @@ export default function WatchlistRoute() {
 
     try {
       const watchlist = await ensureWatchlist()
-      await fetchJson(`/watchlist-tickers/${watchlist.id}/${ticker.id}`, null, {
-        method: "POST",
-      })
+      await addWatchlistTicker(watchlist.id, ticker.id)
       await loadWatchlist()
       closeAddCompany()
     } catch (err) {
@@ -325,16 +189,14 @@ export default function WatchlistRoute() {
     }
   }
 
-  async function removeCompany(ticker) {
+  async function removeCompany(company) {
     if (!state.watchlist) return
     setState((current) => ({
       ...current,
-      tickers: current.tickers.filter((t) => t.id !== ticker.id),
+      companies: current.companies.filter((watched) => watched.ticker_id !== company.ticker_id),
     }))
     try {
-      await fetchJson(`/watchlist-tickers/${state.watchlist.id}/${ticker.id}`, null, {
-        method: "DELETE",
-      })
+      await removeWatchlistTicker(state.watchlist.id, company.ticker_id)
     } catch {
       await loadWatchlist()
     }
@@ -359,7 +221,7 @@ export default function WatchlistRoute() {
             <div className={styles.watchlistCount}>
               {state.isLoading
                 ? "Loading watchlist"
-                : `${state.tickers.length} saved ${state.tickers.length === 1 ? "company" : "companies"}`}
+                : `${state.companies.length} saved ${state.companies.length === 1 ? "company" : "companies"}`}
             </div>
             <div className={styles.watchGrid}>
               {state.isLoading && (
@@ -375,33 +237,32 @@ export default function WatchlistRoute() {
                   <button className={styles.secondaryButton} onClick={() => loadWatchlist({ showLoading: true })} type="button">Try again</button>
                 </article>
               )}
-              {!state.isLoading && !state.error && state.tickers.map((stock) => {
-                const status = getTickerStatus(stock)
-                const tone = getStatusTone(status)
+              {!state.isLoading && !state.error && state.companies.map((company) => {
+                const card = watchlistCard(company)
 
                 return (
-                  <article className={styles.stockCard} key={stock.id}>
-                    <Link className={styles.stockCardLink} href={`/ticker/${stock.symbol}`}>
+                  <article className={styles.stockCard} key={company.ticker_id}>
+                    <Link className={styles.stockCardLink} href={`/ticker/${company.symbol}`}>
                       <div className={styles.stockTop}>
-                        <div className={`${styles.stockAvatar} ${styles[tone]}`}>{stock.symbol[0]}</div>
+                        <div className={`${styles.stockAvatar} ${styles[card.tone]}`}>{company.symbol[0]}</div>
                         <div>
-                          <h3>{stock.company_name}</h3>
-                          <p>{stock.exchange}: {stock.symbol}</p>
+                          <h3>{company.company_name}</h3>
+                          <p>{company.exchange}: {company.symbol}</p>
                         </div>
                       </div>
-                      <div className={`${styles.stockStatus} ${styles[tone]}`}>
-                        <span /> {status}
+                      <div className={`${styles.stockStatus} ${styles[card.tone]}`}>
+                        <span /> {card.status}
                       </div>
-                      {getStockBrief(stock) && <p className={styles.stockBrief}>{getStockBrief(stock)}</p>}
+                      {card.brief && <p className={styles.stockBrief}>{card.brief}</p>}
                       <div className={styles.stockFooter}>
-                        <span>Last brief: {formatRelativeDate(stock.lastBriefAt)}</span>
+                        <span>Last brief: {card.lastBrief}</span>
                         <strong>&gt;</strong>
                       </div>
                     </Link>
                     <button
-                      aria-label={`Remove ${stock.symbol} from watchlist`}
+                      aria-label={`Remove ${company.symbol} from watchlist`}
                       className={styles.stockRemove}
-                      onClick={() => removeCompany(stock)}
+                      onClick={() => removeCompany(company)}
                       type="button"
                     >
                       <CloseIcon />
@@ -409,7 +270,7 @@ export default function WatchlistRoute() {
                   </article>
                 )
               })}
-              {!state.isLoading && !state.error && !state.tickers.length && (
+              {!state.isLoading && !state.error && !state.companies.length && (
                 <article className={styles.emptyCard}>
                   <h3>No companies yet</h3>
                   <p>Add a company to start your watchlist.</p>

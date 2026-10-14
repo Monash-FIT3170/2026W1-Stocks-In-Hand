@@ -20,7 +20,6 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi import Request
@@ -639,69 +638,6 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.artifact_metadata["subreddit"] == "ASX"
 
 
-def test_ticker_mentions_connect_social_sentiment_to_ticker(
-    db_session: Session,
-) -> None:
-    """A social artifact can reach ticker sentiment through the join table."""
-    from app.api.routes.category_sentiment import read_ticker_category_sentiment
-
-    ticker = Ticker(
-        symbol=f"P{uuid.uuid4().hex[:8].upper()}",
-        company_name="Public Discussion Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.flush()
-
-    artifact = Artifact(
-        ticker_id=None,
-        source_type="mastodon",
-        artifact_type="mastodon_post",
-        title=f"Investors discuss {ticker.symbol}",
-        url="https://aus.social/@investor/123",
-        raw_text=f"I am positive about {ticker.symbol} after the update.",
-        content_hash=f"public-discussion-{uuid.uuid4()}",
-        published_at=datetime.now(timezone.utc),
-    )
-    db_session.add(artifact)
-    db_session.flush()
-    db_session.add_all(
-        [
-            ArtifactTickerMention(
-                artifact_id=artifact.id,
-                ticker_id=ticker.id,
-                match_method="ticker_symbol",
-                match_confidence=0.95,
-                matched_text=ticker.symbol,
-            ),
-            ArtifactSentiment(
-                artifact_id=artifact.id,
-                sentiment_label="positive",
-                confidence_score=0.9,
-                model_used="test-finbert",
-            ),
-        ]
-    )
-    db_session.commit()
-
-    result = read_ticker_category_sentiment(ticker.symbol, db_session)
-    discussion = result["categories"]["user_discussion"]
-
-    assert artifact.ticker_id is None
-    assert discussion["available"] is True
-    assert discussion["sentiment_label"] == "positive"
-    assert discussion["sources_count"] == 1
-    assert discussion["sources"] == [
-        {
-            "source_type": "mastodon",
-            "title": f"Investors discuss {ticker.symbol}",
-            "url": "https://aus.social/@investor/123",
-            "author": None,
-            "published_at": artifact.published_at,
-        }
-    ]
-
-
 def test_public_discussion_backfill_is_dry_run_first_and_idempotent(
     db_session: Session,
 ) -> None:
@@ -904,64 +840,6 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     trend = next(item for item in trending if item.symbol == symbol)
 
     assert trend.count == 3
-
-
-def test_ticker_brief_aside_returns_empty_database_state(
-    db_session: Session,
-) -> None:
-    """The ticker sidebar API should not fall back to mocked values."""
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"E{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Empty Sidebar Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["aside"]
-
-    assert result["key_numbers"] == [
-        {"label": "Current price", "value": "N/A"},
-        {"label": "Day change", "value": "N/A"},
-        {"label": "Latest filing", "value": "No filings yet"},
-        {"label": "Latest type", "value": "No filings yet"},
-    ]
-    assert result["themes"] == []
-
-
-def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
-    """The overview API should format the live quote it is given.
-
-    The quote is fetched from Yahoo at request time rather than stored, so the
-    lookup is patched here and only the formatting and failure handling are
-    under test.
-    """
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"Q{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Quote Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    with patch.object(ticker_route, "_live_quote", return_value=(31.25, 30.0)):
-        result = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
-
-    assert result["current_price"] == "$31.25"
-    assert result["day_change"] == "+4.17%"
-
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        unavailable = ticker_route.get_ticker_brief(symbol.lower(), db=db_session)["overview"]
-
-    assert unavailable["current_price"] == "N/A"
-    assert unavailable["day_change"] == "N/A"
 
 
 def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:

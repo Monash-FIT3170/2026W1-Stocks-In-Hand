@@ -2,7 +2,12 @@
 
 Each definition owns every fact about its category: the rules that find it,
 the names it is stored under, its display label, its metric extractor if it
-has one, and the sentiment bucket proposed for it.
+has one, and the sentiment bucket its announcements count in.
+
+This package and ``parsing.categories`` use only the standard library. The
+API image ships them with no other dependency so the category sentiment
+view can look up each stored category's bucket, and an import of anything
+else would stop the API starting.
 """
 
 from __future__ import annotations
@@ -34,9 +39,8 @@ class CategoryDefinition:
 
     ``compatibility_category`` is stored as the artifact's metadata category
     and ``artifact_type`` as its artifact type, so neither may change.
-    ``sentiment_bucket`` is the bucket proposed for the category sentiment
-    view, which still buckets by keyword until the team agrees the mapping.
-    ``None`` means no bucket is proposed.
+    ``sentiment_bucket`` is the one bucket the category sentiment view counts
+    an announcement of this category in. ``None`` means it counts in none.
     """
     identifier: str
     compatibility_category: str
@@ -345,7 +349,7 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
         identifier="executive_transcript",
         compatibility_category="ExecutiveTranscript",
         label="Executive transcript",
-        sentiment_bucket=None,
+        sentiment_bucket="strategy",
         title_phrases=(
             PatternRule("chief_executive_interview", "CEO interview"),
             PatternRule("briefing_transcript", "briefing transcript"),
@@ -366,8 +370,8 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
 )
 
 _DEFINITIONS = {definition.identifier: definition for definition in TAXONOMY}
-_ARTIFACT_TYPES = {
-    definition.compatibility_category: definition.artifact_type for definition in TAXONOMY
+_BY_COMPATIBILITY_CATEGORY = {
+    definition.compatibility_category: definition for definition in TAXONOMY
 }
 
 
@@ -376,6 +380,16 @@ def category_definition(identifier: str | None) -> CategoryDefinition | None:
     return _DEFINITIONS.get(identifier) if identifier else None
 
 
+def category_for_compatibility(name: object) -> CategoryDefinition | None:
+    """The definition stored under a metadata category name, if there is one.
+
+    ``UNKNOWN``, the stored-text categories such as ``news_article`` and any
+    other name no definition is stored under give None.
+    """
+    return _BY_COMPATIBILITY_CATEGORY.get(name) if isinstance(name, str) else None
+
+
 def artifact_type_for(compatibility_category: str) -> str:
     """The artifact type stored for a classification's compatibility category."""
-    return _ARTIFACT_TYPES.get(compatibility_category, OTHER_ARTIFACT_TYPE)
+    definition = category_for_compatibility(compatibility_category)
+    return definition.artifact_type if definition else OTHER_ARTIFACT_TYPE

@@ -9,6 +9,7 @@ import {
   getPreviewTrending,
   isLocalPreviewHost,
 } from "./previewData"
+import { buildWatchlistCreatePayload } from "./watchlists"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || "/api"
 const requestCache = new Map()
@@ -55,6 +56,17 @@ export async function apiFetch(path, options = {}) {
   return response
 }
 
+// The API's error text: a route's detail, or each of a validation error's messages.
+function errorMessage(data, fallback) {
+  if (Array.isArray(data?.detail)) {
+    return data.detail.map((error) => error.msg).join(", ")
+  }
+  if (typeof data?.detail === "string") {
+    return data.detail
+  }
+  return fallback
+}
+
 export async function fetchJson(path, options = {}) {
   const response = await apiFetch(path, {
     cache: "no-store",
@@ -64,7 +76,7 @@ export async function fetchJson(path, options = {}) {
   const data = await response.json().catch(() => null)
 
   if (!response.ok) {
-    const error = new Error(data?.detail || "Failed to fetch API data")
+    const error = new Error(errorMessage(data, "Failed to fetch API data"))
     error.status = response.status
     throw error
   }
@@ -167,6 +179,47 @@ export async function fetchTickerDeepDive(symbol) {
 
 export async function fetchTickerCategorySentiment(symbol) {
   return fetchJsonCoalesced(`/sentiment/${encodeURIComponent(symbol)}`)
+}
+
+// The signed-in investor, or null when nobody is signed in.
+export async function fetchCurrentInvestor() {
+  const response = await apiFetch("/auth/me", { credentials: "include" })
+  const data = await response.json().catch(() => null)
+  if (response.status === 401) {
+    return null
+  }
+  if (!response.ok) {
+    throw new Error(errorMessage(data, "Could not verify your session"))
+  }
+  return data?.investor || null
+}
+
+// The signed-in investor's watchlist and each watched company, in one request.
+export async function fetchWatchlistSummary() {
+  return fetchJson("/watchlists/me/summary", { credentials: "include" })
+}
+
+export async function createWatchlist(investorId) {
+  return fetchJson("/watchlists/", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildWatchlistCreatePayload(investorId)),
+  })
+}
+
+export async function addWatchlistTicker(watchlistId, tickerId) {
+  return fetchJson(`/watchlist-tickers/${watchlistId}/${tickerId}`, {
+    method: "POST",
+    credentials: "include",
+  })
+}
+
+export async function removeWatchlistTicker(watchlistId, tickerId) {
+  return fetchJson(`/watchlist-tickers/${watchlistId}/${tickerId}`, {
+    method: "DELETE",
+    credentials: "include",
+  })
 }
 
 export async function fetchNotificationPreferences() {

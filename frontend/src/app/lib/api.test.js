@@ -83,3 +83,35 @@ describe("apiFetch authentication compatibility", () => {
     )
   })
 })
+
+describe("watchlist requests", () => {
+  test("read the watchlist page in one request with the session cookie", async () => {
+    const summary = { watchlist: null, companies: [] }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(summary), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const { fetchWatchlistSummary } = await import("./api")
+
+    await expect(fetchWatchlistSummary()).resolves.toEqual(summary)
+
+    const [url, options] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/watchlists/me/summary")
+    expect(options.credentials).toBe("include")
+  })
+
+  test("report each message of a validation error", async () => {
+    const detail = [{ msg: "Field required" }, { msg: "Input should be a valid UUID" }]
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail }), { status: 422 })))
+    const { addWatchlistTicker } = await import("./api")
+
+    await expect(addWatchlistTicker("watchlist-id", "not-a-uuid")).rejects.toThrow(
+      "Field required, Input should be a valid UUID",
+    )
+  })
+
+  test("treat a signed-out visitor as no investor", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 401 })))
+    const { fetchCurrentInvestor } = await import("./api")
+
+    await expect(fetchCurrentInvestor()).resolves.toBeNull()
+  })
+})
