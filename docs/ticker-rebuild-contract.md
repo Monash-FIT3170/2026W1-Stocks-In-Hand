@@ -22,7 +22,7 @@ overview = `{symbol,company_name,sector,current_price,day_change,last_updated,st
 
 clarity = `{is_classified:boolean,confirmed_facts:string[],speculation:string[]}`. Keep factual claims distinct from interpretation; explicit unclassified state and AI-assisted attribution. Never infer facts/interpretations from prose when arrays are missing.
 
-aside = `{key_numbers:{label,value}[],themes:string[]}`. Key numbers are the latest filing's date and type; price and day change are in the overview only. Themes are filing category activity, not financial conclusions.
+aside = `{key_numbers:{label,value}[],themes:string[]}`. Key numbers are the date and type of the latest record, the one story tells, which can be publisher news rather than a filing; price and day change are in the overview only. Themes are filing category activity, not financial conclusions.
 
 Source = `{label,title,url,published_at:ISO|null,evidence_text:string|null}`. Keep original links meaningful, validate HTTP(S) URLs and dates, external rel noreferrer/noopener. Missing source links remain visibly missing.
 

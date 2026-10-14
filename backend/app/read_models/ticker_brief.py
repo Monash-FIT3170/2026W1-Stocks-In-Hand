@@ -2,8 +2,10 @@
 
 The overview names the company, its live quote and its latest signal, and
 tells the story of its latest record with that record's sources and
-clarity. The aside gives the latest filing's date and type and the kinds of
-record the ticker has had lately.
+clarity. The aside gives that record's date and type, labelled "Latest
+filing" and "Latest type", and the kinds of record the ticker has had
+lately. The latest record can be a news story, while the latest signal is
+always a filing's.
 """
 
 from __future__ import annotations
