@@ -265,10 +265,12 @@ def test_a_required_setting_must_be_set() -> None:
         ("MAX_DOCUMENTS_PER_RUN", "0", "must be at least 1"),
         ("MAX_DOCUMENTS_PER_RUN", "abc", "must be a whole number"),
         ("MAX_DOCUMENT_BYTES", "0", "must be at least 1"),
+        ("MAX_DOCX_UNCOMPRESSED_BYTES", "0", "must be at least 1"),
         ("MAX_DOCX_UNCOMPRESSED_BYTES", "20MiB", "must be a whole number"),
         ("MAX_ANALYSIS_CHARS", "0", "must be at least 1"),
         ("MAX_PDF_PAGES", "0", "must be at least 1"),
         ("MAX_OCR_PAGES", "-1", "must be at least 0"),
+        ("MAX_OCR_PIXELS_PER_PAGE", "0", "must be at least 1"),
         ("MAX_OCR_PIXELS_PER_PAGE", "8e6", "must be a whole number"),
     ],
 )
