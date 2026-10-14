@@ -82,6 +82,15 @@ def getatt_target(value: Any, attribute: str) -> str | None:
     return None
 
 
+def _intrinsic(value: Any) -> str | None:
+    """The intrinsic function ``value`` calls, such as ``Fn::If`` or ``Ref``, or None."""
+    if isinstance(value, dict) and len(value) == 1:
+        [name] = value
+        if name in ("Ref", "Condition") or str(name).startswith("Fn::"):
+            return name
+    return None
+
+
 def _outcomes(value: Any) -> Iterator[Any]:
     """Every value ``value`` can take, looking through ``!If`` and keeping NoValue."""
     if isinstance(value, dict) and set(value) == {"Fn::If"}:
@@ -192,7 +201,7 @@ class Parameter:
 
 @dataclass(frozen=True)
 class Statement:
-    """One IAM policy statement.
+    """One IAM policy statement that allows something.
 
     ``condition`` is the template condition it is granted under, if any, and
     ``iam_condition`` its own IAM Condition block, such as
@@ -206,7 +215,14 @@ class Statement:
     iam_condition: Mapping[str, Any]
 
     def allows(self, action: str) -> bool:
-        return any(fnmatch.fnmatchcase(action, granted) for granted in self.actions)
+        """Whether this statement names ``action``, matching it as IAM does.
+
+        IAM ignores case in an action, so ``ecr:batchdeleteimage`` grants
+        ecr:BatchDeleteImage, and ``*`` and ``?`` are its wildcards.
+        """
+        return any(
+            fnmatch.fnmatchcase(action.lower(), granted.lower()) for granted in self.actions
+        )
 
     def covers(self, action: str, arn: str, values: Mapping[str, str]) -> bool:
         """Whether this statement allows ``action`` on the resource ``arn``.
@@ -241,40 +257,74 @@ class Statement:
         )
 
 
-def _policy_statements(policies: Any) -> list[Statement]:
-    """The Allow statements of a list of policies, including ones granted under ``!If``.
+def _readable(value: Any, what: str) -> Any:
+    """``value`` itself, or ValueError when it is an intrinsic function."""
+    function = _intrinsic(value)
+    if function is not None:
+        raise ValueError(f"{what} is {function}, which the model cannot read")
+    return value
 
-    An IAM role keeps each policy's document under PolicyDocument, and a SAM
-    function lists the documents themselves. A statement with NotAction or
-    NotResource raises ValueError, because it grants more than its lists say.
+
+def _statement(statement: Any, condition: str | None) -> Statement:
+    """One policy statement, or ValueError when the model cannot say what it grants."""
+    if not isinstance(statement, dict) or _intrinsic(statement) is not None:
+        raise ValueError(f"A policy statement is not one the model can read: {statement!r}")
+    name = statement.get("Sid") or "A statement"
+    effect = statement.get("Effect", "Allow")
+    if effect == "Deny":
+        raise ValueError(f"{name} is a Deny, which the model does not weigh against the grants")
+    if effect != "Allow":
+        raise ValueError(f"{name} has Effect {effect!r}, which the model cannot read")
+    inverted = sorted({"NotAction", "NotResource"} & set(statement))
+    if inverted:
+        raise ValueError(f"{name} uses {' and '.join(inverted)}, which the model cannot read")
+    actions = tuple(_as_list(statement.get("Action", [])))
+    if not all(isinstance(action, str) for action in actions):
+        raise ValueError(f"{name} has an Action the model cannot read: {statement['Action']!r}")
+    return Statement(
+        sid=statement.get("Sid"),
+        actions=actions,
+        resources=tuple(_as_list(statement.get("Resource", []))),
+        condition=condition,
+        iam_condition=statement.get("Condition") or {},
+    )
+
+
+def _policy_statements(policies: Any, document_key: str | None) -> list[Statement]:
+    """The statements of a resource's inline policies, including ones granted under ``!If``.
+
+    An IAM role keeps each policy's document under ``document_key``
+    (PolicyDocument). A SAM function lists the documents themselves, with
+    ``document_key`` None, beside managed policy names and SAM policy
+    templates, which are skipped.
+
+    What would make the statements grant more or less than they say raises
+    ValueError instead of being read as granting nothing: a Deny statement,
+    which the model does not weigh against the grants, NotAction or
+    NotResource, an Effect other than Allow, an Action that is not a list of
+    names, and an intrinsic function where the policies, a document, its
+    Statement block or one statement should be. ``!If`` is read only around
+    a whole policy and in a Resource (see ``Statement.covers``).
     """
-    found = []
-    for policy in policies or []:
+    found: list[Statement] = []
+    for policy in _as_list(_readable(policies or [], "Policies")):
         condition = None
         if isinstance(policy, dict) and set(policy) == {"Fn::If"}:
             condition = policy["Fn::If"][0]
         for branch in branches(policy):
-            document = branch.get("PolicyDocument", branch) if isinstance(branch, dict) else None
-            if not isinstance(document, dict):
-                continue
-            for statement in _as_list(document.get("Statement") or []):
-                if statement.get("Effect", "Allow") != "Allow":
-                    continue
-                inverted = sorted({"NotAction", "NotResource"} & set(statement))
-                if inverted:
+            document: Any
+            if document_key is None:
+                if not (isinstance(branch, dict) and "Statement" in branch):
+                    continue  # A managed policy name or a SAM policy template.
+                document = branch
+            else:
+                document = branch.get(document_key) if isinstance(branch, dict) else None
+                if not isinstance(document, dict) or _intrinsic(document) is not None:
                     raise ValueError(
-                        f"{statement.get('Sid') or 'A statement'} uses {' and '.join(inverted)}, "
-                        "which the model cannot read"
+                        f"A policy's {document_key} is not one the model can read: {document!r}"
                     )
-                found.append(
-                    Statement(
-                        sid=statement.get("Sid"),
-                        actions=tuple(_as_list(statement.get("Action", []))),
-                        resources=tuple(_as_list(statement.get("Resource", []))),
-                        condition=condition,
-                        iam_condition=statement.get("Condition") or {},
-                    )
-                )
+            statements = _readable(document.get("Statement") or [], "A policy's Statement")
+            found.extend(_statement(statement, condition) for statement in _as_list(statements))
     return found
 
 
@@ -347,7 +397,7 @@ class Function:
     @property
     def statements(self) -> list[Statement]:
         """Inline policy statements, including ones granted under ``!If``."""
-        return _policy_statements(self.properties.get("Policies"))
+        return _policy_statements(self.properties.get("Policies"), None)
 
     @property
     def send_message_targets(self) -> set[str]:
@@ -536,16 +586,22 @@ class TemplateModel:
         return Function(logical_id, self.properties(logical_id))
 
     def role_statements(self, logical_id: str) -> list[Statement]:
-        """The Allow statements of an IAM role's inline policies, including ones under ``!If``.
+        """The statements of an IAM role's inline policies, including ones under ``!If``.
 
-        A managed policy grants more than these say, so a role with
-        ManagedPolicyArns raises ValueError rather than leave its grants out.
-        A separate policy resource that names the role is not read.
+        A managed policy grants more than these say and a permissions boundary
+        can take grants away, so a role with ManagedPolicyArns or a
+        PermissionsBoundary raises ValueError rather than leave either out, as
+        does a policy the model cannot read. A separate policy resource that
+        names the role is not read.
         """
         properties = self.properties(logical_id)
         if properties.get("ManagedPolicyArns"):
             raise ValueError(f"{logical_id} has managed policies, which the model cannot read")
-        return _policy_statements(properties.get("Policies"))
+        if properties.get("PermissionsBoundary"):
+            raise ValueError(
+                f"{logical_id} has a permissions boundary, which the model cannot read"
+            )
+        return _policy_statements(properties.get("Policies"), "PolicyDocument")
 
     def image_functions(self) -> list[str]:
         """Logical IDs of every Lambda deployed from a container image."""
