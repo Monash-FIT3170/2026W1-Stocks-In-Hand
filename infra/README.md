@@ -370,7 +370,10 @@ python -m tools.release apply /tmp/release-plan.json
 cd ..
 ```
 
-Every parameter not given keeps its live value. Read the plan's table before
+Every parameter not given keeps its live value, except `FrontendBaseUrl`, which
+follows the site address, and the three image URIs, which follow
+`--release-sha`. After §5, this release moves `FrontendBaseUrl` from
+`https://example.invalid` to the CloudFront URL. Read the plan's table before
 `apply`: its last column shows each value the deploy changes.
 
 Keep it disabled if the projected monthly cost exceeds US$10.
