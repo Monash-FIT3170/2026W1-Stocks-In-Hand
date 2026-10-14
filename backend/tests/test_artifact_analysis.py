@@ -56,6 +56,10 @@ from parsing import storage
 
 BACKEND = Path(__file__).resolve().parents[1]
 HALF_YEAR_REPORT = "Half year report for the six months ended 31 December 2025."
+DIVIDEND_NOTICE = (
+    "The board declared a dividend of 83 cents per share. "
+    "Record date 10 March 2026. Payment date 2 April 2026."
+)
 ANNOUNCEMENT_ANSWER = {
     "summary": "CSL reported higher half year revenue.",
     "about": "The report covers CSL's half year results.",
@@ -242,6 +246,7 @@ def test_a_news_story_is_summarised_with_the_news_prompt_and_recorded(
     ]
     assert story.analysis_status == AnalysisStatus.COMPLETED
     assert story.analyzed_at is not None
+    assert story.artifact_type == "news_article"
     assert story.artifact_metadata["category"] == "news_article"
     assert story.artifact_metadata["category_confidence"] == 1.0
     assert story.artifact_metadata["provider"] == "marketaux"
@@ -514,6 +519,37 @@ def test_a_notification_that_cannot_be_trusted_records_nothing(
             AnalysisStatus.PENDING,
         )
     assert ports.scorer.scored == []
+
+
+@pytest.mark.parametrize(
+    ("title", "text", "artifact_type"),
+    [
+        ("Interim Dividend", DIVIDEND_NOTICE, "dividend_announcement"),
+        ("CSL half year results", HALF_YEAR_REPORT, "asx_announcement_other"),
+        (
+            "Product launch",
+            "The company launched a new product for enterprise customers.",
+            "asx_announcement_other",
+        ),
+    ],
+    ids=["dividend", "category_without_its_own_type", "unclassified"],
+)
+def test_an_announcement_is_stored_under_its_categorys_artifact_type(
+    db_session: Session,
+    store: RawDocumentStore,
+    title: str,
+    text: str,
+    artifact_type: str,
+) -> None:
+    _run, artifact, stored = _stored_document(db_session, store, title=title, text=text)
+
+    analyse_stored_document(
+        stored.location,
+        _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store),
+    )
+
+    db_session.refresh(artifact)
+    assert artifact.artifact_type == artifact_type
 
 
 def test_a_completed_announcement_is_not_analysed_again(

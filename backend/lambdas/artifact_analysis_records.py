@@ -83,6 +83,7 @@ class PostgresAnalysisRecords:
                 artifact_id=artifact_id,
                 raw_text=result.raw_text,
                 metadata=result.metadata,
+                artifact_type=result.artifact_type,
                 summary=summary,
                 sentiment={
                     "sentiment_label": result.sentiment.label,

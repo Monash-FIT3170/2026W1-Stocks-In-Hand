@@ -1,12 +1,13 @@
 """Artifact analysis: analyse one artifact and record the result.
 
-An announcement is read from its stored document, classified by the rules
-and has its category's fields extracted. News and public discussion are
-analysed from the text their collector stored. Either way FinBERT scores
-the artifact's title and text, the LLM summarises it with the prompt for
-its kind, and the records store the text, the summary and the sentiment and
-complete the analysis. A scrape run's announcement with an alertable
-sentiment is then sent to alert delivery.
+An announcement is read from its stored document and classified by the
+rules, which extract its category's fields, and it is stored under the
+category's artifact type. News and public discussion are analysed from the
+text their collector stored and keep the type their collector set. Either
+way FinBERT scores the artifact's title and text, the LLM summarises it
+with the prompt for its kind, and the records store the text, the summary
+and the sentiment and complete the analysis. A scrape run's announcement
+with an alertable sentiment is then sent to alert delivery.
 
 The module reaches outside code only through ``AnalysisPorts``: the
 records, whose one adapter is ``PostgresAnalysisRecords``, the sentiment
@@ -50,6 +51,7 @@ from lambdas.raw_documents import (
     raw_document_store,
 )
 from parsing.analysis import apply_rules, extract_document
+from parsing.classification.taxonomy import artifact_type_for
 from parsing.classification_metadata import merge_classification_metadata
 
 if TYPE_CHECKING:
@@ -114,6 +116,8 @@ class AnalysisResult:
 
     raw_text: str
     metadata: dict[str, Any]
+    # The type an announcement is stored under; None keeps the stored type.
+    artifact_type: str | None
     summary: Generated[dict[str, object]] | Unavailable
     sentiment: Sentiment
 
@@ -414,6 +418,7 @@ def _analyse_document(
         title=title,
         text=parsed.raw_text,
         metadata=metadata,
+        artifact_type=artifact_type_for(parsed.category),
         request=_summary_request(
             facts,
             title,
@@ -469,13 +474,14 @@ def _summary_request(
     )
 
 
-def _analysis(
+def _analysis(  # pylint: disable=too-many-arguments
     ports: AnalysisPorts,
     *,
     title: str,
     text: str,
     metadata: dict[str, Any],
     request: Kind[dict[str, object]],
+    artifact_type: str | None = None,
 ) -> AnalysisResult:
     """Score and summarise one artifact's text, in that order.
 
@@ -487,6 +493,7 @@ def _analysis(
     return AnalysisResult(
         raw_text=text,
         metadata=metadata,
+        artifact_type=artifact_type,
         summary=summary,
         sentiment=sentiment,
     )
