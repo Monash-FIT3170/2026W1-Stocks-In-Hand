@@ -61,8 +61,10 @@ The ORM relationship chain is:
 `Ticker -> Artifact -> ArtifactSummary / ArtifactSentiment`
 
 `crud.artifact.store_artifact_analysis` (called from `lambdas/analysis.py`) writes
-all three in one pass, and the ticker brief endpoints read them back through the
-`summaries` and `sentiments` backrefs.
+all three in one transaction. Summaries are written only through the artifact
+summary module (`app/services/artifact_summary.py`), which keeps the
+`artifact_summaries` row and the summary keys in `artifact_metadata` in step. The
+ticker and feed endpoints read summaries back through the same module.
 
 The full schema is ten tables, created by the `0001_initial_minimal` migration.
 See `app/models/README.md` for the complete list.

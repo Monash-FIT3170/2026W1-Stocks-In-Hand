@@ -26,6 +26,7 @@ from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
+from app.services import artifact_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 from app.services.llm_errors import LLMUnavailableError
@@ -43,6 +44,12 @@ NEWS_SUMMARY = {
     "about": "The story covers BHP's quarterly copper output.",
     "changed": "Reported production increased.",
     "matters": "The increase may affect revenue expectations.",
+}
+# A well-formed answer the model left empty.
+EMPTY_SUMMARY = {
+    **{key: "" for key in artifact_summary.TEXT_LINES},
+    "confirmed_facts": [],
+    "speculation": [],
 }
 
 
@@ -145,6 +152,42 @@ def test_artifact_summary_records_the_model_and_prompt_version(
     assert '"payment_date": "2040-01-02"' in provider.calls[0].prompt
 
 
+def test_summarising_an_announcement_again_replaces_its_clarity_lists(
+    db_session: Session,
+    scripted,
+) -> None:
+    artifact = _announcement(db_session)
+    revised = {
+        **ANNOUNCEMENT_SUMMARY,
+        "confirmed_facts": ["The record date is 1 December 2039."],
+        "speculation": [],
+    }
+    scripted(json.dumps(ANNOUNCEMENT_SUMMARY), json.dumps(revised))
+
+    llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+    result = llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+
+    summary = artifact_summary.read(artifact)
+    assert summary.confirmed_facts == ("The record date is 1 December 2039.",)
+    assert summary.speculation == ()
+    assert artifact.artifact_metadata["category"] == "DividendAnnouncement"
+    assert _summary_row(db_session, artifact).id == result["summary_id"]
+
+
+def test_an_answer_without_text_is_refused_with_502(
+    db_session: Session,
+    scripted,
+) -> None:
+    artifact = _announcement(db_session)
+    scripted(json.dumps(EMPTY_SUMMARY))
+
+    with pytest.raises(HTTPException) as error:
+        llm.summarise_artifact(artifact_id=artifact.id, db=db_session)
+
+    assert error.value.status_code == 502
+    assert artifact_summary.read(artifact) is None
+
+
 def test_a_news_artifact_is_summarised_with_the_news_prompt(
     db_session: Session,
     scripted,
@@ -180,7 +223,7 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
         ticker_id=_bhp(db_session).id,
         title="Already summarised",
         raw_text="Text.",
-        artifact_metadata={"about": "Done.", "confirmed_facts": [], "speculation": []},
+        artifact_metadata=ANNOUNCEMENT_SUMMARY,
     )
     scripted(json.dumps(ANNOUNCEMENT_SUMMARY))
 
@@ -188,6 +231,53 @@ def test_ticker_summaries_skip_artifacts_already_summarised(
 
     assert (result["processed"], result["skipped"], result["errors"]) == (1, 1, [])
     assert _summary_row(db_session, pending).model_used == "scripted:test-model"
+
+
+def test_ticker_summaries_list_an_answer_without_text_and_go_on(
+    db_session: Session,
+    scripted,
+) -> None:
+    announcements = [_announcement(db_session), _announcement(db_session)]
+    provider = scripted(json.dumps(EMPTY_SUMMARY), json.dumps(ANNOUNCEMENT_SUMMARY))
+
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+
+    [unsummarised] = [a for a in announcements if artifact_summary.read(a) is None]
+    [summarised] = [a for a in announcements if a is not unsummarised]
+    assert (result["processed"], result["skipped"]) == (1, 0)
+    assert result["errors"] == [
+        {
+            "artifact_id": str(unsummarised.id),
+            "error": f"The summary of artifact {unsummarised.id} has no text",
+        }
+    ]
+    assert artifact_summary.is_complete(
+        artifact_summary.read(summarised),
+        source_type="asx_announcement",
+    )
+    assert len(provider.calls) == 2
+
+
+def test_ticker_summaries_skip_news_that_has_all_four_lines(
+    db_session: Session,
+    scripted,
+) -> None:
+    """News has no clarity lists, so asking for them summarised it again every call."""
+    _artifact(
+        db_session,
+        source_type="news",
+        artifact_type="news_article",
+        ticker_id=_bhp(db_session).id,
+        title="BHP production story",
+        raw_text="BHP reported an increase in quarterly copper production.",
+        artifact_metadata={"source_name": "Example News", **NEWS_SUMMARY},
+    )
+    provider = scripted()
+
+    result = llm.summarise_ticker_artifacts("BHP", db=db_session)
+
+    assert (result["processed"], result["skipped"], result["errors"]) == (0, 1, [])
+    assert provider.calls == []
 
 
 def test_category_split_reports_the_model(db_session: Session, scripted) -> None:

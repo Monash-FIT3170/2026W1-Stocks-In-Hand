@@ -1,4 +1,3 @@
-import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -9,52 +8,11 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
-from app.services.summary_metadata import (
-    SUMMARY_TEXT_KEYS,
-    normalise_summary_metadata,
-    split_combined_summary_text,
-)
+from app.services.artifact_card import artifact_card
 
 
-_WHITESPACE = re.compile(r"\s+")
-_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 _SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 FEED_SOURCE_TYPES = ("asx_announcement", "news", "reddit")
-
-
-def _clean_text(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = _WHITESPACE.sub(" ", value).strip()
-    return cleaned or None
-
-
-def _preview_text(value: object, max_length: int = 220) -> str | None:
-    cleaned = _clean_text(value)
-    if not cleaned:
-        return None
-    if len(cleaned) <= max_length:
-        return cleaned
-    return f"{cleaned[:max_length].rstrip()}..."
-
-
-def _metadata_value(metadata: dict | None, *keys: str) -> str | None:
-    if not isinstance(metadata, dict):
-        return None
-    for key in keys:
-        cleaned = _clean_text(metadata.get(key))
-        if cleaned:
-            return cleaned
-    return None
-
-
-def _format_label(value: object, fallback: str) -> str:
-    cleaned = _clean_text(value)
-    if not cleaned or cleaned.upper() == "UNKNOWN":
-        cleaned = fallback
-    label = cleaned.replace("_", " ").replace("-", " ")
-    label = _CAMEL_BOUNDARY.sub(" ", label)
-    return label.title()
 
 
 def _ticker_symbol(artifact: Artifact) -> str:
@@ -68,39 +26,6 @@ def _ticker_symbol(artifact: Artifact) -> str:
         }
     )
     return mentioned_symbols[0] if mentioned_symbols else "ASX"
-
-
-def _source_details(artifact: Artifact) -> tuple[str, str, str]:
-    source_type = _clean_text(artifact.source_type) or "market_update"
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    platform_name = _clean_text(artifact.platform.name) if artifact.platform else None
-
-    if source_type == "asx_announcement":
-        return source_type, "ASX", "View original ASX filing"
-    if source_type == "reddit":
-        return source_type, platform_name or "Reddit", "View original Reddit post"
-
-    source_name = _metadata_value(metadata, "source_name", "provider") or platform_name
-    source_name = source_name or "Publisher"
-    return source_type, source_name, f"View original at {source_name}"
-
-
-def _summary_fields(artifact: Artifact, metadata: dict) -> dict[str, str]:
-    """Read structured metadata, with a safe fallback for legacy combined rows."""
-    fields = {
-        key: value
-        for key, value in normalise_summary_metadata(metadata).items()
-        if key in SUMMARY_TEXT_KEYS
-    }
-    if all(key in fields for key in SUMMARY_TEXT_KEYS):
-        return fields
-
-    summaries = getattr(artifact, "summaries", None) or []
-    if summaries:
-        recovered = split_combined_summary_text(summaries[0].summary_text)
-        for key, value in recovered.items():
-            fields.setdefault(key, value)
-    return fields
 
 
 def _sydney_day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -118,47 +43,11 @@ def _sydney_date_end(value: date) -> datetime:
 
 
 def _announcement_from_artifact(artifact: Artifact) -> AnnouncementResponse:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    summary_fields = _summary_fields(artifact, metadata)
-    source_type, source_name, source_label = _source_details(artifact)
-    title = _clean_text(artifact.title) or f"Untitled {_format_label(source_type, 'market update')}"
-
     return AnnouncementResponse(
         id=artifact.id,
         ticker=_ticker_symbol(artifact),
-        tag=_format_label(metadata.get("category"), artifact.artifact_type),
-        source_type=source_type,
-        source_name=source_name,
-        source_label=source_label,
         published_at=artifact.published_at or artifact.created_at,
-        title=title,
-        about=(
-            _clean_text(summary_fields.get("about"))
-            or _metadata_value(
-                metadata,
-                "about",
-                "what_its_about",
-                "what_it_is_about",
-            )
-            or _clean_text(summary_fields.get("summary"))
-            or _metadata_value(metadata, "summary")
-            or _preview_text(artifact.raw_text)
-            or title
-        ),
-        changed=(
-            _clean_text(summary_fields.get("changed"))
-            or _metadata_value(metadata, "changed", "what_changed")
-            or "No change summary available yet."
-        ),
-        matters=(
-            _clean_text(summary_fields.get("matters"))
-            or _metadata_value(metadata, "matters", "why_it_matters")
-            or "No impact summary available yet."
-        ),
-        url=(
-            _clean_text(artifact.url)
-            or _metadata_value(metadata, "source_url", "pdf_url")
-        ),
+        **artifact_card(artifact).fields(),
     )
 
 

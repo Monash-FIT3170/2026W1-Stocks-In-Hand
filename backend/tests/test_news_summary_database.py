@@ -1,8 +1,9 @@
-"""News summaries replace the artifact's one summary row instead of inserting.
+"""News summaries on Postgres with a scripted LLM.
 
 artifact_summaries allows one row per artifact. The admin news route used to
 INSERT, so summarising a story the analysis worker had already summarised hit
-the unique constraint.
+the unique constraint. A story whose answer has no text is listed as an error,
+and the loop goes on to the next story.
 """
 
 import json
@@ -22,7 +23,8 @@ import app.models  # noqa: F401
 from app.core.config import settings
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
-from app.services import news_summary
+from app.models.ticker import Ticker
+from app.services import artifact_summary, news_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 
@@ -38,7 +40,14 @@ def db_session() -> Iterator[Session]:
         pytest.skip(f"Database is not available: {exc}")
     connection = engine.connect()
     transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+    # SessionLocal does not autoflush. The news loop rolls back after a failed
+    # story, and a savepoint per session transaction keeps that rollback
+    # inside this test's transaction.
+    session = sessionmaker(
+        bind=connection,
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )()
     try:
         yield session
     finally:
@@ -71,26 +80,73 @@ def test_summarising_an_already_summarised_story_updates_its_row(
     )
     db_session.commit()
 
-    llm = ScriptedProvider(
-        [
-            json.dumps(
-                {
-                    "summary": "BHP lifted copper output.",
-                    "about": "The story covers BHP production.",
-                    "changed": "Copper output rose.",
-                    "matters": "Output supports revenue.",
-                }
-            )
-        ]
-    )
+    answer = {
+        "summary": "BHP lifted copper output.",
+        "about": "The story covers BHP production.",
+        "changed": "Copper output rose.",
+        "matters": "Output supports revenue.",
+    }
+    llm = ScriptedProvider([json.dumps(answer)])
     monkeypatch.setattr(providers, "configured_provider", lambda: llm)
 
-    news_summary.summarise_news_artifact(db_session, artifact)
+    recorded = news_summary.summarise_news_artifact(db_session, artifact)
 
     rows = db_session.scalars(
         select(ArtifactSummary).where(ArtifactSummary.artifact_id == artifact.id)
     ).all()
-    assert len(rows) == 1
-    assert rows[0].summary_text.startswith("BHP lifted copper output.")
-    assert rows[0].prompt_version == "llm-news-summary-v2"
-    assert rows[0].model_used == "scripted:test-model"
+    assert [row.id for row in rows] == [recorded.summary_id]
+    assert artifact_summary.read(artifact) == artifact_summary.from_answer(
+        answer,
+        model="scripted:test-model",
+        prompt_version="llm-news-summary-v2",
+    )
+    assert artifact.artifact_metadata["source_name"] == "publisher.example"
+    [call] = llm.calls
+    assert "Source:\npublisher.example" in call.prompt
+
+
+def test_a_story_whose_answer_has_no_text_is_listed_and_the_next_is_summarised(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bhp = db_session.scalars(select(Ticker).where(Ticker.symbol == "BHP")).one()
+    stories = [
+        Artifact(
+            ticker_id=bhp.id,
+            source_type="news",
+            artifact_type="news_article",
+            title=title,
+            raw_text=f"{title} for BHP.",
+            content_hash=f"news-{uuid.uuid4()}",
+        )
+        for title in ("BHP lifts copper output", "BHP opens a new mine")
+    ]
+    db_session.add_all(stories)
+    db_session.commit()
+    answer = {
+        "summary": "BHP lifted copper output.",
+        "about": "The story covers BHP production.",
+        "changed": "Copper output rose.",
+        "matters": "Output supports revenue.",
+    }
+    empty = {key: "" for key in artifact_summary.TEXT_LINES}
+    llm = ScriptedProvider([json.dumps(empty), json.dumps(answer)])
+    monkeypatch.setattr(providers, "configured_provider", lambda: llm)
+
+    result = news_summary.summarise_news_for_symbol(db_session, "BHP", limit=10)
+
+    [unsummarised] = [story for story in stories if artifact_summary.read(story) is None]
+    [summarised] = [story for story in stories if story is not unsummarised]
+    assert (result["candidates"], result["summarised"], result["skipped"]) == (2, 1, 0)
+    assert result["errors"] == [
+        {
+            "artifact_id": str(unsummarised.id),
+            "title": unsummarised.title,
+            "message": f"The summary of artifact {unsummarised.id} has no text",
+        }
+    ]
+    assert artifact_summary.read(summarised) == artifact_summary.from_answer(
+        answer,
+        model="scripted:test-model",
+        prompt_version="llm-news-summary-v2",
+    )

@@ -17,11 +17,11 @@ from app.database.connection import SessionLocal
 from app.models.information_platform import InformationPlatform
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
+from app.services import artifact_summary
 from app.services import generation
 from app.services import sentiment as sentiment_service
 from app.schemas.artifact import ArtifactCreate, ArtifactType, SourceType
 from app.crud import artifact as artifact_crud
-from app.crud.artifact_summary import upsert_artifact_summary
 from app.crud import ticker as ticker_crud
 from app.crud import information_platform as platform_crud
 from app.services.title_normalization import MAX_TITLE_LENGTH, normalise_title
@@ -35,26 +35,6 @@ except ImportError:  # Support direct CLI execution.
 if TYPE_CHECKING:
     from scrapers.base import Announcement
     from parsing.classification import ClassificationResult
-
-
-def _fallback_summary_text(title: str, summary: dict[str, str]) -> str:
-    parts = [
-        summary.get("summary"),
-        summary.get("about"),
-        summary.get("changed"),
-        summary.get("matters"),
-    ]
-    cleaned = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
-    return "\n\n".join(cleaned) or title
-
-
-def _artifact_has_summary_fields(artifact: Artifact) -> bool:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    return all(isinstance(metadata.get(key), str) and metadata[key].strip() for key in (
-        "about",
-        "changed",
-        "matters",
-    ))
 
 
 def _artifact_sentiment_text(artifact: Artifact, raw_text: str) -> str:
@@ -136,24 +116,14 @@ def _summarise_and_store_artifact(
         print(f"[SUMMARY] Skipped for artifact {artifact.id}: {generated.reason}")
         _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
         return
-    summary = generated.value
 
-    metadata = dict(artifact.artifact_metadata or {})
-    for key in ("summary", "about", "changed", "matters"):
-        value = summary.get(key)
-        if value:
-            metadata[key] = value
-    artifact.artifact_metadata = metadata
-
-    upsert_artifact_summary(
-        db,
-        artifact_id=artifact.id,
-        summary_text=_fallback_summary_text(
-            artifact.title or "Untitled ASX announcement",
-            summary,
-        ),
-        model_used=generated.model,
-    )
+    try:
+        artifact_summary.record(db, artifact, artifact_summary.from_generated(generated))
+    except artifact_summary.EmptySummary as exc:
+        print(f"[SUMMARY] Skipped for artifact {artifact.id}: {exc}")
+        _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
+        return
+    db.commit()
     print(f"[SUMMARY] Stored summary for artifact {artifact.id}")
     _analyse_and_store_artifact_sentiment(db, artifact, raw_text)
     time.sleep(3)
@@ -234,7 +204,7 @@ def store(
                 print(f"[STORAGE] Repaired oversized title for artifact {existing.id}")
             db.add(existing)
             db.commit()
-            if not _artifact_has_summary_fields(existing):
+            if artifact_summary.needs_summary(existing):
                 existing_category = str(
                     next_metadata.get("category") or "UNKNOWN"
                 )

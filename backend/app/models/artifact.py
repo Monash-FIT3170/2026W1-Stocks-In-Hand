@@ -75,3 +75,4 @@ class Artifact(Base):
         back_populates="artifact",
         cascade="all, delete-orphan",
     )
+    summaries = relationship("ArtifactSummary", back_populates="artifact")

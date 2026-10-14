@@ -237,6 +237,8 @@ def test_worker_sends_and_deduplicates_against_postgres(
             assert subscription is not None
             assert subscription.last_delivery_status == "sent"
             assert subscription.last_delivery_error_code is None
+        # The seeded summary row has only joined text, so the alert recovers it.
+        assert "Earnings were below expectations." in send.call_args.kwargs["text"]
     finally:
         if ids:
             _cleanup(engine, ids=ids)

@@ -12,11 +12,6 @@ from uuid import UUID
 
 import boto3
 from app.messages import PublicDiscussionAnalysisMessage
-from app.services.summary_metadata import (
-    combine_summary_text,
-    has_complete_summary_metadata,
-    normalise_summary_metadata,
-)
 from parsing.analysis import (
     AnalysisOutput,
     analyse_document,
@@ -184,41 +179,12 @@ def _artifact_state(store: RawDocumentStore, location: DocumentLocation) -> dict
     return state
 
 
-def _summary_values(output: AnalysisOutput) -> dict | None:
-    if output.summary is None:
-        return None
-    fields = normalise_summary_metadata(output.summary)
-    text = combine_summary_text(fields)
-    if not text:
-        return None
-    return {
-        "summary_text": text,
-        "model_used": output.summary_model,
-        "prompt_version": output.summary_prompt_version,
-        **fields,
-    }
-
-
-def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
-    """Find completed ASX artifacts missing display or clarity summary fields."""
+def _incomplete_announcements(limit: int) -> tuple[list[UUID], int]:
+    """Analysed announcements whose summary is incomplete, and how many there are."""
     with database_session() as db:
-        from app.models.artifact import Artifact
-        from app.models.artifact_summary import ArtifactSummary
+        from app.services import artifact_summary
 
-        rows = (
-            db.query(Artifact.id, Artifact.artifact_metadata)
-            .join(ArtifactSummary, ArtifactSummary.artifact_id == Artifact.id)
-            .filter(Artifact.source_type == "asx_announcement")
-            .filter(Artifact.analysis_status == AnalysisStatus.COMPLETED)
-            .order_by(Artifact.created_at.asc(), Artifact.id.asc())
-            .all()
-        )
-    missing = [
-        artifact_id
-        for artifact_id, metadata in rows
-        if not has_complete_summary_metadata(metadata)
-    ]
-    return missing[:limit], len(missing)
+        return artifact_summary.incomplete_announcements(db, limit=limit)
 
 
 def _summary_input(artifact_id: UUID) -> dict:
@@ -250,9 +216,9 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
     apply: bool,
     limit: int,
 ) -> dict:
-    """Boundedly regenerate missing structured fields through the active LLM."""
+    """Boundedly regenerate incomplete announcement summaries through Bedrock."""
     capped_limit = max(min(limit, 20), 1)
-    artifact_ids, total_missing = _missing_summary_artifact_ids(capped_limit)
+    artifact_ids, total_missing = _incomplete_announcements(capped_limit)
     result: dict[str, object] = {
         "apply": apply,
         "selected": len(artifact_ids),
@@ -264,8 +230,8 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
         result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
         return result
 
-    from app.services import generation
-    from app.crud.artifact import store_artifact_analysis
+    from app.services import artifact_summary, generation
+    from app.crud.artifact import get_artifact
 
     provider = generation.providers.configured_provider()
     if not provider.name.startswith("bedrock:"):
@@ -273,30 +239,21 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
 
     for artifact_id in artifact_ids:
         try:
-            summary_input = _summary_input(artifact_id)
             generated = generation.generate(
-                generation.AnnouncementSummary(**summary_input),
+                generation.AnnouncementSummary(**_summary_input(artifact_id)),
                 provider=provider,
             )
             if isinstance(generated, generation.Unavailable):
                 raise RuntimeError(generated.reason)
-            fields = normalise_summary_metadata(generated.value)
-            if not has_complete_summary_metadata(fields):
+            summary = artifact_summary.from_generated(generated)
+            if not artifact_summary.is_complete(summary, source_type="asx_announcement"):
                 raise RuntimeError("Bedrock response omitted structured summary fields")
-            summary_values = {
-                "summary_text": combine_summary_text(fields),
-                "model_used": generated.model,
-                "prompt_version": generated.prompt_version,
-                **fields,
-            }
             with database_session() as db:
-                store_artifact_analysis(
-                    db,
-                    artifact_id=artifact_id,
-                    raw_text=summary_input["raw_text"],
-                    metadata=fields,
-                    summary=summary_values,
-                )
+                artifact = get_artifact(db, artifact_id)
+                if artifact is None:
+                    raise RuntimeError("Completed artifact is no longer available")
+                artifact_summary.record(db, artifact, summary)
+                db.commit()
             result["updated"] = int(result["updated"]) + 1
         # Continue so one malformed model response cannot block the batch.
         except Exception as exc:  # pylint: disable=broad-exception-caught
@@ -307,7 +264,7 @@ def _resummarise_missing_fields(  # pylint: disable=too-many-locals
                 }
             )
 
-    _remaining_ids, remaining = _missing_summary_artifact_ids(1)
+    _remaining_ids, remaining = _incomplete_announcements(1)
     result["missing_after"] = remaining
     return result
 
@@ -483,7 +440,7 @@ def _analyse_public_discussion_artifact(
                 "category": category,
                 "category_confidence": 1.0,
             },
-            summary=_summary_values(output),
+            summary=output.summary,
             sentiment=_sentiment_values(output),
         )
 
@@ -566,7 +523,7 @@ def _analyse_object(
             artifact_id=artifact_id,
             raw_text=output.parsed.raw_text,
             metadata=analysis_metadata,
-            summary=_summary_values(output),
+            summary=output.summary,
             sentiment=sentiment,
         )
 

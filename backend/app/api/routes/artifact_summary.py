@@ -2,17 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
 from app.database.connection import get_db
-from app.schemas.artifact_summary import ArtifactSummaryCreate, ArtifactSummaryResponse
+from app.schemas.artifact_summary import ArtifactSummaryResponse
 from app.crud import artifact_summary as crud
 
 router = APIRouter(prefix="/artifact-summaries", tags=["artifact-summaries"])
-
-@router.post("/", response_model=ArtifactSummaryResponse)
-def create_artifact_summary(
-    summary: ArtifactSummaryCreate,
-    db: Session = Depends(get_db),
-):
-    return crud.create_artifact_summary(db=db, summary=summary)
 
 @router.get("/artifact/{artifact_id}", response_model=list[ArtifactSummaryResponse])
 def get_summaries_by_artifact(artifact_id: UUID, db: Session = Depends(get_db)):

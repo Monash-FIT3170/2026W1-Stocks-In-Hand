@@ -67,9 +67,10 @@ This means:
 
 1. An `Artifact` belongs to a ticker and to the platform it came from.
 2. `crud.artifact.store_artifact_analysis` (called from `lambdas/analysis.py`) writes
-   the artifact, then its summary and sentiment.
-3. The ticker overview, news feed, and deep-dive endpoints read them back
-   through the `summaries` and `sentiments` backrefs.
+   the artifact, records its summary through the artifact summary module
+   (`app/services/artifact_summary.py`), and stores its sentiment.
+3. The ticker overview, news feed, and deep-dive endpoints read summaries back
+   through the same module, which reads the `summaries` relationship.
 
 Duplicate artifacts are rejected at insert time by `content_hash`, so there is
 no duplicate flag to filter on when reading.

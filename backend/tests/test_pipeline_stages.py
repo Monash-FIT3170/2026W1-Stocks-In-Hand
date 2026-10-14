@@ -33,8 +33,10 @@ from app.crud import scrape_run as scrape_run_crud
 from app.messages import NotificationMessage, QueueAMessage, QueueBMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
+from app.models.artifact_summary import ArtifactSummary
 from app.models.scrape_run import ScrapeRun
-from app.services import scrape_runs
+from app.services import artifact_summary, scrape_runs
+from app.services.artifact_summary import Summary
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 from lambdas import (
@@ -66,7 +68,8 @@ def db_session() -> Iterator[Session]:
         pytest.skip(f"Database is not available: {exc}")
     connection = engine.connect()
     transaction = connection.begin()
-    session = sessionmaker(bind=connection)()
+    # The workers run on SessionLocal, which does not autoflush. Nor does this.
+    session = sessionmaker(bind=connection, autoflush=False)()
     try:
         yield session
     finally:
@@ -651,7 +654,7 @@ def _s3_event(location, *, bucket: str | None = None) -> str:
     )
 
 
-def _analysis_output() -> AnalysisOutput:
+def _analysis_output(summary: Summary | None = None) -> AnalysisOutput:
     classification = classify_document(
         ClassificationInput(
             title="Half Year Results",
@@ -670,9 +673,7 @@ def _analysis_output() -> AnalysisOutput:
             extracted_data={},
             classification=classification,
         ),
-        summary=None,
-        summary_model=None,
-        summary_prompt_version=None,
+        summary=summary,
         sentiment={
             "sentiment_label": "positive",
             "label": "positive",
@@ -732,6 +733,41 @@ def test_analysis_records_the_result_finishes_the_run_and_notifies(
     assert notification.scrape_run_id == run.id
     assert notification.ticker == "CSL"
     assert notification.sentiment_label == "positive"
+
+
+def test_analysis_records_the_summary_with_the_result(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run, artifact, stored = _stored_document(workers_use, store)
+    summary = artifact_summary.from_answer(
+        {
+            "summary": "CSL reported higher half year revenue.",
+            "about": "The report covers CSL's half year results.",
+            "changed": "Revenue increased.",
+            "matters": "Higher revenue may support earnings.",
+            "confirmed_facts": ["Revenue increased."],
+            "speculation": [],
+        },
+        model="bedrock:test-model",
+        prompt_version="llm-announcement-summary-v3",
+    )
+    monkeypatch.setattr(
+        analysis, "analyse_document", lambda *_a, **_k: _analysis_output(summary)
+    )
+
+    _analyse(_s3_event(stored.location))
+
+    workers_use.refresh(artifact)
+    assert artifact_summary.read(artifact) == summary
+    assert artifact.artifact_metadata["page_count"] == 1
+    assert (
+        workers_use.query(ArtifactSummary)
+        .filter(ArtifactSummary.artifact_id == artifact.id)
+        .count()
+        == 1
+    )
 
 
 def test_analysis_of_a_completed_document_is_skipped(

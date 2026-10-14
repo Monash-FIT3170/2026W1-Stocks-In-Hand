@@ -10,6 +10,13 @@ from app.services import news_summary
 from app.services.generation import providers
 from app.services.generation.providers import ScriptedProvider
 
+NEWS_SUMMARY = {
+    "summary": "BHP reported stronger copper production.",
+    "about": "The story covers BHP's quarterly copper production.",
+    "changed": "Reported copper output increased.",
+    "matters": "Higher output may affect revenue expectations.",
+}
+
 
 @pytest.fixture()
 def scripted(monkeypatch: pytest.MonkeyPatch):
@@ -36,60 +43,6 @@ def _artifact(**overrides):
     for key, value in values.items():
         setattr(artifact, key, value)
     return artifact
-
-
-@pytest.mark.parametrize(
-    ("metadata", "expected"),
-    [
-        ({}, False),
-        ({"about": ""}, False),
-        ({"about": "   "}, False),
-        ({"about": "The story covers BHP."}, True),
-        (None, False),
-    ],
-)
-def test_has_news_summary_metadata(metadata, expected) -> None:
-    artifact = _artifact(artifact_metadata=metadata)
-
-    assert news_summary.has_news_summary_metadata(artifact) is expected
-
-
-def test_summarise_news_artifact_stores_summary_metadata(scripted) -> None:
-    db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = None
-    artifact = _artifact()
-    provider = scripted(
-        {
-            "summary": "BHP reported stronger copper production.",
-            "about": "The story covers BHP's quarterly copper production.",
-            "changed": "Reported copper output increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        }
-    )
-
-    summary_row = news_summary.summarise_news_artifact(db, artifact)
-
-    [call] = provider.calls
-    assert "BHP reports stronger copper production" in call.prompt
-    assert "Source:\npublisher.example" in call.prompt
-    assert call.prompt.endswith(
-        "BHP reported stronger copper production in its quarterly update."
-    )
-    assert artifact.artifact_metadata["summary"] == "BHP reported stronger copper production."
-    assert artifact.artifact_metadata["about"] == (
-        "The story covers BHP's quarterly copper production."
-    )
-    assert artifact.artifact_metadata["changed"] == "Reported copper output increased."
-    assert artifact.artifact_metadata["matters"] == (
-        "Higher output may affect revenue expectations."
-    )
-    assert summary_row.artifact_id == artifact.id
-    assert summary_row.prompt_version == "llm-news-summary-v2"
-    assert summary_row.model_used == "scripted:test-model"
-    assert "BHP reported stronger copper production." in summary_row.summary_text
-    db.add.assert_called_once_with(summary_row)
-    db.commit.assert_called_once()
-    db.refresh.assert_called_once_with(summary_row)
 
 
 def test_summarise_news_artifact_uses_fallback_title(scripted) -> None:
@@ -126,7 +79,7 @@ def test_summarise_news_for_symbol_summarises_unsummarised_artifacts() -> None:
     db = MagicMock()
     ticker = MagicMock(symbol="BHP")
     unsummarised = _artifact(artifact_metadata={})
-    summarised = _artifact(artifact_metadata={"about": "Existing summary"})
+    summarised = _artifact(artifact_metadata=NEWS_SUMMARY)
 
     with patch.object(
         news_summary,
@@ -202,6 +155,7 @@ def test_news_artifacts_for_ticker_filters_to_news_rows() -> None:
     db = MagicMock()
     ticker = MagicMock(id=uuid.uuid4())
     query = db.query.return_value
+    query.options.return_value = query
     query.filter.return_value = query
     query.order_by.return_value = query
     query.limit.return_value = query

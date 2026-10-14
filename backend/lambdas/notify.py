@@ -44,13 +44,13 @@ from app.crud import watchlist_ticker as watchlist_ticker_crud  # noqa: E402
 from app.messages import NotificationMessage  # noqa: E402
 from app.models.artifact import Artifact  # noqa: E402
 from app.models.artifact_sentiment import ArtifactSentiment  # noqa: E402
-from app.models.artifact_summary import ArtifactSummary  # noqa: E402
 from app.models.ticker import Ticker  # noqa: E402
 from app.services import brevo_alerts  # noqa: E402
 from app.services.alert_templates import (  # noqa: E402
     render_alert_email,
     render_rollup_email,
 )
+from app.services.artifact_summary import alert_text  # noqa: E402
 from app.services.unsubscribe_tokens import (  # noqa: E402
     create_signed_unsubscribe_token,
 )
@@ -173,19 +173,15 @@ def _load_context(message: NotificationMessage) -> NotificationContext:
                 Ticker.company_name.label("company_name"),
                 ArtifactSentiment.sentiment_label.label("sentiment_label"),
                 ArtifactSentiment.confidence_score.label("confidence_score"),
-                ArtifactSummary.summary_text.label("summary_text"),
             )
             .outerjoin(Ticker, Ticker.id == Artifact.ticker_id)
             .outerjoin(
                 ArtifactSentiment,
                 ArtifactSentiment.artifact_id == Artifact.id,
             )
-            .outerjoin(
-                ArtifactSummary,
-                ArtifactSummary.artifact_id == Artifact.id,
-            )
             .where(Artifact.id == message.artifact_id)
         ).mappings().one_or_none()
+        summary_text = alert_text(db, message.artifact_id)
 
     if row is None:
         raise RetryableNotificationError(
@@ -239,7 +235,7 @@ def _load_context(message: NotificationMessage) -> NotificationContext:
         ticker_symbol=canonical_symbol,
         company_name=str(row["company_name"]),
         artifact_title=row["artifact_title"],
-        summary_text=row["summary_text"],
+        summary_text=summary_text,
         sentiment_label=canonical_label,
         confidence_score=canonical_confidence,
     )

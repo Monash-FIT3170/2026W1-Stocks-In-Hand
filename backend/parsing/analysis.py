@@ -24,6 +24,7 @@ from parsing.classification import (
 from parsing.classification.taxonomy import category_definition
 
 if TYPE_CHECKING:
+    from app.services.artifact_summary import Summary
     from app.services.generation import Generated, Unavailable
 
 
@@ -40,33 +41,24 @@ class ParsedDocument:
 @dataclass(frozen=True)
 class AnalysisOutput:
     parsed: ParsedDocument
-    summary: dict[str, str] | None
-    summary_model: str | None
-    summary_prompt_version: str | None
+    summary: Summary | None
     sentiment: dict[str, Any]
 
 
 def _analysis_output(
     parsed: ParsedDocument,
-    summary: Generated[dict[str, Any]] | Unavailable,
+    generated: Generated[dict[str, Any]] | Unavailable,
     sentiment: dict[str, Any],
 ) -> AnalysisOutput:
-    """Sentiment always; the summary only when an LLM was available."""
-    from app.services import generation
+    """Sentiment always; the summary only when an LLM wrote one with text."""
+    from app.services import artifact_summary, generation
 
-    if isinstance(summary, generation.Unavailable):
-        return AnalysisOutput(
-            parsed=parsed,
-            summary=None,
-            summary_model=None,
-            summary_prompt_version=None,
-            sentiment=sentiment,
-        )
+    if isinstance(generated, generation.Unavailable):
+        return AnalysisOutput(parsed=parsed, summary=None, sentiment=sentiment)
+    summary = artifact_summary.from_generated(generated)
     return AnalysisOutput(
         parsed=parsed,
-        summary=summary.value,
-        summary_model=summary.model,
-        summary_prompt_version=summary.prompt_version,
+        summary=summary if summary.lines else None,
         sentiment=sentiment,
     )
 
