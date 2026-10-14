@@ -313,6 +313,14 @@ def test_release_workflows_never_build_sam_deploy_themselves() -> None:
     assert builders == set()
 
 
+def test_staging_guide_deploys_through_the_release_module() -> None:
+    """Its sam deploy copies mapped 6 of the 7 image functions, so SAM refused them."""
+    guide = (REPOSITORY_ROOT / "infra" / "README.md").read_text(encoding="utf-8")
+
+    assert not re.search(r"^\s*sam deploy\b", guide, re.MULTILINE)
+    assert "--image-repositories" not in guide
+
+
 def test_workflows_read_stack_parameters_and_outputs_through_the_release_module() -> None:
     queries = {
         (path.name, step["name"])
