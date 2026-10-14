@@ -36,7 +36,7 @@ Record = `{id,ticker,tag,time,title,about,changed,matters,url,source_type,source
 
 GET /tickers/symbol/{symbol}/deep-dive-timeline -> Event[] (up to ten persisted events, newest first).
 
-Event = `{month,tag,title,date,detail,metrics:string[],tone,sources:Source[]}`. detail is the persisted summary text, or null when the record has no summary. metrics currently describes source type, not numeric performance. tone is hardcoded green: DO NOT display it as positive sentiment. Chronology, long readable detail, source provenance and links remain accessible. Do not claim an entire company history or generated cross-record conclusions.
+Event = `{tag,title,date,detail,sources:Source[]}`. date is a DISPLAY date. detail is the persisted summary text, or null when the record has no summary. Chronology, long readable detail, source provenance and links remain accessible. Do not claim an entire company history or generated cross-record conclusions.
 
 ### Categories: fetchTickerCategorySentiment(symbol)
 

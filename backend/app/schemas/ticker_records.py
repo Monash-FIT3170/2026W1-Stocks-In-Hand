@@ -28,12 +28,9 @@ class NewsFeedRecord(BaseModel):
 class DeepDiveEvent(BaseModel):
     """One record in a ticker's research history."""
 
-    month: str
     tag: str
     title: str
     date: str
     # The summary's text, or None until the record has a summary.
     detail: Optional[str]
-    metrics: list[str]
-    tone: str
     sources: list[SourceLink]

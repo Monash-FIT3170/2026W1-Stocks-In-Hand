@@ -66,15 +66,10 @@ def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
         summary = artifact_summary.read(artifact)
         events.append(
             DeepDiveEvent(
-                month=(
-                    artifact.published_at.strftime("%b %Y") if artifact.published_at else "Recent"
-                ),
                 tag=artifact_card.tag(artifact),
                 title=artifact.title or f"{ticker.symbol} update",
                 date=record_date(artifact),
                 detail=summary.text if summary else None,
-                metrics=[f"Source: {artifact.source_type or artifact.artifact_type}"],
-                tone="green",
                 sources=artifact_card.sources(artifact),
             )
         )

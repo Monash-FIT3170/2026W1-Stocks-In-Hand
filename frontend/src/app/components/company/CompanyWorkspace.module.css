@@ -1098,17 +1098,6 @@
   margin-bottom: 24px;
 }
 
-.historyProvenance {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin: 20px 0;
-}
-
-.historyProvenance dd {
-  text-align: left;
-}
-
 .pendingLabel {
   color: var(--ink-secondary);
   font-size: 14px;

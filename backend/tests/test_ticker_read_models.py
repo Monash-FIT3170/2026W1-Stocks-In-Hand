@@ -40,7 +40,7 @@ from app.read_models import ticker_brief, ticker_records, ticker_sentiment
 from app.read_models.ticker_records import PAGE_RECORDS, TickerNotFound
 from app.schemas.public_discussion import PublicDiscussionSource
 from app.schemas.ticker_brief import KeyNumber, TickerBrief, TickerOverview
-from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
+from app.schemas.ticker_records import NewsFeedRecord
 from app.services import artifact_summary
 from app.services.artifact_summary import Summary
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
@@ -463,7 +463,8 @@ def test_the_record_routes_answer_their_schemas(db_session: Session) -> None:
 
     assert feed.status_code == history.status_code == 200
     assert set(feed.json()[0]) == set(NewsFeedRecord.model_fields)
-    assert set(history.json()[0]) == set(DeepDiveEvent.model_fields)
+    # The deep dive sends nothing the page does not read: no month, metrics or tone.
+    assert set(history.json()[0]) == {"tag", "title", "date", "detail", "sources"}
     assert missing.status_code == 404
 
 
