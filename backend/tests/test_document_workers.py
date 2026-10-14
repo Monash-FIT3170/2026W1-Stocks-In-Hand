@@ -12,7 +12,7 @@ import pytest
 from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
-from app.messages import PublicDiscussionAnalysisMessage
+from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
 from lambdas import analysis, common
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -396,17 +396,24 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
     assert expanded.value.code == "document_too_large"
 
 
-def test_analysis_worker_parses_public_discussion_message() -> None:
-    message = PublicDiscussionAnalysisMessage(artifact_id=uuid4())
+@pytest.mark.parametrize("request_type", [StoredTextAnalysisMessage, SummaryRequestMessage])
+def test_analysis_worker_parses_each_request_it_knows(request_type) -> None:
+    message = request_type(artifact_id=uuid4())
 
-    parsed = analysis.parse_public_discussion_message(
-        sqs_record(message.model_dump_json())
-    )
+    assert analysis.parse_analysis_request(sqs_record(message.model_dump_json())) == message
 
-    assert parsed == message
-    assert analysis.parse_public_discussion_message(
-        s3_record(bucket="raw", key="raw/invalid")
-    ) is None
+
+def test_analysis_worker_leaves_s3_notifications_to_the_document_path() -> None:
+    assert analysis.parse_analysis_request(s3_record(bucket="raw", key="raw/invalid")) is None
+
+
+def test_analysis_worker_drops_a_request_it_does_not_know() -> None:
+    body = json.dumps({"message_type": "artifact_reclassification", "artifact_id": str(uuid4())})
+
+    with pytest.raises(PermanentDocumentError) as error:
+        analysis.parse_analysis_request(sqs_record(body))
+
+    assert error.value.code == "invalid_message"
 
 
 def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:

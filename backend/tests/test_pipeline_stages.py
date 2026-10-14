@@ -31,13 +31,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
 from app.core.config import settings
 from app.crud import scrape_run as scrape_run_crud
-from app.messages import NotificationMessage, QueueAMessage, QueueBMessage
+from app.messages import (
+    NotificationMessage,
+    QueueAMessage,
+    QueueBMessage,
+    SummaryRequestMessage,
+)
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
 from app.models.scrape_run import ScrapeRun
 from app.services import artifact_summary, scrape_runs
 from app.services.generation.providers import ScriptedProvider
+from app.services.llm_errors import LLMUnavailableError
 from app.sources import SOURCES
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 from lambdas import (
@@ -1019,6 +1025,69 @@ def test_stored_text_without_text_fails_its_analysis_at_once(
     workers_use.refresh(artifact)
     assert artifact.analysis_status == AnalysisStatus.FAILED
     assert artifact.last_error.startswith("no_extractable_text:")
+
+
+def test_a_summary_request_records_a_summary_and_nothing_else(
+    workers_use: Session,
+    store: RawDocumentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run, artifact, stored = _stored_document(workers_use, store)
+    _analysis_ports(workers_use, monkeypatch, ANNOUNCEMENT_SUMMARY, documents=store)
+    _analyse(_s3_event(stored.location))
+    revised = {**ANNOUNCEMENT_SUMMARY, "about": "The report covers CSL's revised results."}
+    ports = _analysis_ports(workers_use, monkeypatch, revised)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        _analyse(SummaryRequestMessage(artifact_id=artifact.id).model_dump_json())
+
+    workers_use.refresh(artifact)
+    workers_use.refresh(run)
+    [completed] = _pipeline_events(caplog)
+    assert artifact_summary.read(artifact).about == revised["about"]
+    assert ports.scorer.scored == []
+    assert artifact.analysis_status == AnalysisStatus.COMPLETED
+    assert (run.items_analyzed, run.status) == (1, ScrapeRunStatus.COMPLETED)
+    assert {key: completed[key] for key in ("event", "artifact_id", "prompt_version")} == {
+        "event": "completed",
+        "artifact_id": str(artifact.id),
+        "prompt_version": "llm-announcement-summary-v3",
+    }
+
+
+def test_a_summary_request_with_no_llm_is_logged_and_records_nothing(
+    workers_use: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    story = Artifact(
+        source_type="news",
+        artifact_type="news_article",
+        title="BHP lifts copper output",
+        raw_text="BHP reported an increase in quarterly copper production.",
+        content_hash=f"news:{uuid.uuid4()}",
+    )
+    workers_use.add(story)
+    workers_use.commit()
+    _analysis_ports(
+        workers_use,
+        monkeypatch,
+        LLMUnavailableError("Amazon Bedrock is disabled"),
+    )
+
+    with caplog.at_level(logging.INFO):
+        _analyse(SummaryRequestMessage(artifact_id=story.id).model_dump_json())
+
+    workers_use.refresh(story)
+    [unavailable] = _pipeline_events(caplog)
+    assert (unavailable["event"], unavailable["reason"]) == (
+        "summary_unavailable",
+        "Amazon Bedrock is disabled",
+    )
+    assert artifact_summary.read(story) is None
+    assert (story.analysis_status, story.last_error) == (AnalysisStatus.PENDING, None)
 
 
 # Abandoned work: a Lambda that times out on the final receive records nothing.

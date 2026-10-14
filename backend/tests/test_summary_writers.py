@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import app.models  # noqa: F401
 from app.api.routes import llm
 from app.core.config import settings
-from app.messages import PublicDiscussionAnalysisMessage
+from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
@@ -254,10 +254,7 @@ def _repair_operation(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
     return artifact
 
 
-def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    artifact = _news(db)
-    _workers_use(db, monkeypatch)
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact.id)
+def _handle(message: StoredTextAnalysisMessage | SummaryRequestMessage) -> None:
     analysis.handler(
         {
             "Records": [
@@ -270,7 +267,23 @@ def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
         },
         None,
     )
+
+
+def _analysis_worker(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
+    artifact = _news(db)
+    _workers_use(db, monkeypatch)
+    _handle(StoredTextAnalysisMessage(artifact_id=artifact.id))
     return artifact
+
+
+def _summary_request(new_artifact: Callable[[Session], Artifact]) -> Writer:
+    def write(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
+        artifact = new_artifact(db)
+        _workers_use(db, monkeypatch)
+        _handle(SummaryRequestMessage(artifact_id=artifact.id))
+        return artifact
+
+    return write
 
 
 def _news_service(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
@@ -287,8 +300,20 @@ def _summary_rows(db: Session, artifact: Artifact) -> list[ArtifactSummary]:
 
 @pytest.mark.parametrize(
     "writer",
-    [_admin_route(_announcement), _admin_ticker_route, _local_loader, _repair_operation],
-    ids=["admin_artifact_route", "admin_ticker_route", "local_loader", "repair_operation"],
+    [
+        _admin_route(_announcement),
+        _admin_ticker_route,
+        _local_loader,
+        _repair_operation,
+        _summary_request(_announcement),
+    ],
+    ids=[
+        "admin_artifact_route",
+        "admin_ticker_route",
+        "local_loader",
+        "repair_operation",
+        "summary_request",
+    ],
 )
 def test_every_announcement_writer_records_the_same_summary(
     db_session: Session,
@@ -310,8 +335,8 @@ def test_every_announcement_writer_records_the_same_summary(
 
 @pytest.mark.parametrize(
     "writer",
-    [_analysis_worker, _news_service, _admin_route(_news)],
-    ids=["analysis_worker", "news_service", "admin_artifact_route"],
+    [_analysis_worker, _news_service, _admin_route(_news), _summary_request(_news)],
+    ids=["analysis_worker", "news_service", "admin_artifact_route", "summary_request"],
 )
 def test_every_news_writer_records_the_same_summary(
     db_session: Session,

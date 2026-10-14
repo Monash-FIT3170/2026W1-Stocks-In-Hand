@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.messages import PublicDiscussionAnalysisMessage
+from app.messages import StoredTextAnalysisMessage
 from app.status import ANALYSIS_QUEUED_OR_DONE
 
 
@@ -19,14 +19,10 @@ def _sqs_client() -> Any:
 
 
 def enqueue_stored_artifact_analysis(artifact_id: UUID) -> str:
-    """Queue analysis for text already stored in the artifacts table.
-
-    The legacy wire message name is retained so deployments can process messages
-    produced before stored news was added to this queue.
-    """
+    """Queue analysis for text already stored in the artifacts table."""
     if not settings.ANALYSIS_QUEUE_URL:
         raise RuntimeError("ANALYSIS_QUEUE_URL is not configured")
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
+    message = StoredTextAnalysisMessage(artifact_id=artifact_id)
     response = _sqs_client().send_message(
         QueueUrl=settings.ANALYSIS_QUEUE_URL,
         MessageBody=message.model_dump_json(),

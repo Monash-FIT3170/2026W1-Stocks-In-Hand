@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
 from app.api.deps import require_admin_investor
 from app.messages import (
-    PublicDiscussionAnalysisMessage,
     QueueAMessage,
     QueueBMessage,
+    StoredTextAnalysisMessage,
 )
 from app.schemas.investor import InvestorUpdate
 from app.services import analysis_queue, scrape_queue
@@ -100,9 +100,9 @@ def test_enqueue_discovery_sends_validated_json(monkeypatch: pytest.MonkeyPatch)
     assert '"ticker":"CSL"' in call["MessageBody"]
 
 
-def test_public_discussion_analysis_message_contains_only_artifact_identity() -> None:
+def test_stored_text_analysis_message_contains_only_artifact_identity() -> None:
     artifact_id = uuid4()
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
+    message = StoredTextAnalysisMessage(artifact_id=artifact_id)
 
     assert message.message_type == "public_discussion_analysis"
     assert message.artifact_id == artifact_id
@@ -124,7 +124,7 @@ def test_enqueue_stored_artifact_analysis_sends_validated_json(
     )
     call = client.send_message.call_args.kwargs
     assert call["QueueUrl"] == "analysis-url"
-    parsed = PublicDiscussionAnalysisMessage.model_validate_json(call["MessageBody"])
+    parsed = StoredTextAnalysisMessage.model_validate_json(call["MessageBody"])
     assert parsed.artifact_id == artifact_id
 
 

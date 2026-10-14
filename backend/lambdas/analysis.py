@@ -1,14 +1,32 @@
+"""The analysis stage: every analysis queue message, through artifact analysis.
+
+The analysis queue carries three kinds of message: a native S3
+ObjectCreated notification for each stored document, a stored-text request
+for a news or public discussion artifact, and a summary request. The
+handler parses each one, names the subject a failure is recorded against,
+runs it through ``lambdas.artifact_analysis`` with the deployed ports and
+logs the outcome.
+
+A summary request has no subject, so a failure records nothing on the
+artifact: a permanent one is logged and dropped, and a retryable one is
+retried until it reaches the dead-letter queue.
+
+The IAM-only ``resummarise_missing_fields`` operation completes the
+summaries of analysed announcements in bounded batches.
+"""
+
 from __future__ import annotations
 
 import json
 import logging
 from urllib.parse import unquote_plus
+from uuid import UUID
 
 from pydantic import ValidationError
 
-from app.messages import PublicDiscussionAnalysisMessage
+from app.messages import AnalysisRequest, SummaryRequestMessage, analysis_request
 from lambdas import artifact_analysis
-from lambdas.artifact_analysis import AlreadyAnalysed, deployed_ports
+from lambdas.artifact_analysis import AlreadyAnalysed, SummaryUnavailable, deployed_ports
 from lambdas.common import PermanentDocumentError
 from lambdas.pipeline_stage import (
     StageRecord,
@@ -21,22 +39,24 @@ from lambdas.raw_documents import DocumentLocation, locate
 STAGE = "analysis"
 
 
-def parse_public_discussion_message(
-    record: dict,
-) -> PublicDiscussionAnalysisMessage | None:
+def parse_analysis_request(record: dict) -> AnalysisRequest | None:
+    """The request a message carries, or None for an S3 notification.
+
+    S3 notifications are the queue's only messages without a
+    ``message_type``. A request whose type this worker does not know, or
+    that does not match its schema, fails as ``invalid_message``.
+    """
     try:
         body = json.loads(record["body"])
     except (KeyError, TypeError, json.JSONDecodeError):
         return None
-    if not isinstance(body, dict) or body.get("message_type") != (
-        "public_discussion_analysis"
-    ):
+    if not isinstance(body, dict) or "message_type" not in body:
         return None
     try:
-        return PublicDiscussionAnalysisMessage.model_validate(body)
+        return analysis_request(body)
     except ValidationError as exc:
         raise PermanentDocumentError(
-            "Public discussion analysis message does not match schema version 1",
+            "Analysis request does not match schema version 1",
             code="invalid_message",
         ) from exc
 
@@ -78,21 +98,16 @@ def parse_s3_notifications(record: dict) -> list[DocumentLocation]:
 
 
 def _analyse(current: StageRecord) -> None:
-    stored_text_message = parse_public_discussion_message(current.record)
-    if stored_text_message is not None:
-        artifact_id = stored_text_message.artifact_id
-        current.subject = analysed_stored_text(artifact_id)
-        outcome = artifact_analysis.analyse_stored_text(artifact_id, deployed_ports())
-        if isinstance(outcome, AlreadyAnalysed):
-            current.log("duplicate_skipped", run_id=outcome.run_id)
-        else:
-            current.log(
-                "completed",
-                run_id=outcome.run_id,
-                category=outcome.category.upper(),
-                source_type=outcome.source_type,
-            )
-        return
+    request = parse_analysis_request(current.record)
+    if isinstance(request, SummaryRequestMessage):
+        _summarise(current, request.artifact_id)
+    elif request is not None:
+        _analyse_stored_text(current, request.artifact_id)
+    else:
+        _analyse_stored_documents(current)
+
+
+def _analyse_stored_documents(current: StageRecord) -> None:
     locations = parse_s3_notifications(current.record)
     ports = deployed_ports()
     for location in locations:
@@ -120,6 +135,34 @@ def _analyse(current: StageRecord) -> None:
             classifier_version=classification.classifier_version,
             source_adapter=outcome.source_adapter,
         )
+
+
+def _analyse_stored_text(current: StageRecord, artifact_id: UUID) -> None:
+    current.subject = analysed_stored_text(artifact_id)
+    outcome = artifact_analysis.analyse_stored_text(artifact_id, deployed_ports())
+    if isinstance(outcome, AlreadyAnalysed):
+        current.log("duplicate_skipped", run_id=outcome.run_id)
+        return
+    current.log(
+        "completed",
+        run_id=outcome.run_id,
+        category=outcome.category.upper(),
+        source_type=outcome.source_type,
+    )
+
+
+def _summarise(current: StageRecord, artifact_id: UUID) -> None:
+    outcome = artifact_analysis.summarise(artifact_id, deployed_ports())
+    if isinstance(outcome, SummaryUnavailable):
+        current.log("summary_unavailable", artifact_id=artifact_id, reason=outcome.reason)
+        return
+    current.log(
+        "completed",
+        artifact_id=artifact_id,
+        model=outcome.model,
+        prompt_version=outcome.prompt_version,
+        complete=outcome.complete,
+    )
 
 
 def handler(event: dict, _context) -> dict:

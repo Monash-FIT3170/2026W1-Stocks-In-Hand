@@ -1,7 +1,8 @@
 """Unit tests for the versioned SQS message contracts in app/messages.py.
 
 Queue A (Discovery) and Queue B (Download) messages are the actual
-payloads that cross the wire on DiscoveryQueue and DownloadQueue. The
+payloads that cross the wire on DiscoveryQueue and DownloadQueue, and
+analysis requests share AnalysisQueue with S3 notifications. The
 wiring tests in test_queue_wiring.py confirm the queues/consumers/
 producers in infra/template.yaml are connected correctly; these tests
 confirm the *messages themselves* stay valid -- correct schema_version,
@@ -10,6 +11,7 @@ silent schema drift via unexpected extra fields, and consistent
 ticker/adapter pairing. Pure unit tests: no AWS, no network, no queue.
 """
 
+import json
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -19,7 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 from pydantic import ValidationError
 
-from app.messages import QueueAMessage, QueueBMessage
+from app.messages import (
+    QueueAMessage,
+    QueueBMessage,
+    StoredTextAnalysisMessage,
+    SummaryRequestMessage,
+    analysis_request,
+)
 
 BHP_SOURCE_URL = "https://www.bhp.com/investor-hub/market-announcements"
 CSL_SOURCE_URL = "https://investors.csl.com/investors/asx-announcements"
@@ -144,3 +152,46 @@ def test_queue_b_message_round_trips_through_json_unchanged() -> None:
     assert restored.source_adapter == original.source_adapter
     assert restored.title == original.title
     assert restored.metadata == original.metadata
+
+
+# ---------------------------------------------------------------------------
+# Analysis queue requests
+# ---------------------------------------------------------------------------
+
+def test_summary_request_carries_only_the_artifact_identity() -> None:
+    message = SummaryRequestMessage(artifact_id=uuid4())
+
+    assert set(json.loads(message.model_dump_json())) == {
+        "schema_version",
+        "message_type",
+        "artifact_id",
+        "requested_at",
+    }
+    assert message.message_type == "artifact_summary"
+
+
+def test_stored_text_requests_keep_the_wire_name_queued_messages_carry() -> None:
+    assert StoredTextAnalysisMessage(artifact_id=uuid4()).message_type == (
+        "public_discussion_analysis"
+    )
+
+
+@pytest.mark.parametrize("request_type", [StoredTextAnalysisMessage, SummaryRequestMessage])
+def test_an_analysis_request_is_read_back_as_its_own_type(request_type) -> None:
+    sent = request_type(artifact_id=uuid4())
+
+    assert analysis_request(json.loads(sent.model_dump_json())) == sent
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"message_type": "artifact_reclassification", "artifact_id": str(uuid4())},
+        {"message_type": "artifact_summary", "artifact_id": str(uuid4()), "raw_text": "x"},
+        {"message_type": "artifact_summary"},
+    ],
+    ids=["unknown_type", "unknown_field", "no_artifact"],
+)
+def test_an_analysis_request_that_does_not_match_its_schema_is_rejected(body: dict) -> None:
+    with pytest.raises(ValidationError):
+        analysis_request(body)
