@@ -16,7 +16,6 @@ The store sits on an ``ObjectBucket``: ``S3Bucket`` in AWS and LocalStack,
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -26,6 +25,7 @@ from uuid import UUID
 import boto3
 from botocore.exceptions import ClientError
 
+from app.core.config import settings
 from app.sources import SOURCES
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
@@ -33,7 +33,6 @@ from lambdas.download_validation import (
     DOCUMENT_EXTENSIONS,
     DocumentFormat,
     DownloadedDocument,
-    document_size_limit,
     ensure_within_size_limit,
     validate_document_content,
 )
@@ -219,14 +218,14 @@ class RawDocumentStore:
             )
         ensure_within_size_limit(
             stored.size,
-            document_size_limit(),
+            settings.MAX_DOCUMENT_BYTES,
             subject="Stored document",
         )
         return StoredDocument(location=location, size=stored.size)
 
     def read(self, location: DocumentLocation) -> bytes:
         """Read a stored document and check it is the one its key names."""
-        max_bytes = document_size_limit()
+        max_bytes = settings.MAX_DOCUMENT_BYTES
         stored, content = self.bucket.get(location.key, max_bytes=max_bytes)
         if stored.content_type != location.content_type:
             raise PermanentDocumentError(
@@ -362,5 +361,5 @@ class InMemoryBucket:
 def raw_document_store() -> RawDocumentStore:
     """The deployed store: the RAW_DOCUMENT_BUCKET bucket through boto3."""
     return RawDocumentStore(
-        S3Bucket(boto3.client("s3"), os.environ["RAW_DOCUMENT_BUCKET"])
+        S3Bucket(boto3.client("s3"), settings.required("RAW_DOCUMENT_BUCKET"))
     )

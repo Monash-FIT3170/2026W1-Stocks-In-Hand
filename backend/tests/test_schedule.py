@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.core.config import settings
 from app.services import marketaux
 from lambdas import schedule
 
@@ -12,21 +13,9 @@ def _database_session():
     yield MagicMock()
 
 
-def test_schedule_defaults_to_the_catalogue_scheduled_tickers(monkeypatch) -> None:
-    monkeypatch.delenv("SCHEDULED_TICKERS", raising=False)
-
-    assert schedule._enabled_tickers() == ["ANZ", "BHP", "CBA", "CSL", "WES"]
-
-
-def test_schedule_ignores_tickers_outside_the_catalogue(monkeypatch) -> None:
-    monkeypatch.setenv("SCHEDULED_TICKERS", "wes, XYZ,anz")
-
-    assert schedule._enabled_tickers() == ["ANZ", "WES"]
-
-
 def test_marketaux_schedule_is_bounded(monkeypatch) -> None:
-    monkeypatch.setenv("MARKETAUX_ENABLED", "true")
-    monkeypatch.setenv("MARKETAUX_PER_TICKER_LIMIT", "999")
+    monkeypatch.setattr(settings, "MARKETAUX_ENABLED", True)
+    monkeypatch.setattr(settings, "MARKETAUX_PER_TICKER_LIMIT", 25)
     tickers = ["ANZ", "BHP", "CBA", "COH", "COL", "CSL", "MQG"]
 
     with (
@@ -52,7 +41,7 @@ def test_marketaux_schedule_is_bounded(monkeypatch) -> None:
 
 
 def test_marketaux_schedule_skips_collection_when_disabled(monkeypatch) -> None:
-    monkeypatch.setenv("MARKETAUX_ENABLED", "false")
+    monkeypatch.setattr(settings, "MARKETAUX_ENABLED", False)
 
     with patch.object(marketaux, "fetch_and_store_news") as collect:
         result = schedule._collect_marketaux_news(["ANZ"])
@@ -73,11 +62,10 @@ def _unavailable_database():
 
 
 def test_schedule_raises_when_marketaux_collection_fails(monkeypatch) -> None:
-    monkeypatch.setenv("SCHEDULED_TICKERS", "")
-    monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
+    monkeypatch.setattr(settings, "SCHEDULED_TICKERS", [])
+    monkeypatch.setattr(settings, "DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
 
     with (
-        patch.object(schedule, "load_runtime_configuration"),
         # The abandoned-work check fails quietly and scheduling carries on.
         patch.object(schedule, "database_session", _unavailable_database),
         patch.object(schedule.boto3, "client", return_value=MagicMock()),

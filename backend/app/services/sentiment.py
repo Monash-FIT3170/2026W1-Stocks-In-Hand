@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 
 from app.core.config import settings
@@ -16,8 +15,7 @@ def sentiment_input(title: str | None, raw_text: str | None) -> str:
     Never an LLM summary: the input must be deterministic, so a retry or a
     re-summarisation cannot change an artifact's sentiment.
     """
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
-    return f"{title or ''}\n\n{raw_text or ''}"[:max_chars]
+    return f"{title or ''}\n\n{raw_text or ''}"[: settings.MAX_ANALYSIS_CHARS]
 
 
 def _normalise_label(label: str):

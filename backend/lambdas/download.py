@@ -4,6 +4,7 @@ import asyncio
 
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.messages import QueueBMessage
 from app.status import DownloadStatus
 from lambdas.common import (
@@ -11,7 +12,6 @@ from lambdas.common import (
     canonicalize_url,
     database_session,
 )
-from lambdas.download_validation import document_size_limit
 from lambdas.pipeline_stage import StageRecord, downloaded_artifact, run_stage
 from lambdas.raw_documents import raw_document_store
 from scrapers.adapter import DocumentRequest
@@ -89,7 +89,7 @@ def _download(current: StageRecord) -> None:
                 title=message.title,
                 metadata=message.metadata,
             ),
-            max_bytes=document_size_limit(),
+            max_bytes=settings.MAX_DOCUMENT_BYTES,
         )
     )
     stored = store.put(

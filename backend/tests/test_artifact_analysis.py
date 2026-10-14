@@ -7,14 +7,11 @@ kind of artifact, and its tests patched the steps of each.
 """
 
 import json
-import subprocess
-import sys
 import uuid
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -59,7 +56,6 @@ from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import DownloadedDocument, validated_document
 from lambdas.raw_documents import InMemoryBucket, RawDocumentStore, locate
 
-BACKEND = Path(__file__).resolve().parents[1]
 HALF_YEAR_REPORT = "Half year report for the six months ended 31 December 2025."
 DIVIDEND_NOTICE = (
     "The board declared a dividend of 83 cents per share. "
@@ -681,20 +677,18 @@ def test_the_sqs_alert_sender_sends_the_notification_contract() -> None:
         sqs_alert_sender("", client)(message)
 
 
-@pytest.mark.parametrize(("enabled", "alerts"), [("true", True), ("false", False)])
+@pytest.mark.parametrize("enabled", [True, False])
 def test_the_lambda_sends_alerts_only_when_notifications_are_enabled(
     monkeypatch: pytest.MonkeyPatch,
-    enabled: str,
-    alerts: bool,
+    enabled: bool,
 ) -> None:
-    monkeypatch.setattr(artifact_analysis, "load_runtime_configuration", lambda: None)
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
-    monkeypatch.setenv("NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "raw-documents")
+    monkeypatch.setattr(settings, "NOTIFICATIONS_ENABLED", enabled)
+    monkeypatch.setattr(settings, "NOTIFICATION_QUEUE_URL", "https://sqs.example/notifications")
+    monkeypatch.setattr(settings, "RAW_DOCUMENT_BUCKET", "raw-documents")
 
     ports = deployed_ports()
 
-    assert (ports.alerts is not None) is alerts
+    assert (ports.alerts is not None) is enabled
     assert ports.documents.name == "raw-documents"
 
 
@@ -1069,21 +1063,3 @@ def test_every_path_gives_finbert_the_title_and_text(
         "positive",
         "test-finbert",
     )
-
-
-def test_importing_the_analysis_handler_builds_no_settings() -> None:
-    """The Lambda imports its handler before it loads DATABASE_URL from SSM."""
-    loaded = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, lambdas.analysis, lambdas.artifact_analysis; "
-            "print(sorted({'app.core.config', 'app.database.connection'} & set(sys.modules)))",
-        ],
-        cwd=BACKEND,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    assert loaded.stdout.strip() == "[]"

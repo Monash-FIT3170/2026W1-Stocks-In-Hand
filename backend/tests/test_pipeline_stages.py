@@ -184,7 +184,7 @@ def _discover(
     sqs = FakeSqs()
     _use_adapter(monkeypatch, FakeAdapter(queue_a.ticker, documents=announcements))
     monkeypatch.setattr(discovery.boto3, "client", lambda _service: sqs)
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
+    monkeypatch.setattr(settings, "DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
     discovery.handler({"Records": [_record(queue_a.model_dump_json(), attempt)]}, None)
     return sqs
 
@@ -293,8 +293,8 @@ def test_discovery_queues_recent_documents_newest_first_up_to_the_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run, queue_a = _requested_run(workers_use)
-    monkeypatch.setenv("MAX_DOCUMENTS_PER_RUN", "3")
-    monkeypatch.setenv("DISCOVERY_LOOKBACK_DAYS", "30")
+    monkeypatch.setattr(settings, "MAX_DOCUMENTS_PER_RUN", 3)
+    monkeypatch.setattr(settings, "DISCOVERY_LOOKBACK_DAYS", 30)
     announcements = [
         _announcement(title=f"Document {index}", age=timedelta(minutes=index))
         for index in (3, 0, 4, 1, 2)
@@ -1224,10 +1224,9 @@ def test_schedule_fails_abandoned_work_before_requesting_runs(
     def test_session():
         yield workers_use
 
-    monkeypatch.setenv("SCHEDULED_TICKERS", "")
-    monkeypatch.setenv("DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
-    monkeypatch.setenv("MARKETAUX_ENABLED", "false")
-    monkeypatch.setattr(schedule, "load_runtime_configuration", lambda: None)
+    monkeypatch.setattr(settings, "SCHEDULED_TICKERS", [])
+    monkeypatch.setattr(settings, "DISCOVERY_QUEUE_URL", "https://sqs.example/queue-a")
+    monkeypatch.setattr(settings, "MARKETAUX_ENABLED", False)
     monkeypatch.setattr(schedule, "database_session", test_session)
     monkeypatch.setattr(schedule.boto3, "client", lambda _service: FakeSqs())
 

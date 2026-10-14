@@ -10,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.config import settings
 from app.services import sentiment as sentiment_service
 
 TITLE = "BHP lifts copper output"
@@ -18,7 +19,7 @@ EXPECTED = f"{TITLE}\n\n{RAW_TEXT}"
 
 
 def test_input_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MAX_ANALYSIS_CHARS", "10")
+    monkeypatch.setattr(settings, "MAX_ANALYSIS_CHARS", 10)
 
     assert sentiment_service.sentiment_input(TITLE, RAW_TEXT) == EXPECTED[:10]
 

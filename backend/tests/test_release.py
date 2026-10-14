@@ -355,7 +355,7 @@ def test_every_value_is_checked_against_its_constraints_and_the_rules() -> None:
         plan(
             FakeAws(live_stack(), parameter_types={f"{PREFIX}/brevo-api-key": "SecureString"}),
             AuthProvider="okta",
-            MarketauxPerTickerLimit="26",
+            MarketauxPerTickerLimit="12.5",
             OperationsEmail="not-an-email",
             NotificationsEnabled="true",
             AlertSenderEmail="",
@@ -365,7 +365,7 @@ def test_every_value_is_checked_against_its_constraints_and_the_rules() -> None:
     assert problems(error) == [
         "OperationsEmail 'not-an-email' does not match ^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
         "AuthProvider must be one of legacy, dual, cognito, not 'okta'",
-        "MarketauxPerTickerLimit must be at most 25, not 26",
+        "MarketauxPerTickerLimit '12.5' does not match ^([1-9]|1[0-9]|2[0-5])$",
         "AlertSenderEmail is required when notifications are enabled.",
         "SiteCertificateArn is required when SiteDomainName is set.",
         "SiteHostedZoneId is required when SiteDomainName is set.",
@@ -1002,7 +1002,7 @@ def test_plan_reports_every_problem_as_a_github_error(
     assert exit_code == 1
     assert capsys.readouterr().err.splitlines() == [
         "::error::AuthProvider must be one of legacy, dual, cognito, not 'okta'",
-        "::error::MarketauxPerTickerLimit must be at least 1, not 0",
+        "::error::MarketauxPerTickerLimit '0' does not match ^([1-9]|1[0-9]|2[0-5])$",
     ]
     assert not (tmp_path / "plan.json").exists()
 

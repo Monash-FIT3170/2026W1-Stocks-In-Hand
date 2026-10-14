@@ -412,7 +412,9 @@ def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
     scheduler = model.function("SchedulerFunction")
 
     assert model.parameters["MarketauxEnabled"]["Default"] == "false"
-    assert model.parameters["MarketauxPerTickerLimit"]["MaxValue"] == 25
+    limit = model.parameter_definitions()["MarketauxPerTickerLimit"]
+    allowed = [value for value in ("0", "1", "12.5", "25", "26") if not limit.problems(value)]
+    assert allowed == ["1", "25"]
     for function_id in ("ApiFunction", "SchedulerFunction"):
         environment = model.function(function_id).environment
         assert environment["MARKETAUX_API_TOKEN_PARAMETER"] == marketaux_token, function_id

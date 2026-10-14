@@ -4,16 +4,14 @@ import hashlib
 import io
 import json
 import zipfile
-from unittest.mock import MagicMock
 from uuid import uuid4
 
 import httpx
 import pytest
-from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
 from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
-from lambdas import analysis, common
+from lambdas import analysis
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
@@ -24,94 +22,6 @@ from lambdas.download_validation import (
 )
 from parsing import analysis as parsing_analysis
 from parsing.analysis import extract_pdf
-
-
-def test_runtime_configuration_loads_public_discussion_parameters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
-    parameter_values = {
-        "/test/reddit-client-id": "reddit-id",
-        "/test/reddit-client-secret": "reddit-secret",
-        "/test/public-discussion-feed-urls": "https://example.test/feed.xml",
-    }
-    parameter_variables = {
-        "REDDIT_CLIENT_ID": "REDDIT_CLIENT_ID_PARAMETER",
-        "REDDIT_CLIENT_SECRET": "REDDIT_CLIENT_SECRET_PARAMETER",
-        "PUBLIC_DISCUSSION_FEED_URLS": "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-    }
-    for value_variable, parameter_variable in parameter_variables.items():
-        monkeypatch.delenv(value_variable, raising=False)
-        parameter_name = f"/test/{parameter_variable.removesuffix('_PARAMETER').lower().replace('_', '-')}"
-        monkeypatch.setenv(parameter_variable, parameter_name)
-
-    ssm = MagicMock()
-    ssm.get_parameter.side_effect = lambda *, Name, WithDecryption: {
-        "Parameter": {"Value": parameter_values[Name]}
-    }
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert common.os.environ["REDDIT_CLIENT_ID"] == "reddit-id"
-    assert common.os.environ["REDDIT_CLIENT_SECRET"] == "reddit-secret"
-    assert common.os.environ["PUBLIC_DISCUSSION_FEED_URLS"] == (
-        "https://example.test/feed.xml"
-    )
-
-
-def test_runtime_configuration_loads_marketaux_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("MARKETAUX_API_TOKEN", raising=False)
-    monkeypatch.setenv(
-        "MARKETAUX_API_TOKEN_PARAMETER",
-        "/test/marketaux-api-token",
-    )
-    ssm = MagicMock()
-    ssm.get_parameter.return_value = {
-        "Parameter": {"Value": "marketaux-test-token"}
-    }
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert common.os.environ["MARKETAUX_API_TOKEN"] == "marketaux-test-token"
-    ssm.get_parameter.assert_called_once_with(
-        Name="/test/marketaux-api-token",
-        WithDecryption=True,
-    )
-
-
-def test_missing_optional_public_discussion_parameters_disable_sources(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
-    parameter_variables = {
-        "REDDIT_CLIENT_ID": "REDDIT_CLIENT_ID_PARAMETER",
-        "REDDIT_CLIENT_SECRET": "REDDIT_CLIENT_SECRET_PARAMETER",
-        "PUBLIC_DISCUSSION_FEED_URLS": "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-    }
-    for value_variable, parameter_variable in parameter_variables.items():
-        monkeypatch.delenv(value_variable, raising=False)
-        monkeypatch.setenv(parameter_variable, f"/test/{value_variable.lower()}")
-
-    ssm = MagicMock()
-    ssm.get_parameter.side_effect = ClientError(
-        {"Error": {"Code": "ParameterNotFound", "Message": "missing"}},
-        "GetParameter",
-    )
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert all(common.os.environ[variable] == "" for variable in parameter_variables)
 
 
 CSL_HOSTS = frozenset({"investors.csl.com"})
@@ -437,7 +347,12 @@ def test_pdf_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=1,
+            max_ocr_pages=5,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "too_many_pages"
 
 
@@ -487,7 +402,12 @@ def test_scanned_pdf_over_ocr_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=10, max_ocr_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=10,
+            max_ocr_pages=1,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "ocr_page_limit"
 
 

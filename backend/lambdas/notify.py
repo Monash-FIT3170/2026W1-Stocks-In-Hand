@@ -18,24 +18,17 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.alert_vocabulary import DeliveryStatus
+from app.core.config import settings
+from app.messages import NotificationMessage
+from app.services import alert_delivery
+from app.services import email_sender
 from lambdas.common import (
     correlation_id,
     database_session,
-    load_runtime_configuration,
     log_event,
     receive_attempt,
 )
-
-# Settings and database modules read environment values at import time. Resolve
-# encrypted runtime values first, matching the API Lambda cold-start order.
-load_runtime_configuration()
-
-# pylint: disable=wrong-import-position
-from app.alert_vocabulary import DeliveryStatus  # noqa: E402
-from app.core.config import settings  # noqa: E402
-from app.messages import NotificationMessage  # noqa: E402
-from app.services import alert_delivery  # noqa: E402
-from app.services import email_sender  # noqa: E402
 
 
 STAGE = "notify"
@@ -101,7 +94,6 @@ def _process_record(record: dict[str, Any], sender: email_sender.EmailSender) ->
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, list[dict[str, str]]]:
     """Return exact SQS partial failures while isolating every record."""
-    load_runtime_configuration()
     if not settings.NOTIFICATIONS_ENABLED:
         return {"batchItemFailures": []}
 

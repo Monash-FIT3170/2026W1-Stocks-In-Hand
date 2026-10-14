@@ -87,6 +87,13 @@ export) shows up locally instead of only after a deploy.
 
 ## Environment variables
 
+`backend/app/core/config.py` declares every variable the backend reads, with
+its default and limits. A value outside its limits stops the backend at its
+first settings read with a `ConfigurationError` that names the variable. In
+AWS a secret, such as `DATABASE_URL` or `BREVO_API_KEY`, is read from the SSM
+parameter that its `<NAME>_PARAMETER` variable names, unless the variable
+itself is set.
+
 | Variable | Required | Description |
 |---|---|---|
 | `REDDIT_CLIENT_ID` | For Reddit | Client ID from a Reddit script application. |
@@ -94,9 +101,9 @@ export) shows up locally instead of only after a deploy.
 | `BLUESKY_IDENTIFIER` | No | Bluesky handle for authenticated search. Leave empty for public search. |
 | `BLUESKY_APP_PASSWORD` | No | Bluesky app password. Must be set with `BLUESKY_IDENTIFIER`. |
 | `PUBLIC_DISCUSSION_FEED_URLS` | For blogs | Comma-separated HTTPS RSS or Atom feed allowlist. |
-| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset. Defaults to `bluesky,mastodon`. |
-| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source. Defaults to `10` and is capped at `25`. |
-| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value. Defaults to `ASX`. |
+| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset of `reddit`, `bluesky`, `mastodon` and `blog`. Other names are ignored. Defaults to `bluesky,mastodon`. |
+| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source, from `1` to `25`. Defaults to `10`. |
+| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value, at most 100 characters. Defaults to `ASX`, also when empty. |
 | `LLM_PROVIDER` | No | Defaults to `bedrock`. `groq` remains available only for an explicit local rollback. |
 | `BEDROCK_ENABLED` | For generated summaries | Must be `true` before the app invokes Bedrock. Defaults to `false`. |
 | `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
@@ -105,16 +112,30 @@ export) shows up locally instead of only after a deploy.
 | `GROQ_API_KEY` | Local rollback only | Not loaded by the AWS deployment. |
 | `GROQ_MODEL` | Local rollback only | Defaults to `openai/gpt-oss-120b`. |
 | `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
+| `MAX_ANALYSIS_CHARS` | No | Characters of an artifact's title and text that FinBERT scores, at least `1`. Defaults to `50000`. |
+| `SCHEDULED_TICKERS` | No | Tickers the weekly schedule scrapes. Tickers outside the catalogue are ignored. Defaults to the catalogue's scheduled tickers. |
+| `MARKETAUX_ENABLED` | No | Lets the weekly schedule collect Marketaux news. Defaults to `false`. |
+| `MARKETAUX_PER_TICKER_LIMIT` | No | Stories the weekly schedule asks Marketaux for per ticker, from `1` to `25`. Defaults to `10`. |
+| `DISCOVERY_LOOKBACK_DAYS` | No | Days back that discovery looks for announcements, at least `1`. Defaults to `30`. |
+| `MAX_DOCUMENTS_PER_RUN` | No | Announcements discovery queues per scrape run, at least `1`. Defaults to `3`. |
+| `MAX_DOCUMENT_BYTES` | No | Largest document download and analysis accept. Defaults to `26214400` (25 MiB). |
+| `MAX_DOCX_UNCOMPRESSED_BYTES` | No | Most a DOCX may expand to when unzipped. Defaults to `20971520` (20 MiB). |
+| `MAX_PDF_PAGES` | No | Pages over which analysis refuses a PDF, at least `1`. Defaults to `500`. |
+| `MAX_OCR_PAGES` | No | Pages over which analysis refuses a scanned PDF instead of reading it by OCR. Defaults to `5`. |
+| `MAX_OCR_PIXELS_PER_PAGE` | No | Largest page image OCR reads. Defaults to `8000000`. |
+| `DOWNLOAD_QUEUE_URL` | Pipeline only | Queue discovery sends documents to. Discovery fails without it. |
+| `RAW_DOCUMENT_BUCKET` | Pipeline only | S3 bucket for raw documents. Download, and the analysis of a stored document, fail without it. |
 | `NOTIFICATIONS_ENABLED` | No | Master switch for watchlist alerts. Defaults to `false` outside the development compose stack. |
+| `NOTIFICATION_QUEUE_URL` | With alerts in the pipeline | Queue the analysis worker sends alerts to while notifications are on. |
 | `NOTIFICATIONS_DRY_RUN` | No | Renders and logs alerts without contacting Brevo. The example environment sets it to `true`. |
 | `ALERT_SENDER_EMAIL` | Live Brevo only | Sender address verified in the Brevo account. |
-| `ALERT_SENDER_NAME` | No | Display name for alert emails. Defaults to `Stocks in Hand`. |
+| `ALERT_SENDER_NAME` | No | Display name for alert emails. Defaults to `Stocks In Hand`. |
 | `BREVO_API_KEY` | Live Brevo only | Brevo API key. Store it outside source control. |
 | `BREVO_API_KEY_PARAMETER` | AWS only | SSM parameter name containing the Brevo API key. |
 | `BREVO_API_BASE_URL` | No | Defaults to `https://api.brevo.com/v3`. |
 | `ALERT_DAILY_BUDGET` | No | Maximum alert delivery commitments across the last 24 hours. Defaults to `180`. |
 | `ALERT_MAX_PER_INVESTOR_PER_RUN` | No | Direct alerts per investor and scrape run before one rollup. Defaults to `5`. |
-| `ALERT_DEFAULT_MIN_CONFIDENCE` | No | Default rule threshold from `0` to `1`. Defaults to `0.75`. |
+| `ALERT_DEFAULT_MIN_CONFIDENCE` | No | Threshold the alert settings show before an investor saves a rule, from `0` to `1`. Defaults to `0.75`. |
 | `ALERT_CLAIM_STALE_MINUTES` | No | Age at which an unfinished delivery claim may be retried. Defaults to `15`. |
 | `FRONTEND_BASE_URL` | No | Public frontend base of every link in alert and verification emails. Defaults to `http://localhost:3000`. |
 | `ALERT_VERIFICATION_TOKEN_TTL_HOURS` | No | Lifetime of email confirmation links. Defaults to `24`. |
@@ -315,8 +336,10 @@ same dependency versions that actually ship to Lambda — see
 
 You'll also need Playwright's browser binaries (`playwright install
 chromium`) and a running Postgres instance — `DATABASE_URL` in `backend/.env`
-should point at it. See `backend/.env.example` for every variable the backend
-reads, including which ones are optional/Lambda-only.
+should point at it. `backend/.env.example` holds the variables a local backend
+commonly sets. `backend/app/core/config.py` declares every variable the
+backend reads, with its default and limits, and
+[Environment variables](#environment-variables) describes the main ones.
 
 ### Running the pipeline locally (discovery -> download -> analysis)
 

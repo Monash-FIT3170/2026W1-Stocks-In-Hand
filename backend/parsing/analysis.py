@@ -99,8 +99,8 @@ def extract_pdf(
     content: bytes,
     *,
     max_pages: int,
-    max_ocr_pages: int = 20,
-    max_ocr_pixels_per_page: int = 8_000_000,
+    max_ocr_pages: int,
+    max_ocr_pixels_per_page: int,
 ) -> ParsedDocument:
     if not content.startswith(b"%PDF-"):
         raise PermanentDocumentError("S3 object is not a PDF", code="invalid_pdf")
