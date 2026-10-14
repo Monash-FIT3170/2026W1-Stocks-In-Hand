@@ -168,33 +168,6 @@ def test_brevo_notification_infrastructure_contract() -> None:
     assert "NotificationLogGroup" in model.resources
 
 
-def test_github_oidc_can_check_brevo_parameter_metadata() -> None:
-    """The prepare role may inspect the Brevo parameter without decrypting it."""
-    template = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
-        encoding="utf-8"
-    )
-
-    assert "Sid: ReadBrevoParameterMetadata" in template
-    assert "Action: ssm:GetParameter" in template
-    assert (
-        "parameter/stocks-in-hand/staging/brevo-api-key" in template
-    )
-
-
-def test_cloudformation_role_can_poll_route53_dns_changes() -> None:
-    """CloudFormation must be able to confirm Route 53 record changes."""
-    template = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
-        encoding="utf-8"
-    )
-    statement = template.split("- Sid: ReadDnsChangeStatus", 1)[1].split(
-        "- Sid:", 1
-    )[0]
-
-    assert "Action: route53:GetChange" in statement
-    assert 'Resource: !Sub "arn:${AWS::Partition}:route53:::change/*"' in statement
-    assert "hostedzone/" not in statement
-
-
 def test_custom_domain_certificate_parameter_is_lint_constrained() -> None:
     """SAM lint must know that the optional certificate value is an ACM ARN."""
     model = template_model()
@@ -447,9 +420,6 @@ def test_feature_switches_default_to_off() -> None:
 
 def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
     model = template_model()
-    oidc = (REPOSITORY_ROOT / "infra" / "github-oidc.yaml").read_text(
-        encoding="utf-8"
-    )
     marketaux_token = {
         "Fn::If": [
             "IsMarketauxEnabled",
@@ -468,9 +438,6 @@ def test_marketaux_is_ssm_backed_bounded_and_release_gated() -> None:
     assert scheduler.environment["MARKETAUX_PER_TICKER_LIMIT"] == {
         "Ref": "MarketauxPerTickerLimit"
     }
-
-    assert "Sid: ReadMarketauxParameterMetadata" in oidc
-    assert "parameter/stocks-in-hand/staging/marketaux-api-token" in oidc
 
 
 def test_staging_validation_workflow_cannot_deploy() -> None:

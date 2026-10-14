@@ -31,6 +31,7 @@ on:
       - "backend/tests/test_deployment_contracts.py"
       - "backend/tests/test_template_model.py"
       - "backend/tests/test_release.py"
+      - "backend/tests/test_github_oidc.py"
       - "backend/tools/template_model.py"
       - "backend/tools/release.py"
       - "backend/tools/verify_queue_wiring.py"
@@ -61,6 +62,7 @@ on:
       - "backend/tests/test_deployment_contracts.py"
       - "backend/tests/test_template_model.py"
       - "backend/tests/test_release.py"
+      - "backend/tests/test_github_oidc.py"
       - "backend/tools/template_model.py"
       - "backend/tools/release.py"
       - "backend/tools/verify_queue_wiring.py"
@@ -127,10 +129,10 @@ jobs:
         # PyYAML is the only dependency of the template model and the release module.
         run: pip install --disable-pip-version-check pytest==9.0.3 PyYAML==6.0.3
 
-      - name: Run queue wiring, deployment contract and release tests
+      - name: Run queue wiring, deployment contract, release and deploy role tests
         shell: bash
         working-directory: backend
         run: >
           python -m pytest tests/test_queue_wiring.py tests/test_deployment_contracts.py
-          tests/test_template_model.py tests/test_release.py
+          tests/test_template_model.py tests/test_release.py tests/test_github_oidc.py
           -v

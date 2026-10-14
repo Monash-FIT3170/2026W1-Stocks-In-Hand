@@ -14,7 +14,8 @@ Companion checks:
 - `sam validate --lint` / `cfn-lint` (structural template validity) run in
   the same CI workflow as this file.
 - `verify-staging-queue-wiring.yml` reconciles the *deployed* stack with the
-  same model after a staging change set is executed.
+  same model after a staging change set is executed. `test_github_oidc.py`
+  checks that its deploy role may read the queue attributes.
 """
 
 import copy
@@ -35,7 +36,6 @@ from tools.template_model import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-OIDC_TEMPLATE_PATH = REPOSITORY_ROOT / "infra" / "github-oidc.yaml"
 QUEUE_CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci-infra-queue-wiring.yml"
 STAGING_VERIFICATION_WORKFLOW = (
     REPOSITORY_ROOT / ".github" / "workflows" / "verify-staging-queue-wiring.yml"
@@ -419,7 +419,7 @@ def test_staging_workflow_runs_the_model_based_verification() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CI and the staging role
+# CI
 # ---------------------------------------------------------------------------
 
 def test_queue_ci_lints_every_template_and_runs_when_one_changes() -> None:
@@ -444,11 +444,3 @@ def test_queue_ci_lints_every_template_and_runs_when_one_changes() -> None:
     assert templates <= set(push)
     assert {f"backend/{test}" for test in re.findall(r"tests/\w+\.py", tests)} <= set(push)
     assert ".github/workflows/verify-staging-queue-wiring.yml" in push
-
-
-def test_staging_github_role_can_read_only_application_queue_attributes() -> None:
-    oidc_template = OIDC_TEMPLATE_PATH.read_text(encoding="utf-8")
-
-    assert "Sid: InspectStagingQueueAttributes" in oidc_template
-    assert "Action: sqs:GetQueueAttributes" in oidc_template
-    assert "sqs:${AWS::Region}:${AWS::AccountId}:stocks-in-hand-staging-*" in oidc_template
