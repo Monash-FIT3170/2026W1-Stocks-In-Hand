@@ -199,7 +199,11 @@ def test_the_github_role_changes_only_the_staging_stack_through_the_execution_ro
 
 
 def test_the_github_role_can_push_every_release_image_but_never_delete_one() -> None:
-    """deploy-staging pushes the images, and a rollback needs the older ones still in ECR."""
+    """deploy-staging pushes the images, and a rollback needs the older ones still in ECR.
+
+    So the role may not delete an image or a repository, or change the
+    repository settings that decide which images stay and who may delete them.
+    """
     values = _values()
     # docker push, then the image checks of deploy-staging and the release plan.
     actions = (
@@ -210,21 +214,35 @@ def test_the_github_role_can_push_every_release_image_but_never_delete_one() -> 
         "ecr:PutImage",
         "ecr:DescribeImages",
     )
+    removals = (
+        "ecr:BatchDeleteImage",
+        "ecr:DeleteRepository",
+        # The lifecycle policy expires old images, and immutable tags stop a
+        # push from moving a release's tag to another image.
+        "ecr:PutLifecyclePolicy",
+        "ecr:DeleteLifecyclePolicy",
+        "ecr:PutImageTagMutability",
+        "ecr:SetRepositoryPolicy",
+    )
 
     assert _can(GITHUB_ROLE, "ecr:GetAuthorizationToken", "*", values)
     for repository in IMAGE_REPOSITORIES.values():
         arn = f"arn:aws:ecr:{REGION}:{ACCOUNT}:repository/{repository}"
         for action in actions:
             assert _can(GITHUB_ROLE, action, arn, values), (action, repository)
-        assert not _may(GITHUB_ROLE, "ecr:BatchDeleteImage", arn, values), repository
+        for action in removals:
+            assert not _may(GITHUB_ROLE, action, arn, values), (action, repository)
 
 
 def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -> None:
     """The release plan checks that each secret behind a switch that is on is a SecureString.
 
     The role may read that metadata and nothing more: no other parameter the
-    application reads, such as the database URL, and no secret's value,
-    because it has no kms:Decrypt.
+    application reads, such as the database URL, through any of the four SSM
+    actions that return a value, and no secret's value, because it has no
+    kms:Decrypt. GetParametersByPath is allowed or refused on the path it is
+    given, which returns every parameter below it, so each path above the
+    parameters is checked.
     """
     app = template_model()
     prefix = {"ParameterPathPrefix": PARAMETER_PATH_PREFIX}
@@ -241,13 +259,19 @@ def test_the_github_role_reads_the_type_of_only_the_secrets_a_release_checks() -
     readable = {
         name
         for name in names | {f"{PARAMETER_PATH_PREFIX}/a-new-secret"}
-        if _may(GITHUB_ROLE, "ssm:GetParameter", _parameter_arn(name), values)
+        for action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory")
+        if _may(GITHUB_ROLE, action, _parameter_arn(name), values)
     }
+    folders = PARAMETER_PATH_PREFIX.strip("/").split("/")
+    paths = ["/", *("/" + "/".join(folders[:depth]) for depth in range(1, len(folders) + 1))]
 
     assert f"{PARAMETER_PATH_PREFIX}/database-url" in names
     assert readable == gated
     for name in gated:
         assert _can(GITHUB_ROLE, "ssm:GetParameter", _parameter_arn(name), values), name
+    assert paths == ["/", "/stocks-in-hand", PARAMETER_PATH_PREFIX]
+    for path in paths:
+        assert not _may(GITHUB_ROLE, "ssm:GetParametersByPath", _parameter_arn(path), values), path
     assert not any(
         statement.allows("kms:Decrypt") for statement in _oidc().role_statements(GITHUB_ROLE)
     )
@@ -338,3 +362,54 @@ def test_the_release_module_deploys_through_the_execution_role() -> None:
     assert execution["RoleName"] == CLOUDFORMATION_ROLE_NAME
     assert trust["Principal"] == {"Service": "cloudformation.amazonaws.com"}
     assert trust["Action"] == "sts:AssumeRole"
+
+
+# Every action the GitHub role may call. A grant of any other, or of a wildcard
+# such as ecr:*, fails the test below until it is listed here, so a reviewer
+# sees each new thing a staging job could do. The tests above check what each
+# listed action may touch.
+GITHUB_ROLE_ACTIONS = {
+    # docker push, and the image checks of deploy-staging and the release plan
+    "ecr:GetAuthorizationToken",
+    "ecr:BatchCheckLayerAvailability",
+    "ecr:BatchGetImage",
+    "ecr:CompleteLayerUpload",
+    "ecr:DescribeImages",
+    "ecr:GetDownloadUrlForLayer",
+    "ecr:InitiateLayerUpload",
+    "ecr:PutImage",
+    "ecr:UploadLayerPart",
+    # sam deploy, the change-set workflows and the stack reads
+    "cloudformation:CreateChangeSet",
+    "cloudformation:CreateStack",
+    "cloudformation:UpdateStack",
+    "cloudformation:DeleteChangeSet",
+    "cloudformation:DescribeChangeSet",
+    "cloudformation:DescribeStackEvents",
+    "cloudformation:DescribeStacks",
+    "cloudformation:ExecuteChangeSet",
+    "cloudformation:GetTemplateSummary",
+    "cloudformation:ListChangeSets",
+    "cloudformation:ListStackResources",
+    "iam:PassRole",
+    # the release plan's secret check and the queue verification
+    "ssm:GetParameter",
+    "sqs:GetQueueAttributes",
+    # publishing the frontend and rolling it back
+    "s3:GetBucketLocation",
+    "s3:ListBucket",
+    "s3:DeleteObject",
+    "s3:GetObject",
+    "s3:PutObject",
+    "cloudfront:CreateInvalidation",
+}
+
+
+def test_the_github_role_grants_only_the_listed_actions() -> None:
+    granted = {
+        action.lower()
+        for statement in _oidc().role_statements(GITHUB_ROLE)
+        for action in statement.actions
+    }
+
+    assert granted <= {action.lower() for action in GITHUB_ROLE_ACTIONS}
