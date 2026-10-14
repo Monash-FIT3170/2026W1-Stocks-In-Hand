@@ -6,7 +6,8 @@ lists and the prompt version. The admin and news writers fell back to the
 title. The repair operation had its own rule for an incomplete summary.
 Here each writer summarises one artifact from the same scripted answer, and
 every one must read back the same summary from one row. The worker's
-document path is covered in test_pipeline_stages.py.
+document path is covered in test_pipeline_stages.py. The admin summary
+routes now queue a summary request, the writer here.
 """
 
 import json
@@ -22,7 +23,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.models  # noqa: F401
-from app.api.routes import llm
 from app.core.config import settings
 from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
 from app.models.artifact import Artifact
@@ -166,21 +166,6 @@ def _news(db: Session) -> Artifact:
     )
 
 
-def _admin_route(new_artifact: Callable[[Session], Artifact]) -> Writer:
-    def write(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
-        artifact = new_artifact(db)
-        llm.summarise_artifact(artifact_id=artifact.id, db=db)
-        return artifact
-
-    return write
-
-
-def _admin_ticker_route(db: Session, _monkeypatch: pytest.MonkeyPatch) -> Artifact:
-    artifact = _announcement(db)
-    llm.summarise_ticker_artifacts("BHP", db=db)
-    return artifact
-
-
 def _local_loader(db: Session, monkeypatch: pytest.MonkeyPatch) -> Artifact:
     monkeypatch.setattr(storage, "SessionLocal", lambda: db)
     monkeypatch.setattr(storage.time, "sleep", lambda _seconds: None)
@@ -300,20 +285,8 @@ def _summary_rows(db: Session, artifact: Artifact) -> list[ArtifactSummary]:
 
 @pytest.mark.parametrize(
     "writer",
-    [
-        _admin_route(_announcement),
-        _admin_ticker_route,
-        _local_loader,
-        _repair_operation,
-        _summary_request(_announcement),
-    ],
-    ids=[
-        "admin_artifact_route",
-        "admin_ticker_route",
-        "local_loader",
-        "repair_operation",
-        "summary_request",
-    ],
+    [_local_loader, _repair_operation, _summary_request(_announcement)],
+    ids=["local_loader", "repair_operation", "summary_request"],
 )
 def test_every_announcement_writer_records_the_same_summary(
     db_session: Session,
@@ -335,8 +308,8 @@ def test_every_announcement_writer_records_the_same_summary(
 
 @pytest.mark.parametrize(
     "writer",
-    [_analysis_worker, _news_service, _admin_route(_news), _summary_request(_news)],
-    ids=["analysis_worker", "news_service", "admin_artifact_route", "summary_request"],
+    [_analysis_worker, _news_service, _summary_request(_news)],
+    ids=["analysis_worker", "news_service", "summary_request"],
 )
 def test_every_news_writer_records_the_same_summary(
     db_session: Session,

@@ -114,7 +114,8 @@ Analysis routes:
 
 - `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
-- `llm.py`: admin summaries and category splits generated on request.
+- `llm.py`: admin category splits generated on request, and admin summary
+  requests queued for the analysis worker.
 
 Operational routes:
 

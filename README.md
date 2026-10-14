@@ -196,13 +196,18 @@ signed email link, so they do not need to be added to Brevo first. See the
 | POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
 ### LLM routes
-Admin only. Each answers 503 when no LLM provider is switched on.
+Admin only. The category route asks the LLM while you wait and answers 503 when
+no LLM provider is switched on. The summary routes queue a summary request for
+the analysis worker and answer 202; the worker writes the summary shortly after,
+or logs `summary_unavailable` when no LLM is switched on. They answer 503 when
+`ANALYSIS_QUEUE_URL` is not set, so locally they need the LocalStack overlay
+described in "Local pipeline development".
 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
-| POST | `/llm/summarise/ticker/{symbol}` | Summarises a ticker's announcements and news that have no complete summary: all four lines, plus both clarity lists for an announcement. Params: `limit` |
-| POST | `/llm/summarise/artifact/{artifact_id}` | Summarises one artifact, replacing its summary |
+| POST | `/llm/summarise/ticker/{symbol}` | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` |
+| POST | `/llm/summarise/artifact/{artifact_id}` | Queues a new summary of one artifact, which replaces its summary |
 
 ### Scraping
 | Method | Path | Description |
