@@ -396,6 +396,25 @@ def test_rollback_plans_through_the_release_module_then_applies() -> None:
     assert run.index("tools.release plan") < run.index("python -m tools.release apply")
 
 
+def test_ci_reproduces_the_deployed_schema_drift_from_one_script() -> None:
+    """a7dd2c6 changed two inline copies of the drift and missed the third."""
+    steps = [(path.name, step) for path in WORKFLOWS.glob("*.yml") for step in _steps(path.name)]
+    script = {
+        name
+        for name, step in steps
+        if "python -m scripts.reproduce_deployed_schema_drift" in step.get("run", "")
+        and step.get("working-directory") == "backend"
+    }
+    inline = {
+        name
+        for name, step in steps
+        if any(text in step.get("run", "") for text in ("DROP COLUMN", "alembic upgrade"))
+    }
+
+    assert script == {"deploy-staging.yml", "validate-branch.yml", "validate-staging-release.yml"}
+    assert inline == set()
+
+
 def test_feature_switches_default_to_off() -> None:
     switches = {
         name: parameter["Default"]
