@@ -58,6 +58,11 @@ DELIBERATE_DIFFERENCES = {
     # AWS serves the API over HTTPS only; a local run uses plain HTTP.
     ("ApiFunction", "SESSION_COOKIE_SECURE"),
 }
+# Values a stack parameter may allow beyond the ones it lists. CloudFormation
+# takes any number between a Number parameter's bounds, fractions included,
+# and any text a String parameter's pattern matches. These are every whole
+# number and half from 0 to 100, a negative number, empty text and a word.
+PARAMETER_PROBES = ("", "-1", "word", *(f"{half / 2:g}" for half in range(201)))
 
 
 # ---------------------------------------------------------------------------
@@ -226,31 +231,42 @@ def _number(value: float) -> str:
 
 
 def template_parameters_fit_declared_limits(model: TemplateModel) -> list[str]:
-    """A parameter's default, allowed values and bounds are each accepted by its setting.
+    """Every value a stack parameter allows is one its setting accepts.
 
-    So a value the stack accepts is never refused when the settings are built.
+    Otherwise a value CloudFormation and the release plan accept would stop
+    the function at its first settings read. The rule tries the parameter's
+    default, allowed values and bounds, then each of PARAMETER_PROBES that
+    ``Parameter.problems`` accepts, and reports the first value the setting
+    refuses. The probes are a sample, not a proof. They catch a Number
+    parameter feeding a whole-number setting, and a pattern that lets in a
+    negative number or a whole number up to 100 that the setting refuses.
     """
     declared = declared_settings()
     parameters = model.parameter_definitions()
+    fed = {
+        (name, ref_target(value))
+        for function in model.functions().values()
+        for name, value in function.environment.items()
+        if name in declared and ref_target(value) in parameters
+    }
     problems = []
-    for function in model.functions().values():
-        for name, value in function.environment.items():
-            parameter = parameters.get(ref_target(value) or "")
-            if name not in declared or parameter is None:
-                continue
-            values = {*parameter.allowed_values}
-            if parameter.default is not None:
-                values.add(parameter.default)
-            values.update(
-                _number(bound)
-                for bound in (parameter.min_value, parameter.max_value)
-                if bound is not None
-            )
-            for allowed in sorted(values):
-                try:
-                    declared[name].parse(allowed)
-                except ValueError as error:
-                    problems.append(f"{parameter.name} allows {allowed!r}, but {name} {error}")
+    for name, parameter_name in sorted(fed):
+        parameter = parameters[parameter_name]
+        listed = {*parameter.allowed_values}
+        if parameter.default is not None:
+            listed.add(parameter.default)
+        listed.update(
+            _number(bound)
+            for bound in (parameter.min_value, parameter.max_value)
+            if bound is not None
+        )
+        probed = {probe for probe in PARAMETER_PROBES if not parameter.problems(probe)}
+        for allowed in [*sorted(listed), *sorted(probed - listed)]:
+            try:
+                declared[name].parse(allowed)
+            except ValueError as error:
+                problems.append(f"{parameter.name} allows {allowed!r}, but {name} {error}")
+                break
     return problems
 
 
@@ -411,6 +427,23 @@ BREAKAGES = {
     "parameter allows a rejected value": (
         template_parameters_fit_declared_limits,
         lambda d: d["Parameters"]["AlertMaxPerInvestorPerRun"].update(Default="0"),
+    ),
+    "number parameter allows a fraction": (
+        template_parameters_fit_declared_limits,
+        lambda d: d["Parameters"].update(
+            PublicDiscussionPerSourceLimit={
+                "Type": "Number",
+                "Default": 10,
+                "MinValue": 1,
+                "MaxValue": 25,
+            }
+        ),
+    ),
+    "parameter pattern allows a rejected value": (
+        template_parameters_fit_declared_limits,
+        lambda d: d["Parameters"]["PublicDiscussionPerSourceLimit"].update(
+            AllowedPattern="^[0-9]+$"
+        ),
     ),
     "undeclared template variable": (
         template_variables_are_declared,

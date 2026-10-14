@@ -49,10 +49,10 @@ Parameters:
       - "false"
     Description: Enable Marketaux API access and bounded weekly news collection.
   MarketauxPerTickerLimit:
-    Type: Number
-    Default: 10
-    MinValue: 1
-    MaxValue: 25
+    Type: String
+    Default: "10"
+    AllowedPattern: ^([1-9]|1[0-9]|2[0-5])$
+    ConstraintDescription: must be a whole number from 1 to 25
   AnalysisEnabled:
     Type: String
     Default: "true"
@@ -95,10 +95,10 @@ Parameters:
     Default: bluesky,mastodon
     Description: Comma-separated subset of reddit, bluesky, mastodon, and blog.
   PublicDiscussionPerSourceLimit:
-    Type: Number
-    Default: 10
-    MinValue: 1
-    MaxValue: 25
+    Type: String
+    Default: "10"
+    AllowedPattern: ^([1-9]|1[0-9]|2[0-5])$
+    ConstraintDescription: must be a whole number from 1 to 25
   ApiImageUri:
     Type: String
   ScraperImageUri:

@@ -221,6 +221,7 @@ def test_a_required_setting_must_be_set() -> None:
         ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "0", "must be at least 1"),
         ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "26", "must be at most 25"),
         ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "abc", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "12.5", "must be a whole number"),
         ("PUBLIC_DISCUSSION_SEARCH_QUERY", "x" * 101, "must be at most 100 characters"),
         ("DISCOVERY_LOOKBACK_DAYS", "0", "must be at least 1"),
         ("DISCOVERY_LOOKBACK_DAYS", "abc", "must be a whole number"),
