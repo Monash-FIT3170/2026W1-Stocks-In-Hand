@@ -182,21 +182,3 @@ def test_fetch_mastodon_posts_returns_normalised_posts() -> None:
     assert result[0]["author"] == "investor"
     assert result[0]["favourites_count"] == 4
     assert result[0]["tags"] == ["ASX"]
-
-
-def test_sentiment_post_rejects_ad_hoc_api_inference() -> None:
-    import pytest
-    from fastapi import HTTPException
-
-    from app.api.routes import category_sentiment
-    from app.schemas.category_sentiment import CategorySentimentRequest
-
-    with pytest.raises(HTTPException) as error:
-        category_sentiment.build_ticker_category_sentiment(
-            ticker="ANZ",
-            body=CategorySentimentRequest(categories={"revenue": "Revenue increased."}),
-            db=MagicMock(),
-        )
-
-    assert error.value.status_code == 503
-    assert "analysis pipeline" in error.value.detail

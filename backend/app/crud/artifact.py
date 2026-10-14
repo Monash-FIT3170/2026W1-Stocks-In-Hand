@@ -26,9 +26,6 @@ def create_artifact(db: Session, artifact: ArtifactCreate):
 def get_artifact(db: Session, artifact_id: UUID):
     return db.query(Artifact).filter(Artifact.id == artifact_id).first()
 
-def get_artifacts_by_ticker(db: Session, ticker_id: UUID):
-    return db.query(Artifact).filter(Artifact.ticker_id == ticker_id).all()
-
 def get_artifacts_by_platform(db: Session, platform_id: UUID):
     return db.query(Artifact).filter(Artifact.platform_id == platform_id).all()
 
