@@ -4,10 +4,9 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, cast
+from typing import cast
 from uuid import UUID
 
 from email_validator import EmailNotValidError, validate_email
@@ -17,9 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.alert_vocabulary import VerificationStatus
 from app.models.alert_subscription import AlertSubscription
-
-
-SHA256_HEX: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+from app.services.alert_tokens import is_token_hash
 
 
 def _normalise_email(email: str) -> str:
@@ -46,7 +43,7 @@ def _expected_email(email: str) -> str:
 
 def _normalise_token_hash(token_hash: str) -> str:
     """Validate the stored SHA-256 form of an unsubscribe token."""
-    if not SHA256_HEX.fullmatch(token_hash):
+    if not is_token_hash(token_hash):
         raise ValueError("unsubscribe token hash must be 64 lowercase hex characters")
     return token_hash
 

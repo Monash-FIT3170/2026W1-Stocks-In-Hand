@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
-from urllib.parse import quote, urlencode
 from uuid import UUID
 
 from sqlalchemy import select
@@ -41,6 +40,7 @@ from app.messages import NotificationMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.ticker import Ticker
+from app.services.alert_subscriptions import alert_links
 from app.services.alert_templates import render_alert_email, render_rollup_email
 from app.services.artifact_summary import alert_text
 from app.services.email_sender import (
@@ -49,7 +49,6 @@ from app.services.email_sender import (
     OutgoingEmail,
     RecipientRejected,
 )
-from app.services.unsubscribe_tokens import create_signed_unsubscribe_token
 from app.status import AnalysisStatus
 
 
@@ -313,17 +312,6 @@ def _load_watcher(db: Session, investor_id: UUID) -> _Watcher | None:
     )
 
 
-def _links(alert: _Alert, subscription_id: UUID, unsubscribe_token_hash: str) -> tuple[str, str]:
-    """The ticker's news page and a signed unsubscribe link without the stored hash."""
-    token = create_signed_unsubscribe_token(subscription_id, unsubscribe_token_hash)
-    base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
-    encoded_ticker = quote(alert.ticker_symbol, safe="")
-    news_url = f"{base_url}/ticker/{encoded_ticker}/news/"
-    query = urlencode({"t": token})
-    unsubscribe_url = f"{base_url}/unsubscribe/?{query}"
-    return news_url, unsubscribe_url
-
-
 def _deliver_to(
     investor_id: UUID,
     alert: _Alert,
@@ -450,7 +438,11 @@ class _Delivery:
             return self._fail(lease, "unsubscribe_key_missing")
         alert = self.alert
         try:
-            news_url, unsubscribe_url = _links(alert, self.watcher.subscription_id, token_hash)
+            links = alert_links(
+                subscription_id=self.watcher.subscription_id,
+                unsubscribe_token_hash=token_hash,
+                ticker_symbol=alert.ticker_symbol,
+            )
             if lease.kind is DeliveryKind.DIRECT:
                 subject, html, text = render_alert_email(
                     ticker_symbol=alert.ticker_symbol,
@@ -459,16 +451,16 @@ class _Delivery:
                     summary_text=alert.summary_text,
                     sentiment_label=alert.sentiment_label,
                     confidence_score=alert.confidence_score,
-                    news_url=news_url,
-                    unsubscribe_url=unsubscribe_url,
+                    news_url=links.news_url,
+                    unsubscribe_url=links.unsubscribe_url,
                 )
             else:
                 subject, html, text = render_rollup_email(
                     ticker_symbol=alert.ticker_symbol,
                     company_name=alert.company_name,
                     suppressed_count=capped,
-                    news_url=news_url,
-                    unsubscribe_url=unsubscribe_url,
+                    news_url=links.news_url,
+                    unsubscribe_url=links.unsubscribe_url,
                 )
         except (TypeError, ValueError):
             return self._fail(lease, "invalid_notification_configuration")
@@ -477,7 +469,7 @@ class _Delivery:
             subject=subject,
             html=html,
             text=text,
-            unsubscribe_url=unsubscribe_url,
+            unsubscribe_url=links.unsubscribe_url,
         )
 
     def _send(self, lease: ledger.Lease, email: OutgoingEmail) -> WatcherResult:

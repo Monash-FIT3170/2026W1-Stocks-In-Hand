@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -48,6 +50,8 @@ from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
 from app.schemas.notification import NotificationPreferencesUpdate
 from app.services import email_sender
+from app.services.alert_subscriptions import alert_links
+from app.services.alert_tokens import unsubscribe_token, verification_token
 from app.services.email_sender import (
     Accepted,
     EmailSender,
@@ -58,9 +62,9 @@ from app.services.email_sender import (
     SendOutcome,
     Unavailable,
 )
-from app.services.unsubscribe_tokens import create_signed_unsubscribe_token
-from app.services.verification_tokens import create_signed_verification_token
+from app.sources import SOURCES
 from lambdas import notify
+from tools.template_model import template_model
 
 ENABLE_ALERTS = {
     "enabled": True,
@@ -73,6 +77,7 @@ NO_RETRY: dict[str, list] = {"batchItemFailures": []}
 # The application name of every connection the routes open, so a test can
 # find them in pg_stat_activity.
 ROUTE_CONNECTIONS = "alert-subscription-routes"
+SITE_PAGES = Path(__file__).resolve().parents[2] / "frontend" / "src" / "app"
 
 
 @dataclass(frozen=True)
@@ -195,10 +200,14 @@ def _link_token(link: str) -> str:
     return parse_qs(urlsplit(link).query)["t"][0]
 
 
-def _verification_token(email: OutgoingEmail) -> str:
-    link = next(
+def _verification_link(email: OutgoingEmail) -> str:
+    return next(
         line for line in email.text.splitlines() if "/verify-notifications/" in line
     )
+
+
+def _verification_token(email: OutgoingEmail) -> str:
+    link = _verification_link(email)
     assert link.startswith("https://app.example.test/verify-notifications/?t=")
     return _link_token(link)
 
@@ -296,7 +305,7 @@ def _pending_since(api: Api, requested_at: datetime) -> str:
         db.flush()
         subscription_id = subscription.id
         db.commit()
-    return create_signed_verification_token(subscription_id, token_hash, requested_at)
+    return verification_token(subscription_id, token_hash, requested_at)
 
 
 def _another_subscription(api: Api) -> tuple[uuid.UUID, str]:
@@ -636,9 +645,9 @@ def test_every_unsubscribe_token_gets_one_answer_and_turns_off_only_its_own_aler
     other_id, other_hash = _another_subscription(api)
     tokens = {
         "invalid": "invalid-token-value-123456",
-        "unknown subscription": create_signed_unsubscribe_token(uuid.uuid4(), "f" * 64),
-        "forged": create_signed_unsubscribe_token(own_id, "f" * 64),
-        "signed": create_signed_unsubscribe_token(other_id, other_hash),
+        "unknown subscription": unsubscribe_token(uuid.uuid4(), "f" * 64),
+        "forged": unsubscribe_token(own_id, "f" * 64),
+        "signed": unsubscribe_token(other_id, other_hash),
         "raw": raw_token,
     }
 
@@ -679,6 +688,63 @@ def test_settings_need_a_session_but_the_email_links_do_not(
     ).json() == UNSUBSCRIBED
     subscription = _subscription(api)
     assert (subscription.verification_status, subscription.enabled) == ("verified", False)
+
+
+def _site_page(path: str) -> Path | None:
+    """The page under frontend/src/app that renders ``path``, if there is one."""
+    directory = SITE_PAGES
+    for segment in filter(None, path.split("/")):
+        dynamic = [
+            child
+            for child in directory.iterdir()
+            if child.is_dir() and child.name.startswith("[")
+        ]
+        if (directory / segment).is_dir():
+            directory = directory / segment
+        elif len(dynamic) == 1:
+            directory = dynamic[0]
+        else:
+            return None
+    page = directory / "page.jsx"
+    return page if page.is_file() else None
+
+
+def _cloudfront_serves(path: str) -> bool:
+    """Whether the CloudFront route function serves a page for ``path``, not the 404 page."""
+    code = template_model().properties("FrontendRouteFunction")["FunctionCode"]
+    static_routes = set(
+        re.findall(
+            r"'([^']+)': true",
+            code.split("var staticRoutes = {", 1)[1].split("};", 1)[0],
+        )
+    )
+    ticker_route = re.search(r"var tickerRoute = /(.+)/;", code)
+    assert ticker_route is not None
+    route = path.rstrip("/") or "/"
+    return route in static_routes or re.fullmatch(ticker_route.group(1), route) is not None
+
+
+def test_every_link_in_an_alert_email_opens_a_page_the_site_serves(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+    api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+    links = [_verification_link(sender.sent[0])]
+    for symbol in SOURCES:
+        alert = alert_links(
+            subscription_id=uuid.uuid4(),
+            unsubscribe_token_hash=_token_hash(),
+            ticker_symbol=symbol,
+        )
+        links += [alert.news_url, alert.unsubscribe_url]
+
+    for link in links:
+        parts = urlsplit(link)
+        assert f"{parts.scheme}://{parts.netloc}" == "https://app.example.test", link
+        assert _site_page(parts.path) is not None, link
+        assert _cloudfront_serves(parts.path), link
 
 
 def _save(api: Api) -> httpx.Response:

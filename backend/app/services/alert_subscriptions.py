@@ -17,16 +17,14 @@ request already sees the new request. Refusals raise an
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
-import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from typing import cast
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -39,6 +37,16 @@ from app.crud.alert_subscription import VerificationState
 from app.models.alert_rule import AlertRule
 from app.models.alert_subscription import AlertSubscription
 from app.services.alert_templates import render_verification_email
+from app.services.alert_tokens import (
+    hash_token,
+    new_unsubscribe_secret,
+    unsubscribe_token,
+    unsubscribe_token_subscription,
+    verification_token,
+    verification_token_claims,
+    verify_unsubscribe_token,
+    verify_verification_token,
+)
 from app.services.email_sender import (
     Accepted,
     EmailSender,
@@ -47,15 +55,6 @@ from app.services.email_sender import (
     RecipientRejected,
     SendOutcome,
     Unavailable,
-)
-from app.services.unsubscribe_tokens import (
-    subscription_id_from_signed_token,
-    verify_signed_unsubscribe_token,
-)
-from app.services.verification_tokens import (
-    create_signed_verification_token,
-    verification_token_claims,
-    verify_signed_verification_token,
 )
 
 
@@ -144,6 +143,14 @@ class Saved:
     unsubscribe_token: str | None
 
 
+@dataclass(frozen=True)
+class AlertLinks:
+    """The links an alert email carries: the ticker's news page and an unsubscribe link."""
+
+    news_url: str
+    unsubscribe_url: str
+
+
 def read(db: Session, *, investor_id: UUID, account_email: str) -> AlertPreferences:
     """The investor's alert settings."""
     subscription, rule = _load(db, investor_id)
@@ -176,11 +183,10 @@ def save(  # pylint: disable=too-many-arguments,too-many-locals
     existing = alert_subscription_crud.get_subscription_by_investor(db, investor_id)
     # Decided before the upsert, which refreshes ``existing`` in place.
     verification_due = enabled and _verification_due(existing, address, now)
-    unsubscribe_token = None
+    raw_token = None
     token_hash = cast(str | None, existing.unsubscribe_token_hash) if existing else None
     if enabled and not token_hash:
-        unsubscribe_token = secrets.token_urlsafe(32)
-        token_hash = _sha256(unsubscribe_token)
+        raw_token, token_hash = new_unsubscribe_secret()
 
     try:
         subscription = alert_subscription_crud.upsert_subscription(
@@ -212,9 +218,9 @@ def save(  # pylint: disable=too-many-arguments,too-many-locals
         raise
 
     if request is None:
-        return Saved(preferences, unsubscribe_token)
+        return Saved(preferences, raw_token)
     _send_verification(db, request, sender)
-    return Saved(_reloaded(db, investor_id, account_email), unsubscribe_token)
+    return Saved(_reloaded(db, investor_id, account_email), raw_token)
 
 
 def request_verification(
@@ -286,7 +292,7 @@ def confirm(db: Session, token: str) -> None:
 
     now = datetime.now(timezone.utc)
     requested_at = cast(datetime, subscription.verification_requested_at)
-    verified_id = verify_signed_verification_token(
+    verified_id = verify_verification_token(
         token,
         str(subscription.unsubscribe_token_hash),
         requested_at,
@@ -313,7 +319,7 @@ def confirm(db: Session, token: str) -> None:
 
 def unsubscribe(db: Session, token: str) -> None:
     """Turn alerts off for the subscription a raw or signed unsubscribe token belongs to."""
-    signed_subscription_id = subscription_id_from_signed_token(token)
+    signed_subscription_id = unsubscribe_token_subscription(token)
     if signed_subscription_id is not None:
         subscription = alert_subscription_crud.get_subscription(
             db,
@@ -322,7 +328,7 @@ def unsubscribe(db: Session, token: str) -> None:
         stored_hash = str(subscription.unsubscribe_token_hash) if (
             subscription is not None and subscription.unsubscribe_token_hash
         ) else _DUMMY_TOKEN_HASH
-        verified_id = verify_signed_unsubscribe_token(token, stored_hash)
+        verified_id = verify_unsubscribe_token(token, stored_hash)
         if subscription is not None and verified_id == signed_subscription_id:
             alert_subscription_crud.disable_subscription(
                 db,
@@ -331,7 +337,7 @@ def unsubscribe(db: Session, token: str) -> None:
             )
         return
 
-    candidate_hash = _sha256(token)
+    candidate_hash = hash_token(token)
     subscription = alert_subscription_crud.get_subscription_by_unsubscribe_token_hash(
         db,
         candidate_hash,
@@ -347,6 +353,26 @@ def unsubscribe(db: Session, token: str) -> None:
         )
 
 
+def alert_links(
+    *,
+    subscription_id: UUID,
+    unsubscribe_token_hash: str,
+    ticker_symbol: str,
+) -> AlertLinks:
+    """The links an alert about ``ticker_symbol`` carries to one subscription.
+
+    The unsubscribe link carries a token signed with the stored hash, never
+    the hash itself.
+    """
+    return AlertLinks(
+        news_url=_frontend_url(f"/ticker/{quote(ticker_symbol, safe='')}/news/"),
+        unsubscribe_url=_frontend_url(
+            "/unsubscribe/",
+            token=unsubscribe_token(subscription_id, unsubscribe_token_hash),
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class _Request:
     """A recorded verification request, whose email is about to go out."""
@@ -358,8 +384,15 @@ class _Request:
     requested_at: datetime
 
 
-def _sha256(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _frontend_url(path: str, *, token: str | None = None) -> str:
+    """A link to ``path`` on the website, with ``token`` as its ``t`` parameter.
+
+    Every link an alert email carries is built here, on ``FRONTEND_BASE_URL``,
+    which a deploy sets to the custom domain when the site has one.
+    """
+    base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
+    query = "" if token is None else f"?{urlencode({'t': token})}"
+    return f"{base_url}{path}{query}"
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -514,13 +547,14 @@ def _send_verification(db: Session, request: _Request, sender: EmailSender) -> N
 def _verification_outcome(request: _Request, sender: EmailSender) -> SendOutcome:
     """Write the verification email and hand it to ``sender``."""
     try:
-        token = create_signed_verification_token(
-            request.subscription_id,
-            request.unsubscribe_token_hash,
-            request.requested_at,
+        verification_url = _frontend_url(
+            "/verify-notifications/",
+            token=verification_token(
+                request.subscription_id,
+                request.unsubscribe_token_hash,
+                request.requested_at,
+            ),
         )
-        base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
-        verification_url = f"{base_url}/verify-notifications/?{urlencode({'t': token})}"
         subject, html, text = render_verification_email(verification_url)
     except ValueError:
         return Misconfigured("invalid_notification_configuration")
