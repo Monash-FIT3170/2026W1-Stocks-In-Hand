@@ -389,10 +389,14 @@ deployment to validate anything AWS-specific (IAM, throttling, budgets).
 
 ### Verifying it's working
 
-**1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session,
-like every other write route except sign-up, sign-in, sign-out, email
-verification and unsubscribe. Sign up, promote yourself in Postgres, then sign
-back in:
+**1. Trigger a scrape.** `POST /scrape/{ticker}` requires an admin session. So
+does every other write route except sign-up, sign-in, sign-out, email
+verification and unsubscribe, which anyone may call, `POST /auth/bootstrap`,
+which needs a Cognito sign-in, and a signed-in investor's changes to their own
+watchlists and alert settings (`/watchlists`, `/watchlist-tickers`,
+`PUT /notifications/preferences` and
+`POST /notifications/preferences/resend-verification`). Sign up, promote
+yourself in Postgres, then sign back in:
 
 ```bash
 curl -c cookies.txt -X POST http://localhost:8000/auth/sign-up \
