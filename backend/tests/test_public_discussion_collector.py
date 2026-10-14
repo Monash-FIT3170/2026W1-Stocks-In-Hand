@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, func, null, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -513,3 +513,34 @@ def test_backfilled_engagement_matches_what_each_source_stores(
     db_session.refresh(artifact)
 
     assert artifact.artifact_metadata["engagement"] == post.engagement
+
+
+@pytest.mark.parametrize(
+    ("metadata", "stored_as"),
+    [(None, "null"), (null(), None)],
+    ids=["JSON null", "SQL NULL"],
+)
+def test_a_post_stored_without_metadata_is_backfilled_with_zero_engagement(
+    db_session: Session,
+    metadata,
+    stored_as: str | None,
+) -> None:
+    """Metadata set to None is stored as a JSON null, which is not an object."""
+    artifact = Artifact(
+        source_type="reddit",
+        artifact_type="reddit_post",
+        title="$BHP shares rise",
+        content_hash=f"backfill-{uuid.uuid4()}",
+        artifact_metadata=metadata,
+    )
+    db_session.add(artifact)
+    db_session.commit()
+    stored = select(func.jsonb_typeof(Artifact.artifact_metadata)).where(
+        Artifact.id == artifact.id
+    )
+    assert db_session.scalar(stored) == stored_as
+
+    db_session.execute(text(_backfill_migration().BACKFILL))
+    db_session.refresh(artifact)
+
+    assert artifact.artifact_metadata == {"engagement": 0}

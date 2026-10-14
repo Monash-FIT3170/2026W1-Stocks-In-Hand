@@ -8,7 +8,9 @@ The public discussion collector now stores each post's engagement in
 ``artifact_metadata["engagement"]``, so posts for a ticker rank the same way
 whatever their source. This fills it in for posts stored before, using each
 source's rule at this revision: Reddit's score, Bluesky's likes, Mastodon's
-favourites plus reblogs plus replies, and 0 for blogs.
+favourites plus reblogs plus replies, and 0 for blogs. Metadata that is SQL
+NULL or not a JSON object, such as the JSON null SQLAlchemy stores for None,
+counts as empty.
 """
 
 from typing import Sequence, Union
@@ -30,7 +32,10 @@ def _count(key: str) -> str:
 BACKFILL = f"""
 UPDATE artifacts
 SET artifact_metadata = jsonb_set(
-    COALESCE(artifact_metadata, '{{}}'::jsonb),
+    CASE
+        WHEN jsonb_typeof(artifact_metadata) = 'object' THEN artifact_metadata
+        ELSE '{{}}'::jsonb
+    END,
     '{{engagement}}',
     to_jsonb(
         CASE source_type
@@ -44,7 +49,10 @@ SET artifact_metadata = jsonb_set(
     )
 )
 WHERE source_type IN ('reddit', 'bluesky', 'mastodon', 'blog')
-  AND (artifact_metadata IS NULL OR NOT artifact_metadata ? 'engagement')
+  AND (
+    jsonb_typeof(artifact_metadata) IS DISTINCT FROM 'object'
+    OR NOT artifact_metadata ? 'engagement'
+  )
 """  # nosec B608 - built only from the fixed key names above, never from input
 
 
