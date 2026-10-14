@@ -711,6 +711,8 @@ def test_every_unsubscribe_token_gets_one_answer_and_turns_off_only_its_own_aler
         "invalid": "invalid-token-value-123456",
         "unknown subscription": unsubscribe_token(uuid.uuid4(), "f" * 64),
         "forged": unsubscribe_token(own_id, "f" * 64),
+        "non-ASCII signature": f"v1.{uuid.uuid4().hex}.abcdefghijklmnop\u00e9",
+        "signed, then non-ASCII": unsubscribe_token(other_id, other_hash) + "\u00e9",
         "signed": unsubscribe_token(other_id, other_hash),
         "raw": raw_token,
     }
@@ -725,9 +727,35 @@ def test_every_unsubscribe_token_gets_one_answer_and_turns_off_only_its_own_aler
         "invalid": (True, True),
         "unknown subscription": (True, True),
         "forged": (True, True),
+        "non-ASCII signature": (True, True),
+        "signed, then non-ASCII": (True, True),
         "signed": (True, False),
         "raw": (False, False),
     }
+
+
+def test_every_bad_verification_link_gets_one_answer_and_verifies_nothing(
+    api: Api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sender = RecordingEmailSender()
+    _send_with(monkeypatch, sender)
+    api.client.put("/notifications/preferences", json=ENABLE_ALERTS)
+    token = _verification_token(sender.sent[0])
+    links = {
+        "wrong signature": token[:-1] + ("B" if token.endswith("A") else "A"),
+        "non-ASCII signature": token[:-1] + "\u00e9",
+        "signed, then non-ASCII": token + "\u00e9",
+    }
+
+    answers = {}
+    for name, link in links.items():
+        response = api.client.post("/notifications/verify", json={"token": link})
+        answers[name] = (response.status_code, response.json())
+
+    assert answers == {name: (400, INVALID_LINK) for name in links}
+    assert api.preferences()["verification_status"] == "pending"
+    assert _verify(api, sender.sent[0]).status_code == 200
 
 
 def test_settings_need_a_session_but_the_email_links_do_not(
