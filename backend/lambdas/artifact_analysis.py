@@ -3,12 +3,11 @@
 An announcement is read from its stored document, or from one the local
 loader downloaded, and classified by the rules, which extract its
 category's fields; it is stored under the category's artifact type. News
-and public discussion are analysed from the text their collector stored and
-keep the type their collector set. Either way FinBERT scores the artifact's
-title and text, the LLM summarises it with the prompt for its kind, and the
-records store the text, the summary and the sentiment and complete the
-analysis. A scrape run's announcement with an alertable sentiment is then
-sent to alert delivery.
+and public discussion are assessed from the text their collector stored and
+keep the type their collector set. An eligible item is scored by FinBERT and
+summarised with the prompt for its kind; an ineligible one is completed with
+its decision but no summary or sentiment. A scrape run's announcement with an
+alertable sentiment is then sent to alert delivery.
 
 ``summarise`` writes a new summary from the stored text and changes nothing
 else, and ``repair_missing_summaries`` uses it to complete the summaries of
@@ -74,6 +73,7 @@ _UNTITLED = {"news": "Untitled news article", "discussion": "Untitled public dis
 _UNTITLED_ANNOUNCEMENT = "Untitled ASX announcement"
 # The most announcements one summary repair asks Bedrock to summarise.
 REPAIR_LIMIT = 20
+FEED_ELIGIBILITY_MIN_CONFIDENCE = 0.75
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,8 @@ class ArtifactFacts:
     source_name: str | None
     # A document's file name, from its metadata or the end of its URL.
     filename: str | None
+    has_ticker_match: bool
+    feed_eligible: bool | None
     completed: bool
     # None until the download stage has stored the document.
     document: RecordedDocument | None
@@ -234,6 +236,14 @@ class AnalysisRecords(Protocol):
 
         Returns whether a summary was recorded with it.
         """
+
+    def finish_excluded(
+        self, artifact_id: UUID, *, raw_text: str, metadata: dict[str, Any]
+    ) -> None:
+        """Record an intentional feed exclusion and complete analysis."""
+
+    def record_metadata(self, artifact_id: UUID, metadata: dict[str, Any]) -> None:
+        """Merge metadata without completing analysis."""
 
     def record_summary(
         self,
@@ -385,11 +395,37 @@ def analyse_stored_text(
 
     ports.records.start(artifact_id)
     title = _title(facts)
+    eligibility = _stored_text_eligibility(facts, title, text, ports)
+    if eligibility is None:
+        ports.records.record_metadata(
+            artifact_id,
+            {
+                "feed_eligibility_status": "unavailable",
+                "feed_eligibility_prompt_version": generation.FeedEligibility.prompt_version,
+            },
+        )
+        raise RuntimeError("Feed eligibility assessment is unavailable")
+    if not eligibility["feed_eligible"]:
+        ports.records.finish_excluded(
+            artifact_id,
+            raw_text=text,
+            metadata={"category": category, "category_confidence": 1.0, **eligibility},
+        )
+        return Analysed(
+            artifact_id=artifact_id,
+            run_id=facts.run_id,
+            source_type=facts.source_type,
+            source_adapter=facts.source_adapter,
+            category=category,
+            page_count=1,
+            classification=None,
+            summarised=False,
+        )
     result = _analysis(
         ports,
         title=title,
         text=text,
-        metadata={"category": category, "category_confidence": 1.0},
+        metadata={"category": category, "category_confidence": 1.0, **eligibility},
         request=_summary_request(facts, title, text),
     )
     return Analysed(
@@ -402,6 +438,49 @@ def analyse_stored_text(
         classification=None,
         summarised=ports.records.finish(artifact_id, result),
     )
+
+
+def _stored_text_eligibility(
+    facts: ArtifactFacts,
+    title: str,
+    text: str,
+    ports: AnalysisPorts,
+) -> dict[str, Any] | None:
+    """Use a saved decision, reject unmatched Reddit, or assess the text."""
+    if facts.feed_eligible is not None:
+        return {"feed_eligible": facts.feed_eligible}
+    if facts.source_type == "reddit" and not facts.has_ticker_match:
+        return {
+            "feed_eligible": False,
+            "eligibility_confidence": 1.0,
+            "eligibility_reason": "The post is not linked to a supported ASX company or ticker.",
+            "feed_eligibility_prompt_version": "deterministic-ticker-match-v1",
+        }
+
+    generated = generation.generate(
+        generation.FeedEligibility(
+            title=title,
+            source_type=facts.source_type or "unknown",
+            raw_text=text,
+        ),
+        provider=ports.provider,
+    )
+    if isinstance(generated, generation.Unavailable):
+        return None
+    confidence = float(generated.value["eligibility_confidence"])
+    eligible = bool(generated.value["feed_eligible"]) and (
+        confidence >= FEED_ELIGIBILITY_MIN_CONFIDENCE
+    )
+    reason = str(generated.value["reason"])
+    if generated.value["feed_eligible"] and not eligible:
+        reason = f"Low-confidence eligibility decision: {reason}"
+    return {
+        "feed_eligible": eligible,
+        "eligibility_confidence": confidence,
+        "eligibility_reason": reason,
+        "feed_eligibility_model": generated.model,
+        "feed_eligibility_prompt_version": generated.prompt_version,
+    }
 
 
 def summarise(

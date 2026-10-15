@@ -104,6 +104,29 @@ class PostgresAnalysisRecords:
                 scrape_run_crud.mark_inline_artifact_analysis_completed(db, artifact_id)
         return summary is not None
 
+    def finish_excluded(
+        self, artifact_id: UUID, *, raw_text: str, metadata: dict[str, Any]
+    ) -> None:
+        with self._session_scope() as db:
+            artifact_crud.store_artifact_analysis(
+                db,
+                artifact_id=artifact_id,
+                raw_text=raw_text,
+                metadata=metadata,
+            )
+        with self._session_scope() as db:
+            scrape_run_crud.mark_inline_artifact_analysis_completed(db, artifact_id)
+
+    def record_metadata(self, artifact_id: UUID, metadata: dict[str, Any]) -> None:
+        with self._session_scope() as db:
+            artifact = artifact_crud.get_artifact(db, artifact_id)
+            if artifact is None:
+                raise PermanentDocumentError(
+                    "Artifact does not exist", code="artifact_not_found"
+                )
+            artifact.artifact_metadata = {**(artifact.artifact_metadata or {}), **metadata}
+            db.commit()
+
     def record_summary(
         self,
         artifact_id: UUID,
@@ -173,6 +196,12 @@ def _facts(artifact: Artifact) -> ArtifactFacts:
         extracted_data=extracted_data if isinstance(extracted_data, dict) else {},
         source_name=source_name if isinstance(source_name, str) else None,
         filename=_filename(artifact, metadata),
+        has_ticker_match=bool(artifact.ticker_id or artifact.ticker_mentions),
+        feed_eligible=(
+            metadata.get("feed_eligible")
+            if isinstance(metadata.get("feed_eligible"), bool)
+            else None
+        ),
         completed=artifact.analysis_status == AnalysisStatus.COMPLETED,
         document=(
             RecordedDocument(
