@@ -119,7 +119,7 @@
 
 .switch input:checked+.switchTrack::after {
   transform: translateX(22px);
-  background: white;
+  background: var(--surface);
 }
 
 .switch input:focus-visible+.switchTrack {
@@ -250,7 +250,7 @@
 
 .saveButton {
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   border: 0;
 }
 

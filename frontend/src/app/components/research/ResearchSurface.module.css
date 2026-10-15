@@ -233,7 +233,7 @@
 
 .rangePresetActive {
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   border-color: var(--ink);
 }
 
@@ -425,7 +425,7 @@
   padding: 0 20px;
   margin: 28px auto 0;
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   border: 0;
   border-radius: 6px;
   font-size: 14px;

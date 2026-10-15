@@ -14,7 +14,7 @@
   z-index: 100;
   padding: 14px 20px;
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   transform: translateY(-120%);
 }
 
@@ -143,7 +143,7 @@
   min-height: 44px;
   padding: 0 16px;
   border-radius: 6px;
-  color: white;
+  color: var(--surface);
   background: var(--ink);
   text-decoration: none;
   font-size: 14px;

@@ -1417,7 +1417,7 @@
     min-height: 48px;
     border: 0;
     background: var(--ink);
-    color: white;
+    color: var(--surface);
     width: 100%;
     padding: 12px 16px;
     font-size: 14px;
