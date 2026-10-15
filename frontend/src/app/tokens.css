@@ -4,16 +4,19 @@
   --color-surface-subtle: #f4f6f8;
   --color-surface-mist: #f3f2ef;
   --color-midnight: #101214;
-  --color-text-primary: #101214;
+  --color-text-primary: var(--color-midnight);
   --color-text-secondary: #4e5965;
   --color-text-muted: #626a73;
-  --color-text-faint: #626a73;
+  --color-text-faint: var(--color-text-muted);
   --color-border-default: #dfe4e8;
-  --color-cta-primary: #2f5bea;
-  --color-chip-green: #f3f2ef;
+  --color-border-subtle: #d4d5d2;
+  --color-border-muted: #aab0b5;
+  --color-cta-primary: var(--color-primary);
+  --color-chip-green: var(--color-surface-mist);
   --color-chip-amber: #fff3d6;
   --color-sentiment-positive: #13795b;
   --color-sentiment-amber: #8a5b00;
+  --color-action-hover: #292c30;
 
   --canvas: #fbfcfc;
   --canvas-subtle: var(--color-surface-subtle);
@@ -35,7 +38,7 @@
   --warning-soft: var(--color-chip-amber);
   --negative: #b4233b;
   --negative-soft: #fdecef;
-  --focus: #2f5bea;
+  --focus: var(--color-primary);
   --overlay: rgb(16 18 20 / 48%);
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ease-standard: cubic-bezier(.4, 0, .2, 1);
@@ -96,7 +99,7 @@ input::placeholder, textarea::placeholder {
 
 ::selection {
   background: var(--brand);
-  color: #fff;
+  color: var(--surface);
 }
 
 :is(a, button, input, select, textarea, summary):focus-visible {
@@ -117,7 +120,7 @@ a {
 }
 
 * {
-  scrollbar-color: #aab0b5 var(--canvas-subtle);
+  scrollbar-color: var(--color-border-muted) var(--canvas-subtle);
   scrollbar-width: thin;
 }
 

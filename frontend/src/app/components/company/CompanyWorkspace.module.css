@@ -363,7 +363,7 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
   text-decoration: underline;
-  text-decoration-color: #aab0b5;
+  text-decoration-color: var(--color-border-muted);
 }
 
 .source a:hover {
@@ -394,7 +394,7 @@
 }
 
 .evidencePanel .source+.source {
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
   padding-top: 12px;
 }
 
@@ -405,7 +405,7 @@
   gap: 12px;
   min-height: 48px;
   padding: 0 16px;
-  color: #fff;
+  color: var(--surface);
   background: var(--ink);
   border-radius: 6px;
   font-size: 14px;
@@ -663,7 +663,7 @@
   align-items: center;
   min-height: 44px;
   background: var(--ink);
-  color: #fff;
+  color: var(--surface);
   border: 0;
   border-radius: 6px;
   padding: 0 16px;
@@ -875,7 +875,7 @@
 }
 
 .recordIndex li+li {
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .recordButton,.selectedRecord {
@@ -1029,7 +1029,7 @@
   display: grid;
   gap: 8px;
   padding: 16px 0;
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
   color: var(--ink);
   text-decoration: none;
 }

@@ -151,7 +151,7 @@
 }
 
 .signInButton:hover {
-  background: #292c30;
+  background: var(--color-action-hover);
 }
 
 .megaMenuWrap {
@@ -407,7 +407,7 @@
     flex-direction: column;
     gap: 6px;
     background: var(--ink);
-    color: #fff;
+    color: var(--surface);
     border: 0;
     border-radius: 6px;
     width: 44px;
@@ -416,7 +416,7 @@
   .mobileMenuButton span {
     width: 18px;
     height: 1px;
-    background: #fff;
+    background: var(--surface);
     transition: transform 180ms;
   }
   .mobileMenuButton[aria-expanded="true"] span:first-child {
@@ -479,7 +479,7 @@
     padding: 14px 18px;
     border-radius: 6px;
     background: var(--ink);
-    color: #fff!important;
+    color: var(--surface)!important;
     margin-left: auto;
     text-decoration: none;
   }
