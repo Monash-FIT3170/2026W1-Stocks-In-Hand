@@ -796,6 +796,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": True},
     )
     news = Artifact(
         ticker_id=ticker.id,
@@ -805,9 +806,30 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="News article body",
         published_at=published_at,
         content_hash=f"news-{uuid.uuid4()}",
-        artifact_metadata={"source_name": "Example News"},
+        artifact_metadata={"source_name": "Example News", "feed_eligible": True},
     )
-    db_session.add_all([announcement, reddit, news])
+    legacy_news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Previously analysed publisher report",
+        raw_text="Legacy news article body",
+        published_at=published_at,
+        content_hash=f"legacy-news-{uuid.uuid4()}",
+        analysis_status=AnalysisStatus.COMPLETED,
+        artifact_metadata={"source_name": "Legacy News"},
+    )
+    rejected_news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Irrelevant publisher chatter",
+        raw_text="Non-substantive content",
+        published_at=published_at,
+        content_hash=f"rejected-news-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": False},
+    )
+    db_session.add_all([announcement, reddit, news, legacy_news, rejected_news])
     db_session.flush()
     db_session.add(
         ArtifactTickerMention(
@@ -830,6 +852,8 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     assert announcement.id in announcement_ids
     assert reddit.id in announcement_ids
     assert news.id in announcement_ids
+    assert legacy_news.id in announcement_ids
+    assert rejected_news.id not in announcement_ids
     items_by_id = {item.id: item for item in announcements}
     assert items_by_id[announcement.id].source_type == "asx_announcement"
     assert items_by_id[reddit.id].source_type == "reddit"
@@ -839,7 +863,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
     trend = next(item for item in trending if item.symbol == symbol)
 
-    assert trend.count == 3
+    assert trend.count == 4
 
 
 def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:

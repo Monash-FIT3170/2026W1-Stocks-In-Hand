@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.artifact import Artifact
@@ -9,10 +9,33 @@ from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
 from app.services.artifact_card import artifact_card
+from app.status import AnalysisStatus
 
 
 _SYDNEY_TZ = ZoneInfo("Australia/Sydney")
-FEED_SOURCE_TYPES = ("asx_announcement", "news", "reddit")
+
+
+def _feed_eligible_filter():
+    """Official items and non-official items not explicitly rejected.
+
+    A completed legacy record with no decision remains visible during the
+    compatibility/backfill window. New pending records stay hidden until
+    analysis gives them an explicit decision.
+    """
+    decision = Artifact.artifact_metadata["feed_eligible"].as_boolean()
+    return or_(
+        Artifact.source_type == "asx_announcement",
+        and_(
+            Artifact.source_type.in_(("news", "reddit")),
+            or_(
+                decision.is_(True),
+                and_(
+                    decision.is_(None),
+                    Artifact.analysis_status == AnalysisStatus.COMPLETED,
+                ),
+            ),
+        ),
+    )
 
 
 def _ticker_symbol(artifact: Artifact) -> str:
@@ -71,7 +94,7 @@ def get_announcements(
                 ArtifactTickerMention.ticker
             ),
         )
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
     )
 
     has_custom_range = start_date is not None or end_date is not None
@@ -120,7 +143,7 @@ def get_trending_announcements(
             Artifact.id.label("artifact_id"),
         )
         .filter(Artifact.ticker_id.isnot(None))
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
         .filter(date_value >= cutoff)
     )
     mentioned_artifacts = (
@@ -129,7 +152,7 @@ def get_trending_announcements(
             ArtifactTickerMention.artifact_id.label("artifact_id"),
         )
         .join(Artifact, Artifact.id == ArtifactTickerMention.artifact_id)
-        .filter(Artifact.source_type.in_(FEED_SOURCE_TYPES))
+        .filter(_feed_eligible_filter())
         .filter(date_value >= cutoff)
     )
     feed_artifacts = direct_artifacts.union_all(mentioned_artifacts).subquery()
