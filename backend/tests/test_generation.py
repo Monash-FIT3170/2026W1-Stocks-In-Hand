@@ -19,6 +19,7 @@ from app.services.generation import (
     AnnouncementSummary,
     CategorySplit,
     DiscussionSummary,
+    FeedEligibility,
     Generated,
     NewsSummary,
     RedditDigest,
@@ -46,6 +47,11 @@ CATEGORIES = {
     "organisational": "",
 }
 DIGEST = {"summary": "Investors are mixed.", "dominant_sentiment": "mixed", "key_themes": []}
+ELIGIBILITY = {
+    "feed_eligible": True,
+    "eligibility_confidence": 0.9,
+    "reason": "The story reports a material company update.",
+}
 
 
 def _announcement(raw_text: str = "The company confirmed an update.") -> AnnouncementSummary:
@@ -73,12 +79,22 @@ def _example(kind: type, text: str):
             source_type="reddit",
             raw_text=text,
         ),
+        FeedEligibility: lambda: FeedEligibility(
+            title="Candidate", source_type="news", raw_text=text
+        ),
         RedditDigest: lambda: _digest(text, count=60),
         CategorySplit: lambda: CategorySplit(text),
     }[kind]()
 
 
-ALL_KINDS = (AnnouncementSummary, NewsSummary, DiscussionSummary, RedditDigest, CategorySplit)
+ALL_KINDS = (
+    AnnouncementSummary,
+    NewsSummary,
+    DiscussionSummary,
+    FeedEligibility,
+    RedditDigest,
+    CategorySplit,
+)
 
 
 def test_a_valid_answer_records_the_model_and_prompt_version() -> None:
@@ -237,12 +253,45 @@ def test_news_and_discussion_summaries_have_no_clarity_lists() -> None:
     assert post.prompt_version == "llm-public-discussion-summary-v2"
 
 
+def test_feed_eligibility_is_strictly_validated() -> None:
+    provider = ScriptedProvider([json.dumps(ELIGIBILITY)])
+
+    result = generate(
+        FeedEligibility(title="BHP update", source_type="news", raw_text="BHP update."),
+        provider=provider,
+    )
+
+    assert result.value == ELIGIBILITY
+    assert result.prompt_version == "llm-feed-eligibility-v2"
+    assert provider.calls[0].temperature == 0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"feed_eligible": "yes", "eligibility_confidence": 0.9, "reason": "Relevant."},
+        {"feed_eligible": True, "eligibility_confidence": 1.2, "reason": "Relevant."},
+        {"feed_eligible": True, "eligibility_confidence": 0.9, "reason": ""},
+        {**ELIGIBILITY, "extra": "not allowed"},
+    ],
+)
+def test_malformed_feed_eligibility_is_rejected(answer: dict) -> None:
+    provider = ScriptedProvider([json.dumps(answer)])
+
+    with pytest.raises(ValueError):
+        generate(
+            FeedEligibility(title="Candidate", source_type="reddit", raw_text="Text"),
+            provider=provider,
+        )
+
+
 @pytest.mark.parametrize("kind", ALL_KINDS, ids=lambda kind: kind.__name__)
 def test_every_kind_cuts_its_source_text_to_its_input_budget(kind: type) -> None:
     budget = kind.budget.input_chars
     example = _example(kind, "x" * (budget * 2))
     answer = {
         AnnouncementSummary: ANNOUNCEMENT_SUMMARY,
+        FeedEligibility: ELIGIBILITY,
         RedditDigest: DIGEST,
         CategorySplit: CATEGORIES,
     }.get(kind, {key: "text" for key in generation.SUMMARY_TEXT_KEYS})
