@@ -158,7 +158,7 @@ def _news(db: Session) -> Artifact:
         artifact_type="news_article",
         title="BHP lifts copper output",
         raw_text="BHP reported an increase in quarterly copper production.",
-        artifact_metadata={"source_name": "Example News"},
+        artifact_metadata={"source_name": "Example News", "feed_eligible": True},
     )
 
 

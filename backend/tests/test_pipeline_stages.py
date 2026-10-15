@@ -63,6 +63,12 @@ from scrapers.adapter import SourceAdapter, SourceUnreachableError
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
+ELIGIBLE = {
+    "feed_eligible": True,
+    "eligibility_confidence": 0.95,
+    "reason": "The story contains substantive company-specific financial information.",
+}
+
 
 @pytest.fixture()
 def db_session() -> Iterator[Session]:
@@ -980,6 +986,7 @@ def test_stored_text_is_analysed_once_and_each_message_is_logged(
     ports = _analysis_ports(
         workers_use,
         monkeypatch,
+        ELIGIBLE,
         {
             "summary": "BHP reported higher copper production.",
             "about": "The story covers BHP's quarterly copper output.",
@@ -995,7 +1002,7 @@ def test_stored_text_is_analysed_once_and_each_message_is_logged(
     workers_use.refresh(story)
     completed, skipped = _pipeline_events(caplog)
     assert story.analysis_status == AnalysisStatus.COMPLETED
-    assert len(ports.provider.calls) == 1
+    assert len(ports.provider.calls) == 2
     assert (completed["event"], completed["category"], completed["source_type"]) == (
         "completed",
         "NEWS_ARTICLE",
