@@ -1162,7 +1162,10 @@ def test_every_path_gives_finbert_the_title_and_text(
         db_session,
         title=title,
         raw_text=raw_text,
-        artifact_metadata={"summary": "A generated summary that must not be scored."},
+        artifact_metadata={
+            "summary": "A generated summary that must not be scored.",
+            "feed_eligible": True,
+        },
     )
     _run, announcement, stored = _stored_document(db_session, store)
     local = _local_announcement(db_session, announcement.document_url)
