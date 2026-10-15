@@ -12,15 +12,11 @@ def list_artifacts(limit: int = 200, offset: int = 0, db: Session = Depends(get_
     return crud.get_all_artifacts(db, limit=limit, offset=offset)
 
 @router.post("/", response_model=ArtifactResponse)
-def create_artifact(artifact: ArtifactCreate, db: Session = Depends(get_db)):
+def create_artifact(
+    artifact: ArtifactCreate,
+    db: Session = Depends(get_db),
+):
     return crud.create_artifact(db=db, artifact=artifact)
-
-@router.get("/ticker/{ticker_id}", response_model=list[ArtifactResponse])
-def get_artifacts_by_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
-    artifacts = crud.get_artifacts_by_ticker(db, ticker_id=ticker_id)
-    if not artifacts:
-        raise HTTPException(status_code=404, detail="No artifacts found for this ticker")
-    return artifacts
 
 @router.get("/platform/{platform_id}", response_model=list[ArtifactResponse])
 def get_artifacts_by_platform(platform_id: UUID, db: Session = Depends(get_db)):

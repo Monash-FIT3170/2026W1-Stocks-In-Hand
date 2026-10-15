@@ -10,13 +10,14 @@ class AnnouncementResponse(BaseModel):
     ticker: str
     tag: str
     source_type: str
-    source_name: str
+    source_name: Optional[str]
     source_label: str
     published_at: Optional[datetime]
     title: str
-    about: str
-    changed: str
-    matters: str
+    # None until the artifact has a summary with that line.
+    about: Optional[str]
+    changed: Optional[str]
+    matters: Optional[str]
     url: Optional[str]
 
 

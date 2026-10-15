@@ -43,8 +43,12 @@ genuinely ambiguous fixtures as confirmed classifications and misclassified an
 interim dividend as half-year results. Registration-order selection produced no
 review state.
 
-Reproduce the baseline from the repository root with:
+The legacy classifier has since been deleted. Its prediction for every
+fixture is frozen in `backend/tests/fixtures/classification/legacy_baseline.json`,
+and `test_frozen_legacy_baseline_reproduces_the_recorded_report` checks that it
+still gives these results. Reproduce the baseline from the repository root
+with:
 
 ```bash
-PYTHONPATH=backend python -m tools.evaluate_classification --classifier legacy
+PYTHONPATH=backend python -m tools.evaluate_classification --classifier legacy-baseline
 ```

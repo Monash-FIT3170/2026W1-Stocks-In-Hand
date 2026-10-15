@@ -1,0 +1,431 @@
+{
+  "description": "Predictions of the legacy keyword classifier (backend/parsing/classifier.py at dabaaf0e9564debf55291b92407fcc1eb250a42c, before the rules engine) for every fixture in manifest.json. The classifier itself is deleted; these predictions reproduce the baseline in docs/advanced-content-classification-baseline-report.md.",
+  "classifier_commit": "dabaaf0e9564debf55291b92407fcc1eb250a42c",
+  "predictions": [
+    {
+      "id": "quarterly_01",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "quarterly_02",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "quarterly_03",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "quarterly_04",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "quarterly_05",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "half_year_01",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "half_year_02",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "half_year_03",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "half_year_04",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "half_year_05",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "full_year_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "full_year_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "full_year_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "full_year_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "full_year_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "annual_report_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "annual_report_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "annual_report_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "annual_report_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "annual_report_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "dividend_01",
+      "status": "classified",
+      "primary_category": "dividend_announcement"
+    },
+    {
+      "id": "dividend_02",
+      "status": "classified",
+      "primary_category": "dividend_announcement"
+    },
+    {
+      "id": "dividend_03",
+      "status": "classified",
+      "primary_category": "dividend_announcement"
+    },
+    {
+      "id": "dividend_04",
+      "status": "classified",
+      "primary_category": "half_year_results"
+    },
+    {
+      "id": "dividend_05",
+      "status": "classified",
+      "primary_category": "dividend_announcement"
+    },
+    {
+      "id": "security_01",
+      "status": "classified",
+      "primary_category": "security_notification"
+    },
+    {
+      "id": "security_02",
+      "status": "classified",
+      "primary_category": "security_notification"
+    },
+    {
+      "id": "security_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "security_04",
+      "status": "classified",
+      "primary_category": "security_notification"
+    },
+    {
+      "id": "security_05",
+      "status": "classified",
+      "primary_category": "security_notification"
+    },
+    {
+      "id": "capital_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "capital_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "capital_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "capital_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "capital_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "corporate_01",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "corporate_02",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "corporate_03",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "corporate_04",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "corporate_05",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "leadership_01",
+      "status": "classified",
+      "primary_category": "leadership_change"
+    },
+    {
+      "id": "leadership_02",
+      "status": "classified",
+      "primary_category": "leadership_change"
+    },
+    {
+      "id": "leadership_03",
+      "status": "classified",
+      "primary_category": "leadership_change"
+    },
+    {
+      "id": "leadership_04",
+      "status": "classified",
+      "primary_category": "leadership_change"
+    },
+    {
+      "id": "leadership_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "guidance_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "guidance_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "guidance_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "guidance_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "guidance_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "governance_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "governance_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "governance_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "governance_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "governance_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "regulatory_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "regulatory_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "regulatory_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "regulatory_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "regulatory_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "transcript_01",
+      "status": "classified",
+      "primary_category": "executive_transcript"
+    },
+    {
+      "id": "transcript_02",
+      "status": "classified",
+      "primary_category": "executive_transcript"
+    },
+    {
+      "id": "transcript_03",
+      "status": "classified",
+      "primary_category": "executive_transcript"
+    },
+    {
+      "id": "transcript_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "transcript_05",
+      "status": "classified",
+      "primary_category": "executive_transcript"
+    },
+    {
+      "id": "unknown_01",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_02",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_03",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_04",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_05",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_06",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_07",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_08",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_09",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_10",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_11",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_12",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_13",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_14",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_15",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_16",
+      "status": "classified",
+      "primary_category": "corporate_action"
+    },
+    {
+      "id": "unknown_17",
+      "status": "classified",
+      "primary_category": "quarterly_trading_update"
+    },
+    {
+      "id": "unknown_18",
+      "status": "unknown",
+      "primary_category": null
+    },
+    {
+      "id": "unknown_19",
+      "status": "classified",
+      "primary_category": "dividend_announcement"
+    },
+    {
+      "id": "unknown_20",
+      "status": "unknown",
+      "primary_category": null
+    }
+  ]
+}

@@ -3,133 +3,28 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import logging
 import zipfile
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest
-from botocore.exceptions import ClientError
 from pypdf import PdfWriter
 
-from app.messages import (
-    NotificationMessage,
-    PublicDiscussionAnalysisMessage,
-    QueueAMessage,
-    QueueBMessage,
-)
-from lambdas import analysis, common, discovery, download
+from app.messages import StoredTextAnalysisMessage, SummaryRequestMessage
+from lambdas import analysis
 from lambdas.common import PermanentDocumentError
 from lambdas.download_validation import (
     DownloadedDocument,
     download_document,
-    download_pdf,
     validate_document_content,
     validate_download_url,
+    validated_document,
 )
 from parsing import analysis as parsing_analysis
-from parsing.analysis import (
-    AnalysisOutput,
-    ParsedDocument,
-    analyse_news_text,
-    analyse_public_discussion_text,
-    extract_pdf,
-)
-from parsing.classification import ClassificationInput, classify_document
-from scrapers.base import Announcement
-from scrapers.companies.csl import CSLScraper
+from parsing.analysis import extract_pdf
 
 
-def test_runtime_configuration_loads_public_discussion_parameters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
-    parameter_values = {
-        "/test/reddit-client-id": "reddit-id",
-        "/test/reddit-client-secret": "reddit-secret",
-        "/test/public-discussion-feed-urls": "https://example.test/feed.xml",
-    }
-    parameter_variables = {
-        "REDDIT_CLIENT_ID": "REDDIT_CLIENT_ID_PARAMETER",
-        "REDDIT_CLIENT_SECRET": "REDDIT_CLIENT_SECRET_PARAMETER",
-        "PUBLIC_DISCUSSION_FEED_URLS": "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-    }
-    for value_variable, parameter_variable in parameter_variables.items():
-        monkeypatch.delenv(value_variable, raising=False)
-        parameter_name = f"/test/{parameter_variable.removesuffix('_PARAMETER').lower().replace('_', '-')}"
-        monkeypatch.setenv(parameter_variable, parameter_name)
-
-    ssm = MagicMock()
-    ssm.get_parameter.side_effect = lambda *, Name, WithDecryption: {
-        "Parameter": {"Value": parameter_values[Name]}
-    }
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert common.os.environ["REDDIT_CLIENT_ID"] == "reddit-id"
-    assert common.os.environ["REDDIT_CLIENT_SECRET"] == "reddit-secret"
-    assert common.os.environ["PUBLIC_DISCUSSION_FEED_URLS"] == (
-        "https://example.test/feed.xml"
-    )
-
-
-def test_runtime_configuration_loads_marketaux_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("MARKETAUX_API_TOKEN", raising=False)
-    monkeypatch.setenv(
-        "MARKETAUX_API_TOKEN_PARAMETER",
-        "/test/marketaux-api-token",
-    )
-    ssm = MagicMock()
-    ssm.get_parameter.return_value = {
-        "Parameter": {"Value": "marketaux-test-token"}
-    }
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert common.os.environ["MARKETAUX_API_TOKEN"] == "marketaux-test-token"
-    ssm.get_parameter.assert_called_once_with(
-        Name="/test/marketaux-api-token",
-        WithDecryption=True,
-    )
-
-
-def test_missing_optional_public_discussion_parameters_disable_sources(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL_PARAMETER", raising=False)
-    monkeypatch.delenv("GROQ_API_KEY_PARAMETER", raising=False)
-    parameter_variables = {
-        "REDDIT_CLIENT_ID": "REDDIT_CLIENT_ID_PARAMETER",
-        "REDDIT_CLIENT_SECRET": "REDDIT_CLIENT_SECRET_PARAMETER",
-        "PUBLIC_DISCUSSION_FEED_URLS": "PUBLIC_DISCUSSION_FEED_URLS_PARAMETER",
-    }
-    for value_variable, parameter_variable in parameter_variables.items():
-        monkeypatch.delenv(value_variable, raising=False)
-        monkeypatch.setenv(parameter_variable, f"/test/{value_variable.lower()}")
-
-    ssm = MagicMock()
-    ssm.get_parameter.side_effect = ClientError(
-        {"Error": {"Code": "ParameterNotFound", "Message": "missing"}},
-        "GetParameter",
-    )
-    monkeypatch.setattr(common.boto3, "client", lambda service: ssm)
-    monkeypatch.setattr(common, "_RUNTIME_CONFIGURATION_LOADED", False)
-
-    common.load_runtime_configuration()
-
-    assert all(common.os.environ[variable] == "" for variable in parameter_variables)
+CSL_HOSTS = frozenset({"investors.csl.com"})
 
 
 def sqs_record(body: str) -> dict:
@@ -181,11 +76,13 @@ def docx_bytes(text: str = "Revenue increased strongly.") -> bytes:
 
 def test_url_validation_rejects_non_https_and_unapproved_hosts():
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("http://investors.csl.com/report.pdf")
+        validate_download_url("http://investors.csl.com/report.pdf", hosts=CSL_HOSTS)
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("https://example.com/report.pdf")
+        validate_download_url("https://example.com/report.pdf", hosts=CSL_HOSTS)
     with pytest.raises(PermanentDocumentError, match="allowlisted"):
-        validate_download_url("https://user:password@investors.csl.com/report.pdf")
+        validate_download_url(
+            "https://user:password@investors.csl.com/report.pdf", hosts=CSL_HOSTS
+        )
 
 
 def test_download_validates_redirects_size_type_and_magic_bytes():
@@ -200,8 +97,10 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
         )
 
     with httpx.Client(transport=httpx.MockTransport(valid_response)) as client:
-        result = download_pdf(
+        result = download_document(
             "https://investors.csl.com/report.pdf",
+            hosts=CSL_HOSTS,
+            referer="https://investors.csl.com/",
             max_bytes=1024,
             client=client,
             resolve_hosts=False,
@@ -218,8 +117,10 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(unsafe_redirect)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -236,8 +137,10 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(oversized)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
@@ -254,13 +157,59 @@ def test_download_validates_redirects_size_type_and_magic_bytes():
 
     with httpx.Client(transport=httpx.MockTransport(wrong_magic)) as client:
         with pytest.raises(PermanentDocumentError) as error:
-            download_pdf(
+            download_document(
                 "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
                 max_bytes=1024,
                 client=client,
                 resolve_hosts=False,
             )
     assert error.value.code == "content_type_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("status", "outcome"),
+    [
+        (200, None),
+        (404, "document_not_found"),
+        (403, "document_rejected"),
+        (410, "document_rejected"),
+        (429, RuntimeError),
+        (408, RuntimeError),
+        (503, RuntimeError),
+        (304, RuntimeError),
+    ],
+)
+def test_document_responses_classify_their_status(status: int, outcome) -> None:
+    def response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            headers={"content-type": "application/pdf"},
+            content=b"%PDF-1.7\ncontent",
+            request=request,
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(response)) as client:
+        def download():
+            return download_document(
+                "https://investors.csl.com/report.pdf",
+                hosts=CSL_HOSTS,
+                referer="https://investors.csl.com/",
+                max_bytes=1024,
+                client=client,
+                resolve_hosts=False,
+            )
+
+        if outcome is None:
+            assert download().document_format == "pdf"
+        elif outcome is RuntimeError:
+            with pytest.raises(RuntimeError, match=str(status)):
+                download()
+        else:
+            with pytest.raises(PermanentDocumentError) as error:
+                download()
+            assert error.value.code == outcome
 
 
 @pytest.mark.parametrize(
@@ -296,6 +245,8 @@ def test_download_document_detects_supported_format(
     with httpx.Client(transport=httpx.MockTransport(response)) as client:
         downloaded = download_document(
             "https://investors.csl.com/document",
+            hosts=CSL_HOSTS,
+            referer="https://investors.csl.com/",
             max_bytes=1024 * 1024,
             client=client,
             resolve_hosts=False,
@@ -306,12 +257,40 @@ def test_download_document_detects_supported_format(
     assert downloaded.checksum == hashlib.sha256(content).hexdigest()
 
 
+def test_only_validation_builds_a_downloaded_document():
+    content = b"%PDF-1.7\ncontent"
+
+    document = validated_document(
+        content,
+        declared_content_type="application/octet-stream",
+        final_url="https://investors.csl.com/report.pdf",
+        max_bytes=1024,
+    )
+
+    assert document.document_format == "pdf"
+    assert document.content_type == "application/pdf"
+    assert document.checksum == hashlib.sha256(content).hexdigest()
+    with pytest.raises(TypeError, match="validated_document"):
+        DownloadedDocument(
+            content=content,
+            final_url="https://investors.csl.com/report.pdf",
+            document_format="pdf",
+        )
+    with pytest.raises(PermanentDocumentError) as too_large:
+        validated_document(
+            content,
+            declared_content_type="application/pdf",
+            final_url="https://investors.csl.com/report.pdf",
+            max_bytes=8,
+        )
+    assert too_large.value.code == "document_too_large"
+
+
 def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
     with pytest.raises(PermanentDocumentError) as mismatch:
         validate_document_content(
             b"<!doctype html><html></html>",
             declared_content_type="application/pdf",
-            final_url="https://investors.csl.com/report.pdf",
         )
     assert mismatch.value.code == "content_type_mismatch"
 
@@ -322,681 +301,29 @@ def test_document_validation_rejects_mime_mismatch_and_unsafe_docx():
                 "application/vnd.openxmlformats-officedocument."
                 "wordprocessingml.document"
             ),
-            final_url="https://investors.csl.com/report.docx",
             max_docx_uncompressed_bytes=1_000,
         )
     assert expanded.value.code == "document_too_large"
 
 
-def test_discovery_handler_never_downloads_or_writes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-):
-    run_id = uuid4()
-    artifact_id = uuid4()
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker="CSL",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-    )
-    announcement = Announcement(
-        ticker="CSL",
-        title="Half Year Results",
-        date=datetime.now(timezone.utc),
-        pdf_url="https://investors.csl.com/pdf/report.pdf",
-        source_url=str(message.source_url),
-    )
-    duplicate_announcement = Announcement(
-        ticker="CSL",
-        title="Duplicate link",
-        date=announcement.date,
-        pdf_url=f"{announcement.pdf_url}?utm_source=duplicate",
-        source_url=announcement.source_url,
-    )
-    calls: dict[str, object] = {}
+@pytest.mark.parametrize("request_type", [StoredTextAnalysisMessage, SummaryRequestMessage])
+def test_analysis_worker_parses_each_request_it_knows(request_type) -> None:
+    message = request_type(artifact_id=uuid4())
 
-    async def fake_discover(_self):
-        return [announcement, duplicate_announcement]
-
-    async def forbidden_download(_self, _announcement):
-        raise AssertionError("discovery called download_pdf")
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(CSLScraper, "fetch_announcements", fake_discover)
-    monkeypatch.setattr(CSLScraper, "download_pdf", forbidden_download)
-    monkeypatch.setattr(discovery, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_scrape_run",
-        # Downstream work may advance this aggregate status before Queue A is
-        # acknowledged. Discovery must still finish queuing every document.
-        lambda _db, _id: SimpleNamespace(status="analyzing"),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_started",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_or_create_artifact",
-        lambda *_args, **_kwargs: (
-            SimpleNamespace(id=artifact_id, scrape_run_id=run_id),
-            True,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_completed",
-        lambda *_args, **kwargs: calls.setdefault("items_found", kwargs["items_found"]),
-    )
-
-    class FakeSqs:
-        def send_message(self, **kwargs):
-            calls.setdefault("queue_bodies", []).append(kwargs["MessageBody"])
-
-    monkeypatch.setattr(discovery.boto3, "client", lambda service: FakeSqs())
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
-    before = list(tmp_path.iterdir())
-
-    result = discovery.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    assert result == {"processed": 1}
-    assert list(tmp_path.iterdir()) == before
-    assert calls["items_found"] == 1
-    assert len(calls["queue_bodies"]) == 1
-    queued = QueueBMessage.model_validate_json(calls["queue_bodies"][0])
-    assert queued.artifact_id == artifact_id
-    assert str(queued.document_url) == announcement.pdf_url
+    assert analysis.parse_analysis_request(sqs_record(message.model_dump_json())) == message
 
 
-def test_discovery_filters_old_documents_and_sorts_newest_first(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    now = datetime.now(timezone.utc)
-    recent = Announcement(
-        ticker="CSL",
-        title="Recent",
-        date=now - timedelta(days=1),
-        pdf_url="https://investors.csl.com/recent.pdf",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-    )
-    newer = Announcement(
-        ticker="CSL",
-        title="Newer",
-        date=now,
-        pdf_url="https://investors.csl.com/newer.pdf",
-        source_url=recent.source_url,
-    )
-    old = Announcement(
-        ticker="CSL",
-        title="Old",
-        date=now - timedelta(days=31),
-        pdf_url="https://investors.csl.com/old.pdf",
-        source_url=recent.source_url,
-    )
-    monkeypatch.setenv("DISCOVERY_LOOKBACK_DAYS", "30")
-
-    bounded = discovery._bounded_announcements([recent, old, newer])
-
-    assert [announcement.title for announcement in bounded] == ["Newer", "Recent"]
+def test_analysis_worker_leaves_s3_notifications_to_the_document_path() -> None:
+    assert analysis.parse_analysis_request(s3_record(bucket="raw", key="raw/invalid")) is None
 
 
-def test_discovery_queues_at_most_three_new_documents(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    run_id = uuid4()
-    source_url = "https://investors.csl.com/investors/asx-announcements"
-    message = QueueAMessage(
-        scrape_run_id=run_id,
-        ticker="CSL",
-        source_url=source_url,
-    )
-    now = datetime.now(timezone.utc)
-    announcements = [
-        Announcement(
-            ticker="CSL",
-            title=f"Document {index}",
-            date=now - timedelta(minutes=index),
-            pdf_url=f"https://investors.csl.com/document-{index}.pdf",
-            source_url=source_url,
-        )
-        for index in range(5)
-    ]
-    queued_bodies: list[str] = []
-
-    async def fake_discover(_ticker):
-        return announcements
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    def fake_artifact(*_args, **_kwargs):
-        return SimpleNamespace(id=uuid4(), scrape_run_id=run_id), True
-
-    monkeypatch.setattr(discovery.scraper_registry, "discover", fake_discover)
-    monkeypatch.setattr(discovery, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_scrape_run",
-        lambda *_args: SimpleNamespace(status="queued"),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_started",
-        lambda *_args: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.get_or_create_artifact",
-        fake_artifact,
-    )
-    completed = MagicMock()
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_run_discovery_completed",
-        completed,
-    )
-
-    class FakeSqs:
-        def send_message(self, **kwargs):
-            queued_bodies.append(kwargs["MessageBody"])
-
-    monkeypatch.setattr(discovery.boto3, "client", lambda _service: FakeSqs())
-    monkeypatch.setenv("DOWNLOAD_QUEUE_URL", "https://sqs.example/queue-b")
-    monkeypatch.setenv("MAX_DOCUMENTS_PER_RUN", "3")
-
-    discovery.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    assert len(queued_bodies) == 3
-    assert [
-        QueueBMessage.model_validate_json(body).title for body in queued_bodies
-    ] == ["Document 0", "Document 1", "Document 2"]
-    assert completed.call_args.kwargs["items_found"] == 3
-
-
-def test_downloader_uses_content_addressed_key_and_never_sends_queue_c(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    run_id = uuid4()
-    artifact_id = uuid4()
-    content = b"%PDF-1.7\ncontent"
-    checksum = hashlib.sha256(content).hexdigest()
-    message = QueueBMessage(
-        scrape_run_id=run_id,
-        artifact_id=artifact_id,
-        ticker="CSL",
-        source_url="https://investors.csl.com/investors/asx-announcements",
-        document_url="https://investors.csl.com/pdf/report.pdf",
-        canonical_url="https://investors.csl.com/pdf/report.pdf",
-        title="Results",
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    class FakeS3:
-        def put_object(self, **kwargs):
-            calls["put"] = kwargs
-
-    monkeypatch.setattr(
-        download,
-        "_load_artifact",
-        lambda _message: {"status": "pending", "s3_bucket": None, "s3_key": None},
-    )
-    monkeypatch.setattr(download, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_download_started",
-        lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_stored",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        download,
-        "_resolve_download",
-        lambda *_args, **_kwargs: DownloadedDocument(
-            content=content,
-            checksum=checksum,
-            final_url=str(message.document_url),
-            content_type="application/pdf",
-        ),
-    )
-    monkeypatch.setattr(download.boto3, "client", lambda service: FakeS3())
-    monkeypatch.setenv("RAW_DOCUMENT_BUCKET", "private-raw-documents")
-
-    download.handler({"Records": [sqs_record(message.model_dump_json())]}, None)
-
-    expected_key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
-    assert calls["put"]["Key"] == expected_key
-    assert calls["put"]["IfNoneMatch"] == "*"
-    assert calls["put"]["Metadata"]["document-format"] == "pdf"
-    assert calls["stored"]["s3_key"] == expected_key
-
-
-def test_s3_event_contract_and_analysis_duplicate_are_idempotent(monkeypatch):
-    artifact_id = UUID("123e4567-e89b-42d3-a456-426614174000")
-    checksum = "a" * 64
-    key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
-    record = s3_record(bucket="private-raw-documents", key=key)
-
-    assert analysis.parse_s3_notifications(record) == [
-        ("private-raw-documents", key, "CSL", artifact_id, checksum, "pdf")
-    ]
-
-    monkeypatch.setattr(
-        analysis,
-        "_artifact_state",
-        lambda **_kwargs: {"completed": True, "run_id": uuid4()},
-    )
-
-    class ForbiddenS3:
-        def get_object(self, **_kwargs):
-            raise AssertionError("completed artifact was downloaded again")
-
-    analysis._analyse_object(
-        s3=ForbiddenS3(),
-        bucket="private-raw-documents",
-        key=key,
-        artifact_id=artifact_id,
-        checksum=checksum,
-        ticker="CSL",
-        document_format="pdf",
-        correlation="message-1",
-        attempt=2,
-    )
-
-
-def test_s3_event_accepts_supported_non_pdf_key_and_rejects_unknown_ticker():
-    artifact_id = UUID("123e4567-e89b-42d3-a456-426614174000")
-    checksum = "d" * 64
-    key = f"raw/BHP/{artifact_id}/{checksum}.docx"
-
-    assert analysis.parse_s3_notifications(
-        s3_record(bucket="private-raw-documents", key=key)
-    ) == [
-        (
-            "private-raw-documents",
-            key,
-            "BHP",
-            artifact_id,
-            checksum,
-            "docx",
-        )
-    ]
+def test_analysis_worker_drops_a_request_it_does_not_know() -> None:
+    body = json.dumps({"message_type": "artifact_reclassification", "artifact_id": str(uuid4())})
 
     with pytest.raises(PermanentDocumentError) as error:
-        analysis.parse_s3_notifications(
-            s3_record(
-                bucket="private-raw-documents",
-                key=f"raw/XYZ/{artifact_id}/{checksum}.pdf",
-            )
-        )
-    assert error.value.code == "invalid_object_key"
+        analysis.parse_analysis_request(sqs_record(body))
 
-
-def test_s3_event_reconciles_an_uploaded_object_before_downloader_commit(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    checksum = "c" * 64
-    bucket = "private-raw-documents"
-    key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    class FakeS3:
-        def head_object(self, **kwargs):
-            assert kwargs == {"Bucket": bucket, "Key": key}
-            return {
-                "ContentLength": 512,
-                "ContentType": "application/pdf",
-                "Metadata": {
-                    "artifact-id": str(artifact_id),
-                    "sha256": checksum,
-                    "ticker": "CSL",
-                    "document-format": "pdf",
-                },
-            }
-
-    artifact = SimpleNamespace(
-        source_adapter="csl",
-        source_type="asx_announcement",
-        scrape_run_id=run_id,
-        title="Results",
-        document_url="https://example.test/reports/csl-half-year-results.pdf?download=1",
-        artifact_metadata={},
-        download_status="downloading",
-        analysis_status="pending",
-        s3_bucket=None,
-        s3_key=None,
-        checksum_sha256=None,
-        ticker=SimpleNamespace(symbol="CSL"),
-    )
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setattr("app.crud.artifact.get_artifact", lambda *_args: artifact)
-
-    def fake_mark_stored(*_args, **kwargs):
-        calls["stored"] = kwargs
-        return artifact
-
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_stored",
-        fake_mark_stored,
-    )
-
-    state = analysis._artifact_state(
-        s3=FakeS3(),
-        artifact_id=artifact_id,
-        bucket=bucket,
-        key=key,
-        checksum=checksum,
-        ticker="CSL",
-        document_format="pdf",
-    )
-
-    assert state["run_id"] == run_id
-    assert state["source_type"] == "asx_announcement"
-    assert state["source_adapter"] == "csl"
-    assert state["filename"] == "csl-half-year-results.pdf"
-    assert calls["stored"]["s3_key"] == key
-    assert calls["stored"]["file_size_bytes"] == 512
-
-
-def test_analysis_stores_results_then_marks_completed(monkeypatch):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    checksum = "b" * 64
-    key = f"raw/CSL/{artifact_id}/{checksum}.pdf"
-    classification = classify_document(
-        ClassificationInput(
-            title="Half Year Results",
-            text="Half year report for the six months ended 31 December 2025.",
-            filename="report.pdf",
-            source_type="asx_announcement",
-            source_adapter="csl",
-        )
-    )
-    parsed = ParsedDocument(
-        raw_text="Revenue increased.",
-        page_count=1,
-        category="HalfYearResults",
-        category_confidence=1.0,
-        extracted_data={},
-        classification=classification,
-    )
-    output = AnalysisOutput(
-        parsed=parsed,
-        summary=None,
-        summary_model=None,
-        summary_prompt_version=None,
-        sentiment={
-            "sentiment_label": "positive",
-            "label": "positive",
-            "confidence_score": 0.9,
-            "model_used": "ProsusAI/finbert",
-        },
-    )
-    calls: dict[str, object] = {}
-    events: list[str] = []
-
-    @contextmanager
-    def fake_session():
-        events.append("session_enter")
-        try:
-            yield object()
-        finally:
-            events.append("session_exit")
-
-    def fake_started(*_args, **_kwargs):
-        calls["started"] = True
-        events.append("started")
-
-    def fake_stored(*_args, **kwargs):
-        calls["stored"] = kwargs
-        events.append("stored")
-
-    def fake_completed(*_args, **_kwargs):
-        calls["completed"] = True
-        events.append("completed")
-
-    def fake_publish(**kwargs):
-        calls["published"] = kwargs
-        events.append("published")
-
-    monkeypatch.setattr(
-        analysis,
-        "_artifact_state",
-        lambda **_kwargs: {
-            "completed": False,
-            "run_id": run_id,
-            "title": "Half Year Results",
-        },
-    )
-    monkeypatch.setattr(
-        analysis,
-        "_read_s3_document",
-        lambda *_args, **_kwargs: b"%PDF-1.7",
-    )
-    monkeypatch.setattr(analysis, "analyse_document", lambda *_args, **_kwargs: output)
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-    monkeypatch.setattr(analysis, "_publish_notification", fake_publish)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_analysis_started",
-        fake_started,
-    )
-    monkeypatch.setattr(
-        "app.crud.artifact.store_artifact_analysis",
-        fake_stored,
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_artifact_analysis_completed",
-        fake_completed,
-    )
-
-    analysis._analyse_object(
-        s3=object(),
-        bucket="private-raw-documents",
-        key=key,
-        artifact_id=artifact_id,
-        checksum=checksum,
-        ticker="CSL",
-        document_format="pdf",
-        correlation="message-1",
-        attempt=1,
-    )
-
-    assert calls["started"] is True
-    assert calls["stored"]["raw_text"] == "Revenue increased."
-    assert calls["stored"]["metadata"]["classification"]["status"] == "classified"
-    assert (
-        calls["stored"]["metadata"]["classification"]["primary_category"]
-        == "half_year_results"
-    )
-    assert calls["stored"]["metadata"]["category"] == "HalfYearResults"
-    assert calls["stored"]["metadata"]["classification_method"] == "rules-v2"
-    assert calls["stored"]["sentiment"]["sentiment_label"] == "positive"
-    assert calls["completed"] is True
-    assert calls["published"] == {
-        "artifact_id": artifact_id,
-        "ticker": "CSL",
-        "scrape_run_id": run_id,
-        "sentiment": calls["stored"]["sentiment"],
-    }
-    assert events == [
-        "session_enter",
-        "started",
-        "session_exit",
-        "session_enter",
-        "stored",
-        "session_exit",
-        "session_enter",
-        "completed",
-        "session_exit",
-        "published",
-    ]
-
-
-def test_analysis_notification_matches_consumer_contract(monkeypatch):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    sqs = MagicMock()
-    client_factory = MagicMock(return_value=sqs)
-    monkeypatch.setenv(
-        "NOTIFICATION_QUEUE_URL",
-        "https://sqs.ap-southeast-2.amazonaws.com/123/notifications",
-    )
-    monkeypatch.setattr(analysis.boto3, "client", client_factory)
-    analysis._notification_sqs_client.cache_clear()
-
-    try:
-        for _ in range(2):
-            analysis._publish_notification(
-                artifact_id=artifact_id,
-                ticker="csl",
-                scrape_run_id=run_id,
-                sentiment={
-                    "sentiment_label": "positive",
-                    "confidence_score": 0.9,
-                },
-            )
-    finally:
-        analysis._notification_sqs_client.cache_clear()
-
-    client_factory.assert_called_once_with("sqs")
-    assert sqs.send_message.call_count == 2
-    published = sqs.send_message.call_args.kwargs
-    assert published["QueueUrl"].endswith("/notifications")
-    body = json.loads(published["MessageBody"])
-    assert set(body) == {
-        "schema_version",
-        "artifact_id",
-        "ticker",
-        "scrape_run_id",
-        "sentiment_label",
-        "confidence_score",
-    }
-    message = NotificationMessage.model_validate(body)
-    assert message.artifact_id == artifact_id
-    assert message.scrape_run_id == run_id
-    assert message.ticker == "CSL"
-    assert message.sentiment_label == "positive"
-
-
-@pytest.mark.parametrize(
-    ("enabled", "label"),
-    [("false", "positive"), ("true", "neutral")],
-)
-def test_analysis_notification_prefilter_skips_publish(monkeypatch, enabled, label):
-    publish = MagicMock()
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", enabled)
-    monkeypatch.setattr(analysis, "_publish_notification", publish)
-
-    analysis._try_publish_notification(
-        artifact_id=uuid4(),
-        ticker="CSL",
-        scrape_run_id=uuid4(),
-        sentiment={"sentiment_label": label, "confidence_score": 0.9},
-        correlation="message-1",
-        attempt=1,
-    )
-
-    publish.assert_not_called()
-
-
-def test_analysis_notification_publish_failure_never_raises(monkeypatch, caplog):
-    artifact_id = uuid4()
-    run_id = uuid4()
-    private_detail = "private queue detail"
-    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
-
-    def fail_publish(**_kwargs):
-        raise RuntimeError(private_detail)
-
-    monkeypatch.setattr(analysis, "_publish_notification", fail_publish)
-
-    with caplog.at_level(logging.ERROR):
-        analysis._try_publish_notification(
-            artifact_id=artifact_id,
-            ticker="CSL",
-            scrape_run_id=run_id,
-            sentiment={
-                "sentiment_label": "negative",
-                "confidence_score": 0.8,
-            },
-            correlation="message-1",
-            attempt=2,
-        )
-
-    assert private_detail not in caplog.text
-    event = json.loads(caplog.records[-1].message)
-    assert event == {
-        "stage": "analysis",
-        "event": "notification_publish_failed",
-        "correlation_id": "message-1",
-        "run_id": str(run_id),
-        "artifact_id": str(artifact_id),
-        "attempt": 2,
-        "error_code": "RuntimeError",
-    }
-
-
-def test_analysis_worker_parses_public_discussion_message() -> None:
-    message = PublicDiscussionAnalysisMessage(artifact_id=uuid4())
-
-    parsed = analysis.parse_public_discussion_message(
-        sqs_record(message.model_dump_json())
-    )
-
-    assert parsed == message
-    assert analysis.parse_public_discussion_message(
-        s3_record(bucket="raw", key="raw/invalid")
-    ) is None
-
-
-def test_analysis_handler_dispatches_public_discussion_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    analyse = MagicMock()
-    monkeypatch.setattr(analysis, "_analyse_public_discussion_artifact", analyse)
-    message = PublicDiscussionAnalysisMessage(artifact_id=artifact_id)
-
-    result = analysis.handler(
-        {"Records": [sqs_record(message.model_dump_json())]},
-        None,
-    )
-
-    assert result == {"processed": 1}
-    analyse.assert_called_once_with(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-
-def test_analysis_handler_dispatches_bounded_summary_field_repair(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repair = MagicMock(return_value={"updated": 4, "missing_after": 82})
-    monkeypatch.setattr(analysis, "_resummarise_missing_fields", repair)
-
-    result = analysis.handler(
-        {
-            "operation": "resummarise_missing_fields",
-            "apply": True,
-            "confirmation": "RESUMMARISE_MISSING_FIELDS",
-            "limit": 4,
-        },
-        None,
-    )
-
-    assert result == {"updated": 4, "missing_after": 82}
-    repair.assert_called_once_with(apply=True, limit=4)
+    assert error.value.code == "invalid_message"
 
 
 def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> None:
@@ -1011,284 +338,6 @@ def test_analysis_handler_requires_confirmation_for_summary_repair_apply() -> No
         )
 
 
-def test_summary_values_preserve_display_clarity_and_prompt_fields() -> None:
-    output = SimpleNamespace(
-        summary={
-            "summary": "The company announced an update.",
-            "about": "The filing covers the update.",
-            "changed": "A new program was announced.",
-            "matters": "The program may affect investors.",
-            "confirmed_facts": ["The program was announced."],
-            "speculation": ["The program may affect investors."],
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-announcement-summary-v3",
-    )
-
-    result = analysis._summary_values(output)
-
-    assert result == {
-        "summary_text": (
-            "The company announced an update.\n\n"
-            "The filing covers the update.\n\n"
-            "A new program was announced.\n\n"
-            "The program may affect investors."
-        ),
-        "model_used": "bedrock:test-model",
-        "prompt_version": "llm-announcement-summary-v3",
-        "summary": "The company announced an update.",
-        "about": "The filing covers the update.",
-        "changed": "A new program was announced.",
-        "matters": "The program may affect investors.",
-        "confirmed_facts": ["The program was announced."],
-        "speculation": ["The program may affect investors."],
-    }
-
-
-def test_public_discussion_analysis_uses_source_text_and_discussion_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    analyse_sentiment = MagicMock(
-        return_value={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        }
-    )
-    summarise = MagicMock(
-        return_value={
-            "summary": "The author expects BHP earnings to rise.",
-            "about": "The post discusses BHP earnings.",
-            "changed": "The author claims the outlook improved.",
-            "matters": "The claim may affect investor expectations.",
-        }
-    )
-    monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.llm.summarise_public_discussion", summarise)
-    monkeypatch.setattr(
-        "app.services.llm.active_model_name",
-        lambda: "bedrock:test-model",
-    )
-
-    output = analyse_public_discussion_text(
-        title="$BHP earnings outlook",
-        raw_text="I think profit will rise next year.",
-        source_type="reddit",
-    )
-
-    assert output.parsed.category == "USER_DISCUSSION"
-    assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "bedrock:test-model"
-    analyse_sentiment.assert_called_once_with(
-        "$BHP earnings outlook\n\nI think profit will rise next year."
-    )
-    summarise.assert_called_once_with(
-        title="$BHP earnings outlook",
-        raw_text="I think profit will rise next year.",
-        source_type="reddit",
-    )
-
-
-def test_news_analysis_uses_source_text_and_news_prompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    analyse_sentiment = MagicMock(
-        return_value={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        }
-    )
-    summarise = MagicMock(
-        return_value={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The article covers BHP production.",
-            "changed": "Reported copper production increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        }
-    )
-    monkeypatch.setattr("app.services.sentiment.analyse_text", analyse_sentiment)
-    monkeypatch.setattr("app.services.llm.summarise_news_article", summarise)
-    monkeypatch.setattr(
-        "app.services.llm.active_model_name",
-        lambda: "bedrock:test-model",
-    )
-
-    output = analyse_news_text(
-        title="BHP production update",
-        raw_text="BHP reported stronger copper production.",
-        source_name="Publisher",
-    )
-
-    assert output.parsed.category == "NEWS_ARTICLE"
-    assert output.sentiment["sentiment_label"] == "positive"
-    assert output.summary_model == "bedrock:test-model"
-    analyse_sentiment.assert_called_once_with(
-        "BHP production update\n\nBHP reported stronger copper production."
-    )
-    summarise.assert_called_once_with(
-        title="BHP production update",
-        source_name="Publisher",
-        raw_text="BHP reported stronger copper production.",
-    )
-
-
-def test_analysis_worker_persists_public_discussion_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    run_id = uuid4()
-    output = AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text="Investors discuss $BHP earnings.",
-            page_count=1,
-            category="USER_DISCUSSION",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary={
-            "summary": "Investors discuss BHP earnings.",
-            "about": "The post is about BHP.",
-            "changed": "No claimed change identified.",
-            "matters": "Earnings interest BHP investors.",
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-public-discussion-summary-v2",
-        sentiment={
-            "sentiment_label": "neutral",
-            "label": "neutral",
-            "confidence_score": 0.9,
-            "model_used": "test-finbert",
-        },
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(
-        analysis,
-        "_public_discussion_artifact_state",
-        lambda _artifact_id: {
-            "completed": False,
-            "run_id": run_id,
-            "title": "$BHP earnings",
-            "raw_text": "Investors discuss $BHP earnings.",
-            "source_type": "reddit",
-        },
-    )
-    monkeypatch.setattr(
-        analysis,
-        "analyse_public_discussion_text",
-        lambda **_kwargs: output,
-    )
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
-    )
-    monkeypatch.setattr(
-        "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
-    )
-
-    analysis._analyse_public_discussion_artifact(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-    assert calls["started"] is True
-    assert calls["stored"]["metadata"]["category"] == "user_discussion"
-    assert calls["stored"]["sentiment"]["sentiment_label"] == "neutral"
-    assert calls["completed"] is True
-
-
-def test_analysis_worker_persists_news_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    artifact_id = uuid4()
-    output = AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text="BHP reported stronger copper production.",
-            page_count=1,
-            category="NEWS_ARTICLE",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary={
-            "summary": "BHP reported stronger copper production.",
-            "about": "The article covers BHP production.",
-            "changed": "Reported copper production increased.",
-            "matters": "Higher output may affect revenue expectations.",
-        },
-        summary_model="bedrock:test-model",
-        summary_prompt_version="llm-news-summary-v2",
-        sentiment={
-            "sentiment_label": "positive",
-            "label": "bullish",
-            "confidence_score": 0.8,
-            "model_used": "test-finbert",
-        },
-    )
-    calls: dict[str, object] = {}
-
-    @contextmanager
-    def fake_session():
-        yield object()
-
-    monkeypatch.setattr(
-        analysis,
-        "_public_discussion_artifact_state",
-        lambda _artifact_id: {
-            "completed": False,
-            "run_id": None,
-            "title": "BHP production update",
-            "raw_text": "BHP reported stronger copper production.",
-            "source_type": "news",
-            "source_name": "Publisher",
-        },
-    )
-    monkeypatch.setattr(
-        analysis,
-        "analyse_news_text",
-        lambda **_kwargs: output,
-    )
-    monkeypatch.setattr(analysis, "database_session", fake_session)
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_started",
-        lambda *_args, **_kwargs: calls.setdefault("started", True),
-    )
-    monkeypatch.setattr(
-        "app.crud.artifact.store_artifact_analysis",
-        lambda *_args, **kwargs: calls.setdefault("stored", kwargs),
-    )
-    monkeypatch.setattr(
-        "app.crud.scrape_run.mark_inline_artifact_analysis_completed",
-        lambda *_args, **_kwargs: calls.setdefault("completed", True),
-    )
-
-    analysis._analyse_public_discussion_artifact(
-        artifact_id=artifact_id,
-        correlation="message-1",
-        attempt=1,
-    )
-
-    assert calls["started"] is True
-    assert calls["stored"]["metadata"]["category"] == "news_article"
-    assert calls["stored"]["summary"]["changed"] == (
-        "Reported copper production increased."
-    )
-    assert calls["completed"] is True
-
-
 def test_pdf_page_limit_is_permanent(tmp_path):
     path = tmp_path / "two-pages.pdf"
     writer = PdfWriter()
@@ -1298,7 +347,12 @@ def test_pdf_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=1,
+            max_ocr_pages=5,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "too_many_pages"
 
 
@@ -1348,7 +402,12 @@ def test_scanned_pdf_over_ocr_page_limit_is_permanent(tmp_path):
         writer.write(output)
 
     with pytest.raises(PermanentDocumentError) as error:
-        extract_pdf(path.read_bytes(), max_pages=10, max_ocr_pages=1)
+        extract_pdf(
+            path.read_bytes(),
+            max_pages=10,
+            max_ocr_pages=1,
+            max_ocr_pixels_per_page=8_000_000,
+        )
     assert error.value.code == "ocr_page_limit"
 
 

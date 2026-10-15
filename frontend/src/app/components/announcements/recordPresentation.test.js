@@ -8,7 +8,7 @@ describe("market feed record presentation", () => {
     expect(companyRoute("coh")).toBe("/ticker/COH")
   })
   it("suppresses missing analysis and repeated titles without discarding factual text", () => {
-    expect(meaningfulText("No impact summary available yet.")).toBe("")
+    expect(meaningfulText(null)).toBe("")
     expect(meaningfulText("Ceasing to be a substantial holder", "Ceasing to be a substantial holder")).toBe("")
     expect(meaningfulText("No material change identified.")).toBe("No material change identified.")
   })

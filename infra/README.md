@@ -7,8 +7,10 @@ API health, publishes the frontend, and starts a CloudFront invalidation.
 
 ## Prerequisites
 
-Install Docker, AWS CLI, AWS SAM CLI, Python, and Node.js 20. Authenticate the
-AWS CLI to the intended staging account:
+Install Docker, AWS CLI, AWS SAM CLI, Python, and Node.js 20. The stack
+commands run the release module from `backend/`, which needs only PyYAML
+(`python -m pip install PyYAML==6.0.3`). Authenticate the AWS CLI to the
+intended staging account:
 
 ```bash
 aws sts get-caller-identity
@@ -23,9 +25,6 @@ export AWS_REGION=ap-southeast-2
 export OPERATIONS_EMAIL=you@example.com
 export MONTHLY_BUDGET_USD=10
 export BEDROCK_MONTHLY_BUDGET_USD=1
-export SCHEDULED_TICKERS=ANZ,BHP,CBA,CSL,WES
-export SCHEDULED_PUBLIC_DISCUSSION_SOURCES=bluesky,mastodon
-export PUBLIC_DISCUSSION_PER_SOURCE_LIMIT=10
 export RELEASE_SHA="$(git rev-parse HEAD)"
 export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
@@ -93,7 +92,7 @@ Verify one sender address in Brevo. Add that address as the protected GitHub
 environment variable `ALERT_SENDER_EMAIL`. A custom sending domain is not
 required for the first controlled staging test.
 
-When `enable_notifications=true`, the staging preparation workflow checks that
+When a release turns notifications on or keeps them on, its plan checks that
 the sender variable is non-empty and that the Brevo parameter exists as a
 `SecureString`. The check reads parameter metadata only. It does not decrypt or
 print the API key. Deploy the current `infra/github-oidc.yaml` first so the
@@ -113,16 +112,18 @@ aws ssm put-parameter \
 unset MARKETAUX_API_TOKEN
 ```
 
-When `enable_marketaux=true`, the deployment checks the parameter type before
-building the change set. The weekly schedule collects at most five tickers per
-run and 25 articles per ticker. `ScheduleEnabled` must also be `true` for this
-automatic collection to run. The API can still fetch Marketaux news on demand
-when Marketaux is enabled and the weekly schedule is disabled.
+When a release turns Marketaux on or keeps it on, its plan checks the parameter
+type before any image is built. The weekly schedule collects at most five
+tickers per run and 25 articles per ticker. `ScheduleEnabled` must also be
+`true` for this automatic collection to run. The API can still fetch Marketaux
+news on demand when Marketaux is enabled and the weekly schedule is disabled.
 
-Scheduled Marketaux records are stored first, then sent to the analysis queue.
-The analysis worker uses the news-specific Bedrock prompt and stores the four
-display fields before the announcements page reads them. A repeated bounded run
-also queues duplicate articles that were stored before this wiring existed.
+Marketaux records, scheduled or fetched on demand, are stored first, then sent
+to the analysis queue. The analysis worker scores each one with FinBERT, uses the
+news-specific Bedrock prompt and stores the four display fields before the
+announcements page reads them. A repeated bounded run also queues duplicate
+articles that were stored but never analysed, such as the ones the API used to
+summarise inline.
 
 Reddit credentials and the blog feed allowlist are optional. Store them only
 when those sources are enabled:
@@ -228,34 +229,35 @@ cd ..
 
 ```bash
 sam validate --lint --template-file infra/template.yaml
-cfn-lint infra/template.yaml infra/bootstrap.yaml infra/github-oidc.yaml
+cfn-lint infra/template.yaml infra/github-oidc.yaml infra/bootstrap.yaml infra/domain.yaml
 
-sam deploy \
-  --config-file infra/samconfig.toml \
-  --config-env staging \
-  --template-file infra/template.yaml \
-  --no-execute-changeset \
-  --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
-  --parameter-overrides \
-    "Environment=staging" \
-    "ParameterPathPrefix=/stocks-in-hand/staging" \
-    "OperationsEmail=$OPERATIONS_EMAIL" \
-    "ScheduleEnabled=false" \
-    "PublicDiscussionScheduleEnabled=false" \
-    "AnalysisEnabled=true" \
-    "BedrockEnabled=false" \
-    "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
-    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+cd backend
+python -m tools.release plan --no-execute --no-execution-role \
+  --stack-name stocks-in-hand-staging \
+  --region "$AWS_REGION" \
+  --release-sha "$RELEASE_SHA" \
+  --set "OperationsEmail=$OPERATIONS_EMAIL" \
+  --out /tmp/release-plan.json
+python -m tools.release apply /tmp/release-plan.json
+cd ..
 ```
+
+The release module (`backend/tools/release.py`) builds every `sam deploy`
+command, so the parameters and the image map are written down once. `plan`
+gives every template parameter a value and checks it against the template's
+constraints and rules before anything changes. A value comes from `--set`, then
+the live stack, then the template default, so this first change set starts
+with the schedules, Marketaux, notifications and Bedrock off and analysis on.
+The image parameters always point at `$RELEASE_SHA`. `plan` prints a table of
+every value and where it came from. `apply` checks that the stack has not
+changed since the plan and that the three images are in ECR, then creates the
+change set.
+
+A new stack is only created through a reviewed change set, so `plan` refuses
+`--execute` here. `--no-execution-role` deploys with your own credentials,
+because §10 creates the CloudFormation execution role. The new stack has no
+site address for emails to link to yet, so `plan` warns that `FrontendBaseUrl`
+stays `https://example.invalid` until the next release.
 
 Person 1 must export and review the CloudFormation change set. Person 2 executes
 only the approved ARN. Confirm the SNS alarm subscription email after execution.
@@ -267,22 +269,14 @@ CloudFront can take several minutes to finish deploying.
 cd frontend
 npm ci
 npm run build
+cd ../backend
+eval "$(python -m tools.release outputs --shell \
+  --stack-name stocks-in-hand-staging \
+  --region "$AWS_REGION" \
+  FrontendBucketName=FRONTEND_BUCKET \
+  FrontendDistributionId=DISTRIBUTION_ID \
+  FrontendUrl=FRONTEND_URL)"
 cd ..
-
-export FRONTEND_BUCKET="$(aws cloudformation describe-stacks \
-  --stack-name stocks-in-hand-staging \
-  --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
-  --output text)"
-
-export DISTRIBUTION_ID="$(aws cloudformation describe-stacks \
-  --stack-name stocks-in-hand-staging \
-  --query 'Stacks[0].Outputs[?OutputKey==`FrontendDistributionId`].OutputValue' \
-  --output text)"
-
-export FRONTEND_URL="$(aws cloudformation describe-stacks \
-  --stack-name stocks-in-hand-staging \
-  --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' \
-  --output text)"
 
 aws s3 sync frontend/out \
   "s3://$FRONTEND_BUCKET/_releases/$RELEASE_SHA" \
@@ -300,6 +294,10 @@ aws cloudfront create-invalidation \
 
 echo "$FRONTEND_URL"
 ```
+
+`outputs` reads the stack's outputs in one call and prints an `export` line for
+each one. It refuses a name the template does not output, or an output the
+stack does not have.
 
 The frontend is a static export; no Next.js server is deployed. Browser API
 calls use the same CloudFront hostname under `/api/*`.
@@ -356,51 +354,47 @@ one idempotent run per scheduled ticker, and each run queues no more than three
 new documents from the last thirty days. Cross-run document identities prevent
 the same source document from being analysed again.
 
-Redeploy the same image tags to enable it. If BHP did not pass, set
-`SCHEDULED_TICKERS=ANZ,CBA,CSL,WES` first.
+Redeploy the same image tags to enable it. If BHP did not pass, run
+`export SCHEDULED_TICKERS=ANZ,CBA,CSL,WES` first. `--set-unless-empty` ignores
+an empty value, so while `SCHEDULED_TICKERS` is unset the stack keeps its
+scheduled tickers.
 
 ```bash
-sam deploy \
-  --config-file infra/samconfig.toml \
-  --config-env staging \
-  --template-file infra/template.yaml \
-  --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
-  --parameter-overrides \
-    "Environment=staging" \
-    "ParameterPathPrefix=/stocks-in-hand/staging" \
-    "OperationsEmail=$OPERATIONS_EMAIL" \
-    "ScheduleEnabled=true" \
-    "PublicDiscussionScheduleEnabled=false" \
-    "AnalysisEnabled=true" \
-    "BedrockEnabled=false" \
-    "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
-    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+cd backend
+python -m tools.release plan --execute --no-execution-role \
+  --stack-name stocks-in-hand-staging \
+  --region "$AWS_REGION" \
+  --release-sha "$RELEASE_SHA" \
+  --set ScheduleEnabled=true \
+  --set-unless-empty "ScheduledTickers=$SCHEDULED_TICKERS" \
+  --out /tmp/release-plan.json
+python -m tools.release apply /tmp/release-plan.json
+cd ..
 ```
+
+Every parameter not given keeps its live value, except `FrontendBaseUrl`, which
+follows the site address, and the three image URIs, which follow
+`--release-sha`. After §5, this release moves `FrontendBaseUrl` from
+`https://example.invalid` to the CloudFront URL. Read the plan's table before
+`apply`: its last column shows each value the deploy changes.
 
 Keep it disabled if the projected monthly cost exceeds US$10.
 
 The public discussion schedule runs at 10:00 AM on weekdays. It defaults to
 Bluesky and Mastodon with ten items from each source. Enable it only after the
-manual collector canaries pass:
+manual collector canaries pass, using the same `plan` and `apply` commands with
+these values:
 
 ```text
-PublicDiscussionScheduleEnabled=true
-ScheduledPublicDiscussionSources=bluesky,mastodon
-PublicDiscussionPerSourceLimit=10
+--set PublicDiscussionScheduleEnabled=true
+--set ScheduledPublicDiscussionSources=bluesky,mastodon
+--set PublicDiscussionPerSourceLimit=10
 ```
 
 Add `reddit` only after both Reddit SSM parameters exist. Add `blog` only after
 the feed allowlist exists. Each EventBridge event has a stable idempotency key,
-the Lambda has reserved concurrency one, and at most five blog feeds run.
+so a retried event does not collect again what that event already collected.
+At most five blog feeds run, and the Lambda has no reserved concurrency.
 Collected public posts are queued for analysis even when they discuss the ASX
 market generally and do not name one of the supported company tickers.
 
@@ -429,6 +423,15 @@ Redeploy this stack before the first enabled Brevo release. Existing GitHub
 roles created from older revisions do not have the narrowly scoped permission
 to check `/stocks-in-hand/staging/brevo-api-key` metadata.
 
+To redeploy, add `--no-execute-changeset` to the command above. Review the
+change set it names with `aws cloudformation describe-change-set`, and run
+`aws cloudformation execute-change-set` only once it changes what you expect.
+The first redeploy after
+[ADR 0001](../docs/adr/0001-remove-the-deployment-test-deploy-roles.md)
+removes the `stocks-in-hand-github-deployment-test` and
+`stocks-in-hand-cloudformation-deployment-test-execution` roles and their two
+outputs, if the stack still has them, and must change nothing else.
+
 Read the deployment role:
 
 ```bash
@@ -444,15 +447,31 @@ In GitHub:
 2. add environment variable `AWS_DEPLOY_ROLE_ARN` with that output;
 3. add environment variable `OPERATIONS_EMAIL`;
 4. add `ALERT_SENDER_EMAIL` after verifying that sender address in Brevo;
-5. keep the active `ProtectMain` ruleset with one approval and last-push approval;
-6. restrict the `staging` environment to the `main` branch;
-7. remove the environment reviewer after the branch restriction is active; and
-8. merge an approved pull request to start **Deploy staging release**.
+5. for a custom domain, add `SITE_DOMAIN_NAME`, `SITE_CERTIFICATE_ARN` and
+   `SITE_HOSTED_ZONE_ID` (see below);
+6. keep the active `ProtectMain` ruleset with one approval and last-push approval;
+7. restrict the `staging` environment to the `main` branch;
+8. remove the environment reviewer after the branch restriction is active; and
+9. merge an approved pull request to start **Deploy staging release**.
 
-Automatic releases preserve the current stack values for authentication,
-schedules, analysis, notifications, Bedrock, tickers, public sources, and the
-per-source limit. Set one of these optional `staging` environment variables to
-change a value on the next approved merge:
+Every release passes these five variables as they are set, and the plan
+refuses an empty `OPERATIONS_EMAIL`. Removing `ALERT_SENDER_EMAIL` clears the
+sender on the next release, which the plan refuses while notifications are on.
+Removing `SITE_DOMAIN_NAME` stops the next automatic release, because only a
+reviewed change set may remove the custom domain: run **Deploy staging
+release** by hand and have Person 1 review its change set.
+
+The custom domain needs all three `SITE_*` variables. Deploy `infra/domain.yaml`
+in `us-east-1` and copy its `SiteDomainName`, `CertificateArn` and
+`HostedZoneId` outputs. Leave all three unset to serve the site from the
+CloudFront domain. Alert and verification emails link to
+`https://$SITE_DOMAIN_NAME`, or to the stack's `FrontendUrl` output when it is
+unset. Redeploy the OIDC stack with `DnsHostedZoneId` set to the same zone ID
+to narrow its Route 53 grant.
+
+Automatic releases keep the live value of every other switch and limit. Set
+one of these optional `staging` environment variables to change one on the
+next approved merge:
 
 ```text
 AUTO_DEPLOY_AUTH_PROVIDER
@@ -470,8 +489,17 @@ AUTO_DEPLOY_MARKETAUX_PER_TICKER_LIMIT
 
 Leave notifications, schedules, and Bedrock disabled until their smoke tests
 pass. A manual run of **Deploy staging release** still creates an unexecuted
-change set. **Execute approved staging change set** and **Publish staging
-frontend** remain available for reviewed recovery work.
+change set. Its inputs default to `keep`, which keeps the live value, so the
+change set changes only the inputs you choose. It does build and push the
+three images for its commit, unless ECR already has them, and they count
+toward the two images each repository keeps (see Rollback). So a manual run
+on a commit that never goes live, such as a pull request branch, expires the
+release before the live one, and the next release then expires the live one.
+Before such a run, either raise `countNumber` in `infra/bootstrap.yaml` and
+redeploy the bootstrap stack with the §1 command, or accept that a rollback
+after the next release must target a SHA still in ECR. **Execute approved
+staging change set** and **Publish staging frontend** remain available for
+reviewed recovery work.
 
 The workflows request short-lived AWS tokens through OIDC. Automatic main
 deployments execute only after the same workflow passes backend tests, security
@@ -487,8 +515,11 @@ summaries and evidence categorisation:
 - the API and analysis Lambdas receive permission only when Bedrock is enabled;
 - IAM permits only regional `openai.gpt-oss-120b-1:0`;
 - API requests use Standard tier and cost-bearing routes require authentication;
-- queued analysis uses Flex tier, concurrency one, and SQS batch size one;
-- prompts are capped at 30,000 characters and completions at 1,024 tokens; and
+- queued analysis uses Flex tier and SQS batch size one, with no concurrency
+  cap on its event source, so a burst such as the ticker summary route's 50
+  requests can start up to 50 analysis Lambdas and as many flex-tier Bedrock
+  calls at once;
+- prompts are capped at 30,000 characters and completions at 4,096 tokens; and
 - responses must pass the existing strict JSON schemas before storage.
 
 Use on-demand inference only. Do not create Provisioned Throughput. When the
@@ -520,31 +551,26 @@ Bedrock permission disabled. An invocation already in flight can finish, but
 queued documents remain in Queue C without starting more analysis work.
 
 ```bash
-sam deploy \
-  --config-file infra/samconfig.toml \
-  --config-env staging \
-  --template-file infra/template.yaml \
-  --image-repositories "ApiFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "SchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "PublicDiscussionSchedulerFunction=$ECR_REGISTRY/stocks-in-hand-api" \
-  --image-repositories "DiscoveryFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "DownloadFunction=$ECR_REGISTRY/stocks-in-hand-scraper" \
-  --image-repositories "AnalysisFunction=$ECR_REGISTRY/stocks-in-hand-analysis" \
-  --parameter-overrides \
-    "Environment=staging" \
-    "ParameterPathPrefix=/stocks-in-hand/staging" \
-    "OperationsEmail=$OPERATIONS_EMAIL" \
-    "ScheduleEnabled=false" \
-    "PublicDiscussionScheduleEnabled=false" \
-    "AnalysisEnabled=false" \
-    "BedrockEnabled=false" \
-    "ScheduledTickers=$SCHEDULED_TICKERS" \
-    "ScheduledPublicDiscussionSources=$SCHEDULED_PUBLIC_DISCUSSION_SOURCES" \
-    "PublicDiscussionPerSourceLimit=$PUBLIC_DISCUSSION_PER_SOURCE_LIMIT" \
-    "ApiImageUri=$ECR_REGISTRY/stocks-in-hand-api:$RELEASE_SHA" \
-    "ScraperImageUri=$ECR_REGISTRY/stocks-in-hand-scraper:$RELEASE_SHA" \
-    "AnalysisImageUri=$ECR_REGISTRY/stocks-in-hand-analysis:$RELEASE_SHA"
+cd backend
+export RELEASE_SHA="$(python -m tools.release previous-release \
+  --stack-name stocks-in-hand-staging \
+  --region "$AWS_REGION")"
+python -m tools.release plan --execute \
+  --stack-name stocks-in-hand-staging \
+  --region "$AWS_REGION" \
+  --release-sha "$RELEASE_SHA" \
+  --set ScheduleEnabled=false \
+  --set PublicDiscussionScheduleEnabled=false \
+  --set AnalysisEnabled=false \
+  --set BedrockEnabled=false \
+  --out /tmp/release-plan.json
+python -m tools.release apply /tmp/release-plan.json
+cd ..
 ```
+
+`previous-release` prints the release SHA the live stack runs. Add
+`--no-execution-role` to `plan` if §10 has not created the CloudFormation
+execution role yet.
 
 ## DLQ inspection and redrive
 
@@ -553,10 +579,12 @@ CloudWatch logs before redriving. Do not edit identifiers or copy document
 content into a queue message.
 
 ```bash
-export DLQ_URL="$(aws cloudformation describe-stacks \
+cd backend
+eval "$(python -m tools.release outputs --shell \
   --stack-name stocks-in-hand-staging \
-  --query 'Stacks[0].Outputs[?OutputKey==`AnalysisDeadLetterQueueUrl`].OutputValue' \
-  --output text)"
+  --region "$AWS_REGION" \
+  AnalysisDeadLetterQueueUrl=DLQ_URL)"
+cd ..
 
 aws sqs receive-message \
   --queue-url "$DLQ_URL" \
@@ -579,12 +607,18 @@ earlier successful stages.
 
 ## Rollback
 
-ECR keeps the two newest image versions. Use **Prepare staging backend rollback**
-with the previous full SHA. Person 1 reviews that change set before Person 2
-executes it. Each Lambda publishes through its `live` alias. Use **Roll back
-staging frontend** to restore the matching S3 release snapshot and invalidate
-CloudFront. Do not downgrade the database automatically. Use a forward-fix
-migration if the schema changed.
+ECR keeps the two newest images in each repository, and a manual **Deploy
+staging release** run on a commit that never went live takes one of those
+places (see §10). Use **Prepare staging backend rollback** with the previous
+full SHA. Its plan refuses a SHA whose images are no longer in
+ECR. The change set keeps every parameter the live stack runs with (auth
+provider, feature switches, custom domain, alert sender) and swaps only the
+three image URIs. A parameter the stack does not have yet takes the template
+default. Person 1 reviews that change set before Person 2 executes it. Each
+Lambda publishes through its `live` alias. Use **Roll back staging frontend**
+to restore the matching S3 release snapshot and invalidate CloudFront. Do not
+downgrade the database automatically. Use a forward-fix migration if the schema
+changed.
 
 Verify after rollback:
 

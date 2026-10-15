@@ -1,0 +1,549 @@
+"""The runtime configuration: every setting declared once and read on first use.
+
+These tests read an environment through ``Settings.from_environment`` and
+never set an environment variable for a setting. ``settings`` keeps what the
+environment held at its first read, so a test that set one could leak it
+into every later test. The two tests of the first read itself build the
+settings again before and after they run.
+"""
+
+from __future__ import annotations
+
+import ast
+import os
+import re
+import subprocess
+import sys
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+from botocore.exceptions import ClientError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core import config
+from app.core.config import (
+    SECRETS,
+    ConfigurationError,
+    InMemoryParameterStore,
+    Secret,
+    Settings,
+    SsmParameterStore,
+    declared_settings,
+    get_settings,
+    reset_settings,
+    settings,
+)
+from app.sources import SOURCES, scheduled_tickers
+
+BACKEND = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+PARAMETER = "/stocks-in-hand/test/secret"
+# The code that runs in the API, the Lambdas and migrations. scripts/ and
+# tools/ are local tools.
+RUNTIME_PACKAGES = ("app", "lambdas", "parsing", "scrapers", "alembic")
+RUNTIME_MODULES = ("main.py", "lambda_api.py")
+# Facts AWS sets about the process, which are not settings. "os.environ" is
+# the whole environment, which Chromium inherits in Lambda.
+AWS_RUNTIME_READS = {
+    "app/database/connection.py": {"AWS_LAMBDA_FUNCTION_NAME"},
+    "scrapers/browser.py": {"AWS_LAMBDA_RUNTIME_API", "os.environ"},
+}
+SECRETS_THAT_MUST_EXIST = [secret for secret in SECRETS if not secret.may_be_missing]
+SECRETS_THAT_MAY_BE_MISSING = [secret for secret in SECRETS if secret.may_be_missing]
+# The Lambda handlers that import the database layer only where they use it.
+WORKER_HANDLERS = (
+    "lambdas.discovery",
+    "lambdas.download",
+    "lambdas.analysis",
+    "lambdas.schedule",
+    "lambdas.public_discussion_schedule",
+)
+
+
+@pytest.fixture()
+def unbuilt_settings() -> Iterator[None]:
+    """Settings that are built again at the next read, and again after the test."""
+    reset_settings()
+    yield
+    reset_settings()
+
+
+def test_a_bad_value_fails_at_the_first_read_not_at_import() -> None:
+    script = (
+        "import app.core.config as config\n"
+        "try:\n"
+        "    config.settings.ALERT_DAILY_BUDGET\n"
+        "except config.ConfigurationError as error:\n"
+        "    print(error)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=BACKEND,
+        env={**os.environ, "ALERT_DAILY_BUDGET": "abc"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == (
+        "Invalid runtime configuration: ALERT_DAILY_BUDGET must be a whole number"
+    )
+
+
+def test_importing_a_worker_handler_builds_no_settings() -> None:
+    """A worker builds its settings, and reads SSM, only once it handles a record or event.
+
+    For discovery, download and analysis, run_stage then logs a bad setting
+    or an SSM error as a retryable failure with the record's correlation id,
+    instead of the Lambda failing its init. Importing the database layer
+    creates the engine, which builds the settings, so a top-level import of
+    it in a worker would break this.
+    """
+    script = (
+        "import importlib, sys\n"
+        "import app.core.config as config\n"
+        "for name in sys.argv[1:]:\n"
+        "    importlib.import_module(name)\n"
+        "    if config._built is not None or 'app.database.connection' in sys.modules:\n"
+        "        print(name)\n"
+        "        break\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, *WORKER_HANDLERS],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert (result.returncode, result.stdout.split()) == (0, []), result.stderr
+
+
+def test_an_empty_environment_gives_the_documented_defaults() -> None:
+    defaults = Settings.from_environment({})
+
+    assert defaults.DATABASE_URL == "postgresql://user:password@localhost:5432/spike"
+    assert (defaults.AUTH_PROVIDER, defaults.LLM_PROVIDER) == ("legacy", "bedrock")
+    assert defaults.BEDROCK_ENABLED is False
+    assert defaults.BEDROCK_MODEL_ID == "openai.gpt-oss-120b-1:0"
+    assert defaults.BEDROCK_SERVICE_TIER == "default"
+    assert defaults.BEDROCK_MAX_PROMPT_CHARS == 30000
+    assert (defaults.NOTIFICATIONS_ENABLED, defaults.NOTIFICATIONS_DRY_RUN) == (False, False)
+    assert defaults.ALERT_SENDER_NAME == "Stocks In Hand"
+    assert defaults.ALERT_DAILY_BUDGET == 180
+    assert defaults.ALERT_MAX_PER_INVESTOR_PER_RUN == 5
+    assert defaults.ALERT_DEFAULT_MIN_CONFIDENCE == 0.75
+    assert defaults.ALERT_CLAIM_STALE_MINUTES == 15
+    assert defaults.ALERT_VERIFICATION_TOKEN_TTL_HOURS == 24
+    assert defaults.FRONTEND_BASE_URL == "http://localhost:3000"
+    assert defaults.SUPPORTED_TICKERS == list(SOURCES)
+    assert defaults.PUBLIC_DISCUSSION_FEED_URLS == []
+    assert defaults.NEWS_FETCH_LIMIT == 10
+    assert defaults.CORS_ORIGINS == ["http://localhost:3000"]
+    assert (defaults.SESSION_COOKIE_NAME, defaults.SESSION_EXPIRE_DAYS) == ("stonks_session", 7)
+    assert (defaults.SESSION_COOKIE_SECURE, defaults.SESSION_COOKIE_SAMESITE) == (False, "lax")
+    assert defaults.SCHEDULED_TICKERS == scheduled_tickers()
+    assert (defaults.MARKETAUX_ENABLED, defaults.MARKETAUX_PER_TICKER_LIMIT) == (False, 10)
+    assert defaults.SCHEDULED_PUBLIC_DISCUSSION_SOURCES == ["bluesky", "mastodon"]
+    assert defaults.PUBLIC_DISCUSSION_PER_SOURCE_LIMIT == 10
+    assert defaults.PUBLIC_DISCUSSION_SEARCH_QUERY == "ASX"
+    assert (defaults.DISCOVERY_LOOKBACK_DAYS, defaults.MAX_DOCUMENTS_PER_RUN) == (30, 3)
+    assert defaults.DOWNLOAD_QUEUE_URL == ""
+    assert defaults.MAX_DOCUMENT_BYTES == 25 * 1024 * 1024
+    assert defaults.MAX_DOCX_UNCOMPRESSED_BYTES == 20 * 1024 * 1024
+    assert defaults.RAW_DOCUMENT_BUCKET == ""
+    assert defaults.MAX_ANALYSIS_CHARS == 50000
+    assert (defaults.MAX_PDF_PAGES, defaults.MAX_OCR_PAGES) == (500, 5)
+    assert defaults.MAX_OCR_PIXELS_PER_PAGE == 8_000_000
+    assert defaults.NOTIFICATION_QUEUE_URL == ""
+
+
+def test_the_notification_queue_url_is_trimmed_and_the_ocr_limit_may_be_zero() -> None:
+    read = Settings.from_environment(
+        {"NOTIFICATION_QUEUE_URL": " https://sqs.example/notifications ", "MAX_OCR_PAGES": "0"}
+    )
+
+    assert read.NOTIFICATION_QUEUE_URL == "https://sqs.example/notifications"
+    assert read.MAX_OCR_PAGES == 0
+
+
+def test_the_environment_overrides_the_document_size_limits() -> None:
+    read = Settings.from_environment(
+        {"MAX_DOCUMENT_BYTES": "1024", "MAX_DOCX_UNCOMPRESSED_BYTES": "2048"}
+    )
+
+    assert (read.MAX_DOCUMENT_BYTES, read.MAX_DOCX_UNCOMPRESSED_BYTES) == (1024, 2048)
+
+
+def test_values_are_read_as_the_backend_always_read_them() -> None:
+    read = Settings.from_environment(
+        {
+            "AUTH_PROVIDER": " Legacy ",
+            "BEDROCK_SERVICE_TIER": "FLEX",
+            "BLUESKY_SERVICE_URL": "https://bsky.example//",
+            "NOTIFICATIONS_ENABLED": "TRUE",
+            "SESSION_COOKIE_SECURE": "yes",
+            "SUPPORTED_TICKERS": " csl, ,wes,CSL",
+            "CORS_ORIGINS": "https://a.example, https://b.example,",
+        }
+    )
+
+    assert (read.AUTH_PROVIDER, read.BEDROCK_SERVICE_TIER) == ("legacy", "flex")
+    assert read.BLUESKY_SERVICE_URL == "https://bsky.example"
+    assert (read.NOTIFICATIONS_ENABLED, read.SESSION_COOKIE_SECURE) == (True, False)
+    assert read.SUPPORTED_TICKERS == ["CSL", "WES", "CSL"]
+    assert read.CORS_ORIGINS == ["https://a.example", "https://b.example"]
+
+
+def test_a_variable_that_is_set_is_read_even_when_empty() -> None:
+    read = Settings.from_environment({"SUPPORTED_TICKERS": "", "SCHEDULED_TICKERS": ""})
+
+    assert (read.SUPPORTED_TICKERS, read.SCHEDULED_TICKERS) == ([], [])
+
+
+def test_the_schedule_keeps_only_catalogue_tickers_in_catalogue_order() -> None:
+    read = Settings.from_environment({"SCHEDULED_TICKERS": "wes, XYZ,anz,WES"})
+
+    assert read.SCHEDULED_TICKERS == ["ANZ", "WES"]
+
+
+def test_the_public_discussion_schedule_keeps_only_known_sources() -> None:
+    read = Settings.from_environment(
+        {"SCHEDULED_PUBLIC_DISCUSSION_SOURCES": "blog, Reddit,unknown,"}
+    )
+
+    assert read.SCHEDULED_PUBLIC_DISCUSSION_SOURCES == ["reddit", "blog"]
+
+
+@pytest.mark.parametrize(("value", "query"), [(" asx 200 ", "asx 200"), ("  ", "ASX"), ("", "ASX")])
+def test_an_empty_search_query_reads_as_asx(value: str, query: str) -> None:
+    read = Settings.from_environment({"PUBLIC_DISCUSSION_SEARCH_QUERY": value})
+
+    assert read.PUBLIC_DISCUSSION_SEARCH_QUERY == query
+
+
+def test_a_required_setting_must_be_set() -> None:
+    assert Settings.from_environment(
+        {"DISCOVERY_QUEUE_URL": "https://sqs.example/queue-a"}
+    ).required("DISCOVERY_QUEUE_URL") == "https://sqs.example/queue-a"
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({"DISCOVERY_QUEUE_URL": ""}).required("DISCOVERY_QUEUE_URL")
+
+    assert rejected.value.problems == ("DISCOVERY_QUEUE_URL must be set",)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "problem"),
+    [
+        ("AUTH_PROVIDER", "okta", "must be one of legacy, dual, cognito"),
+        ("LLM_PROVIDER", "gemini", "must be one of bedrock, groq"),
+        ("BEDROCK_SERVICE_TIER", "fast", "must be one of default, flex, priority"),
+        ("BEDROCK_MODEL_ID", "  ", "must not be empty"),
+        ("BEDROCK_MAX_PROMPT_CHARS", "999", "must be at least 1000"),
+        ("ALERT_DAILY_BUDGET", "-1", "must be at least 0"),
+        ("ALERT_MAX_PER_INVESTOR_PER_RUN", "0", "must be at least 1"),
+        ("ALERT_CLAIM_STALE_MINUTES", "0", "must be at least 1"),
+        ("ALERT_VERIFICATION_TOKEN_TTL_HOURS", "0", "must be at least 1"),
+        ("ALERT_DEFAULT_MIN_CONFIDENCE", "1.5", "must be from 0 to 1"),
+        ("ALERT_DEFAULT_MIN_CONFIDENCE", "high", "must be a number"),
+        ("COGNITO_JWKS_CACHE_SECONDS", "five", "must be a whole number"),
+        ("SESSION_EXPIRE_DAYS", "", "must be a whole number"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "0", "must be at least 1"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "26", "must be at most 25"),
+        ("MARKETAUX_PER_TICKER_LIMIT", "abc", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "0", "must be at least 1"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "26", "must be at most 25"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "abc", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_PER_SOURCE_LIMIT", "12.5", "must be a whole number"),
+        ("PUBLIC_DISCUSSION_SEARCH_QUERY", "x" * 101, "must be at most 100 characters"),
+        ("DISCOVERY_LOOKBACK_DAYS", "0", "must be at least 1"),
+        ("DISCOVERY_LOOKBACK_DAYS", "abc", "must be a whole number"),
+        ("MAX_DOCUMENTS_PER_RUN", "0", "must be at least 1"),
+        ("MAX_DOCUMENTS_PER_RUN", "abc", "must be a whole number"),
+        ("MAX_DOCUMENT_BYTES", "0", "must be at least 1"),
+        ("MAX_DOCX_UNCOMPRESSED_BYTES", "0", "must be at least 1"),
+        ("MAX_DOCX_UNCOMPRESSED_BYTES", "20MiB", "must be a whole number"),
+        ("MAX_ANALYSIS_CHARS", "0", "must be at least 1"),
+        ("MAX_PDF_PAGES", "0", "must be at least 1"),
+        ("MAX_OCR_PAGES", "-1", "must be at least 0"),
+        ("MAX_OCR_PIXELS_PER_PAGE", "0", "must be at least 1"),
+        ("MAX_OCR_PIXELS_PER_PAGE", "8e6", "must be a whole number"),
+    ],
+)
+def test_a_bad_value_is_rejected_with_its_limit(variable: str, value: str, problem: str) -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({variable: value})
+
+    assert rejected.value.problems == (f"{variable} {problem}",)
+
+
+def test_every_bad_value_is_reported_and_none_is_echoed() -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment(
+            {"ALERT_DAILY_BUDGET": "postgres-password", "LLM_PROVIDER": "brevo-key"}
+        )
+
+    assert rejected.value.problems == (
+        "ALERT_DAILY_BUDGET must be a whole number",
+        "LLM_PROVIDER must be one of bedrock, groq",
+    )
+    assert "password" not in str(rejected.value)
+    assert "brevo-key" not in str(rejected.value)
+    assert rejected.value.__context__ is None
+
+
+def test_a_configuration_error_is_not_a_value_error() -> None:
+    """Routes turn ValueError into a 400, which would hide a broken deployment."""
+    assert not issubclass(ConfigurationError, ValueError)
+
+
+@pytest.mark.parametrize("provider", ["dual", "cognito"])
+def test_cognito_sign_in_needs_its_pool_its_client_and_a_jwks_cache(provider: str) -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({"AUTH_PROVIDER": provider, "COGNITO_JWKS_CACHE_SECONDS": "0"})
+
+    assert rejected.value.problems == (
+        f"COGNITO_USER_POOL_ID must be set when AUTH_PROVIDER is {provider}",
+        f"COGNITO_APP_CLIENT_ID must be set when AUTH_PROVIDER is {provider}",
+        f"COGNITO_JWKS_CACHE_SECONDS must be greater than zero when AUTH_PROVIDER is {provider}",
+    )
+    configured = Settings.from_environment(
+        {
+            "AUTH_PROVIDER": provider.upper(),
+            "COGNITO_USER_POOL_ID": " pool ",
+            "COGNITO_APP_CLIENT_ID": "client",
+        }
+    )
+    assert (configured.COGNITO_USER_POOL_ID, configured.COGNITO_APP_CLIENT_ID) == ("pool", "client")
+
+
+def test_legacy_sign_in_needs_no_cognito_settings() -> None:
+    assert Settings.from_environment({"COGNITO_JWKS_CACHE_SECONDS": "0"}).AUTH_PROVIDER == "legacy"
+
+
+def test_marketaux_api_key_is_an_alias_for_the_marketaux_token() -> None:
+    def token(environ: dict[str, str]) -> str:
+        return Settings.from_environment(environ).MARKETAUX_API_TOKEN
+
+    assert token({"MARKETAUX_API_KEY": " alias-token "}) == "alias-token"
+    assert token({"MARKETAUX_API_TOKEN": "", "MARKETAUX_API_KEY": "alias-token"}) == "alias-token"
+    assert token({"MARKETAUX_API_TOKEN": "token", "MARKETAUX_API_KEY": "alias-token"}) == "token"
+    assert token({}) == ""
+
+
+def test_patching_settings_patches_the_built_settings_and_restores_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built = get_settings()
+    budget, sender = built.ALERT_DAILY_BUDGET, built.ALERT_SENDER_NAME
+
+    with patch.object(settings, "ALERT_DAILY_BUDGET", 7):
+        assert built.ALERT_DAILY_BUDGET == 7
+    with patch.multiple(settings, ALERT_DAILY_BUDGET=8, ALERT_SENDER_NAME="Test"):
+        assert (built.ALERT_DAILY_BUDGET, built.ALERT_SENDER_NAME) == (8, "Test")
+    assert (built.ALERT_DAILY_BUDGET, built.ALERT_SENDER_NAME) == (budget, sender)
+
+    monkeypatch.setattr(settings, "ALERT_DAILY_BUDGET", 9)
+    monkeypatch.setattr(settings, "NOT_A_SETTING", "added", raising=False)
+    assert (built.ALERT_DAILY_BUDGET, getattr(built, "NOT_A_SETTING")) == (9, "added")
+    monkeypatch.undo()
+    assert built.ALERT_DAILY_BUDGET == budget
+    assert not hasattr(built, "NOT_A_SETTING")
+
+    with pytest.raises(AttributeError):
+        with patch.object(settings, "NOT_A_SETTING", 1):
+            pass
+
+
+@pytest.mark.usefixtures("unbuilt_settings")
+def test_patching_before_the_first_read_builds_the_settings_first() -> None:
+    with patch.object(settings, "ALERT_DAILY_BUDGET", 7):
+        assert get_settings().ALERT_DAILY_BUDGET == 7
+
+    assert get_settings().ALERT_DAILY_BUDGET == (
+        Settings.from_environment(os.environ).ALERT_DAILY_BUDGET
+    )
+
+
+def _setting(secret: Secret, environ: dict[str, str], **kwargs: Any) -> Any:
+    return getattr(Settings.from_environment(environ, **kwargs), secret.setting)
+
+
+@pytest.mark.parametrize("secret", SECRETS, ids=lambda secret: secret.setting)
+def test_a_secret_is_read_from_the_parameter_its_variable_names(secret: Secret) -> None:
+    parameters = InMemoryParameterStore({PARAMETER: "https://value.example/a"})
+    environ = {secret.variable: PARAMETER}
+
+    read = _setting(secret, environ, parameters=parameters)
+
+    assert read == _setting(secret, {secret.setting: "https://value.example/a"})
+    assert parameters.requested == [PARAMETER]
+    assert environ == {secret.variable: PARAMETER}
+
+
+@pytest.mark.parametrize("value", ["https://value.example/local", ""])
+@pytest.mark.parametrize("secret", SECRETS, ids=lambda secret: secret.setting)
+def test_a_secret_that_is_set_is_not_read_from_its_parameter(secret: Secret, value: str) -> None:
+    parameters = InMemoryParameterStore({PARAMETER: "https://value.example/ssm"})
+
+    environ = {secret.variable: PARAMETER, secret.setting: value}
+
+    read = _setting(secret, environ, parameters=parameters)
+
+    assert read == _setting(secret, {secret.setting: value})
+    assert parameters.requested == []
+
+
+@pytest.mark.parametrize(
+    "secret", SECRETS_THAT_MAY_BE_MISSING, ids=lambda secret: secret.setting
+)
+def test_a_secret_that_may_be_missing_reads_as_empty_without_its_parameter(
+    secret: Secret,
+) -> None:
+    read = _setting(secret, {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({}))
+
+    assert read == _setting(secret, {secret.setting: ""})
+
+
+@pytest.mark.parametrize("secret", SECRETS_THAT_MUST_EXIST, ids=lambda secret: secret.setting)
+def test_a_missing_parameter_is_a_configuration_error_for_a_secret_that_must_exist(
+    secret: Secret,
+) -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment(
+            {secret.variable: PARAMETER}, parameters=InMemoryParameterStore({})
+        )
+
+    assert rejected.value.problems == (f"{secret.variable} names a parameter that does not exist",)
+
+
+def test_only_the_database_url_and_the_marketaux_token_must_exist() -> None:
+    """Gating is separate: the Marketaux token and the Brevo key are both gated."""
+    assert [secret.setting for secret in SECRETS_THAT_MUST_EXIST] == [
+        "DATABASE_URL",
+        "MARKETAUX_API_TOKEN",
+    ]
+
+
+def test_a_named_secret_needs_a_parameter_store() -> None:
+    with pytest.raises(ConfigurationError) as rejected:
+        Settings.from_environment({"BREVO_API_KEY_PARAMETER": PARAMETER})
+
+    assert rejected.value.problems == (
+        "BREVO_API_KEY_PARAMETER is set, but no parameter store was given",
+    )
+
+
+class FakeSsm:
+    """An SSM client that answers every GetParameter the same way."""
+
+    def __init__(self, error_code: str | None = None) -> None:
+        self.error_code = error_code
+        self.requests: list[dict[str, Any]] = []
+
+    def get_parameter(self, **request: Any) -> dict[str, Any]:
+        self.requests.append(request)
+        if self.error_code is not None:
+            raise ClientError({"Error": {"Code": self.error_code}}, "GetParameter")
+        return {"Parameter": {"Name": request["Name"], "Value": "decrypted"}}
+
+
+def test_ssm_decrypts_the_parameter() -> None:
+    client = FakeSsm()
+
+    assert SsmParameterStore(client).get(PARAMETER) == "decrypted"
+    assert client.requests == [{"Name": PARAMETER, "WithDecryption": True}]
+
+
+def test_ssm_answers_none_for_a_missing_parameter() -> None:
+    assert SsmParameterStore(FakeSsm("ParameterNotFound")).get(PARAMETER) is None
+
+
+def test_ssm_raises_any_other_error() -> None:
+    with pytest.raises(ClientError):
+        SsmParameterStore(FakeSsm("AccessDeniedException")).get(PARAMETER)
+
+
+@pytest.mark.usefixtures("unbuilt_settings")
+def test_the_first_read_resolves_secrets_from_ssm(monkeypatch: pytest.MonkeyPatch) -> None:
+    ssm = InMemoryParameterStore({PARAMETER: "brevo-key-from-ssm"})
+    monkeypatch.setattr(config, "SsmParameterStore", lambda: ssm)
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.setenv("BREVO_API_KEY_PARAMETER", PARAMETER)
+
+    assert settings.BREVO_API_KEY == "brevo-key-from-ssm"
+    assert ssm.requested == [PARAMETER]
+    assert "BREVO_API_KEY" not in os.environ
+
+
+def _environment_reads(path: Path) -> set[str]:
+    """The variables a module reads, with "os.environ" for the whole environment."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    reads = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            reads.update(
+                f"os.{alias.name}" for alias in node.names if alias.name in {"environ", "getenv"}
+            )
+        if not (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+            and node.attr in {"environ", "getenv"}
+        ):
+            continue
+        reader: ast.AST = node
+        if isinstance(parents[reader], ast.Attribute) and parents[reader].attr == "get":
+            reader = parents[reader]
+        parent = parents[reader]
+        if isinstance(parent, ast.Call) and parent.func is reader and parent.args:
+            name = parent.args[0]
+        elif isinstance(parent, ast.Subscript) and parent.value is reader:
+            name = parent.slice
+        else:
+            name = None
+        reads.add(name.value if isinstance(name, ast.Constant) else "os.environ")
+    return reads
+
+
+def test_only_the_configuration_reads_the_environment() -> None:
+    """A setting read anywhere else would skip its declared default and limits."""
+    paths = [
+        *(BACKEND / module for module in RUNTIME_MODULES),
+        *(path for package in RUNTIME_PACKAGES for path in (BACKEND / package).rglob("*.py")),
+    ]
+    unexpected = {}
+    for path in paths:
+        module = path.relative_to(BACKEND).as_posix()
+        if module == "app/core/config.py":
+            continue
+        reads = _environment_reads(path) - AWS_RUNTIME_READS.get(module, set())
+        if reads:
+            unexpected[module] = reads
+
+    assert unexpected == {}
+
+
+def test_the_example_environment_names_only_declared_settings() -> None:
+    example = (REPOSITORY_ROOT / "backend" / ".env.example").read_text(encoding="utf-8")
+    named = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]*)=", example, flags=re.MULTILINE))
+
+    assert named - {*declared_settings(), *(secret.variable for secret in SECRETS)} == set()
+
+
+def test_no_repr_shows_a_value() -> None:
+    built = Settings.from_environment(
+        {
+            "DATABASE_URL": "postgresql://app:hunter2@db.example/prod",
+            "BREVO_API_KEY": "xkeysib-value",
+        }
+    )
+
+    for shown in (repr(built), str(built), repr(settings), str(settings)):
+        assert "hunter2" not in shown
+        assert "xkeysib" not in shown

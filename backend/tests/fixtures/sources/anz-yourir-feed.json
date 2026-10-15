@@ -1,0 +1,298 @@
+{
+ "shortName": "ANZ GROUP",
+ "symbol": "anz.asx",
+ "date": "2026-10-07",
+ "itemCount": 20,
+ "pageSize": 20,
+ "page": 1,
+ "totalCount": 5893,
+ "pageCount": 295,
+ "underlyingIssuerSymbol": "anz.asx",
+ "items": {
+  "retracted": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "time": [
+   "2026-10-05 17:37:16",
+   "2026-10-02 11:09:59",
+   "2026-09-09 13:19:14",
+   "2026-08-26 18:52:22",
+   "2026-08-13 07:30:24",
+   "2026-08-13 07:30:09",
+   "2026-08-05 13:22:58",
+   "2026-08-04 18:30:35",
+   "2026-07-31 18:39:21",
+   "2026-07-27 18:00:36",
+   "2026-07-21 11:50:58",
+   "2026-07-14 17:11:02",
+   "2026-07-07 11:55:39",
+   "2026-07-07 11:03:24",
+   "2026-07-03 10:04:13",
+   "2026-07-01 14:06:25",
+   "2026-07-01 09:59:50",
+   "2026-06-16 13:28:56",
+   "2026-06-12 07:30:04",
+   "2026-06-02 09:09:56"
+  ],
+  "types": [
+   [
+    "08006"
+   ],
+   [
+    "12008"
+   ],
+   [
+    "06021"
+   ],
+   [
+    "06021"
+   ],
+   [
+    "03026"
+   ],
+   [
+    "03028"
+   ],
+   [
+    "14013"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "07001"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02006"
+   ],
+   [
+    "02008"
+   ],
+   [
+    "06027"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "06020"
+   ],
+   [
+    "12001"
+   ],
+   [
+    "06021"
+   ],
+   [
+    "12008"
+   ],
+   [
+    "10006",
+    "10001",
+    "10002",
+    "10003"
+   ]
+  ],
+  "pageCount": [
+   2,
+   1,
+   6,
+   6,
+   16,
+   4,
+   10,
+   2,
+   1,
+   2,
+   4,
+   2,
+   4,
+   2,
+   2,
+   6,
+   1,
+   6,
+   1,
+   7
+  ],
+  "timestamp": [
+   1791182236,
+   1790903399,
+   1788923954,
+   1787734342,
+   1786570224,
+   1786570209,
+   1785900178,
+   1785832235,
+   1785487161,
+   1785139236,
+   1784598658,
+   1784013062,
+   1783389339,
+   1783386204,
+   1783037053,
+   1782878785,
+   1782863990,
+   1781580536,
+   1781213404,
+   1780355396
+  ],
+  "fileID": [
+   "3A703331",
+   "3A703207",
+   "3A701407",
+   "3A699936",
+   "3A698700",
+   "3A698699",
+   "3A698246",
+   "3A698191",
+   "3A698052",
+   "3A697682",
+   "3A697423",
+   "3A697155",
+   "3A696772",
+   "3A696765",
+   "3A696580",
+   "3A696388",
+   "3A696358",
+   "3A695404",
+   "3A695164",
+   "3A694519"
+  ],
+  "fileSize": [
+   162864,
+   43100,
+   13098,
+   16053,
+   423244,
+   417190,
+   207221,
+   543900,
+   47326,
+   1037057,
+   416007,
+   965288,
+   13136,
+   1037945,
+   539446,
+   15556,
+   39996,
+   16724,
+   40432,
+   26636
+  ],
+  "fileType": [
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf"
+  ],
+  "priceSensitive": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "attachmentCount": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "heading": [
+   "Shareholder resolutions for consideration at ANZ's 2026 AGM",
+   "ANZ to commence external audit tender process",
+   "Notification regarding unquoted securities - ANZ",
+   "Notification regarding unquoted securities - ANZ",
+   "2026 Third Quarter Trading Update & Pillar 3 Discussion Pack",
+   "2026 Third Quarter Trading Update",
+   "Trading in ANZ Securities Policy",
+   "Change of Director's Interest Notice",
+   "ANZ completes acquisition of ANZ Worldline",
+   "Change of Director's Interest Notice",
+   "Notice Corporations Act Subsection 259C(2)",
+   "Initial Director's Interest Notice",
+   "Notification of cessation of securities - ANZ",
+   "Change of Director's Interest Notice",
+   "Change of Director's Interest Notice",
+   "Application for quotation of securities - ANZ",
+   "Rachel Slade to join Group Board",
+   "Notification regarding unquoted securities - ANZ",
+   "ANZ NZ CEO & ANZ Group Executive Antonia Watson to retire",
+   "Update - Dividend/Distribution - ANZ"
+  ]
+ }
+}

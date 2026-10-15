@@ -1,26 +1,57 @@
-"""Tests for the database-backed announcements feed mapping."""
+"""Tests for the database-backed announcements feed.
+
+Each item is the artifact card (``app/services/artifact_card.py``), which
+``test_artifact_card.py`` covers.
+"""
 
 import sys
 import uuid
+from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session, sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import app.models  # noqa: F401
 from app.api.routes import announcement as announcement_routes
+from app.core.config import settings
 from app.crud.announcement import (
-    _announcement_from_artifact,
     _sydney_date_end,
     _sydney_date_start,
     _sydney_day_bounds,
     get_announcements,
 )
 from app.models.artifact import Artifact
-from app.models.artifact_summary import ArtifactSummary
 from app.models.ticker import Ticker
+from app.services import artifact_summary
+
+
+@pytest.fixture()
+def db_session() -> Iterator[Session]:
+    engine = create_engine(settings.DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            connection.execute(select(1))
+    except OperationalError as exc:
+        engine.dispose()
+        pytest.skip(f"Database is not available: {exc}")
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = sessionmaker(bind=connection)()
+    try:
+        yield session
+    finally:
+        session.close()
+        transaction.rollback()
+        connection.close()
+        engine.dispose()
 
 
 def test_announcements_route_accepts_path_without_trailing_slash(monkeypatch) -> None:
@@ -35,107 +66,80 @@ def test_announcements_route_accepts_path_without_trailing_slash(monkeypatch) ->
     assert response.json() == []
 
 
-def test_announcement_mapping_uses_metadata_and_ticker_symbol() -> None:
-    ticker = Ticker(symbol="BHP", company_name="BHP Group", exchange="ASX")
-    artifact = Artifact(
-        id=uuid.uuid4(),
-        ticker=ticker,
-        source_type="asx_announcement",
+def test_the_feed_shows_a_recorded_summary_and_no_lines_without_one(
+    db_session: Session,
+) -> None:
+    ticker = Ticker(
+        symbol=f"F{uuid.uuid4().hex[:8].upper()}",
+        company_name="Feed Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+
+    def announcement(**values) -> Artifact:
+        return Artifact(
+            ticker_id=ticker.id,
+            source_type="asx_announcement",
+            published_at=datetime(2040, 1, 2, 10, 0, tzinfo=timezone.utc),
+            content_hash=f"feed-{uuid.uuid4()}",
+            **values,
+        )
+
+    summarised = announcement(
         artifact_type="dividend_announcement",
         title="Dividend update",
-        url="https://example.test/asx/bhp",
-        raw_text="Raw announcement text",
-        published_at=datetime(2026, 5, 16, 10, 30, tzinfo=timezone.utc),
-        artifact_metadata={
-            "category": "DividendAnnouncement",
-            "about": "Dividend details for shareholders.",
-            "changed": "The declared dividend increased.",
-            "matters": "This affects shareholder income expectations.",
-        },
+        raw_text="Dividend announcement body",
+        artifact_metadata={"category": "DividendAnnouncement"},
     )
-
-    result = _announcement_from_artifact(artifact)
-
-    assert result.ticker == "BHP"
-    assert result.tag == "Dividend Announcement"
-    assert result.title == "Dividend update"
-    assert result.about == "Dividend details for shareholders."
-    assert result.changed == "The declared dividend increased."
-    assert result.matters == "This affects shareholder income expectations."
-    assert result.url == "https://example.test/asx/bhp"
-
-
-def test_announcement_mapping_uses_summary_metadata_as_about_fallback() -> None:
-    artifact = Artifact(
-        id=uuid.uuid4(),
-        source_type="asx_announcement",
-        artifact_type="asx_announcement_other",
-        title="Trading update",
-        raw_text="Raw announcement text",
-        artifact_metadata={
-            "summary": "The company released a concise generated summary.",
-            "changed": "No material change identified.",
-            "matters": "Investors can use this as a quick filing overview.",
-        },
-    )
-
-    result = _announcement_from_artifact(artifact)
-
-    assert result.about == "The company released a concise generated summary."
-    assert result.changed == "No material change identified."
-    assert result.matters == "Investors can use this as a quick filing overview."
-
-
-def test_announcement_mapping_recovers_legacy_combined_bedrock_summary() -> None:
-    artifact = Artifact(
-        id=uuid.uuid4(),
-        source_type="asx_announcement",
-        artifact_type="asx_announcement_other",
-        title="Community grants update",
-        raw_text="Raw PDF header text",
-        artifact_metadata={"category": "UNKNOWN"},
-    )
-    artifact.summaries.append(
-        ArtifactSummary(
-            summary_text=(
-                "Woodside awarded community grants.\n\n"
-                "The filing covers local community funding.\n\n"
-                "A new grant round was announced.\n\n"
-                "The investment may support Woodside's social licence."
-            ),
-            model_used="bedrock:openai.gpt-oss-120b-1:0",
-        )
-    )
-
-    result = _announcement_from_artifact(artifact)
-
-    assert result.about == "The filing covers local community funding."
-    assert result.changed == "A new grant round was announced."
-    assert result.matters == (
-        "The investment may support Woodside's social licence."
-    )
-
-
-def test_announcement_mapping_has_safe_fallbacks_for_missing_metadata() -> None:
-    artifact = Artifact(
-        id=uuid.uuid4(),
-        source_type="asx_announcement",
+    unsummarised = announcement(
         artifact_type="asx_announcement_other",
         title="General update",
-        raw_text=" ".join(["Long raw text"] * 40),
-        created_at=datetime(2026, 5, 16, 9, 0, tzinfo=timezone.utc),
-        artifact_metadata={"category": "UNKNOWN", "pdf_url": "https://example.test/file.pdf"},
+        raw_text="Raw filing text that is not a summary.",
     )
+    db_session.add_all([summarised, unsummarised])
+    db_session.flush()
+    artifact_summary.record(
+        db_session,
+        summarised,
+        artifact_summary.from_answer(
+            {
+                "summary": "The company confirmed its dividend timetable.",
+                "about": "Dividend details for shareholders.",
+                "changed": "The declared dividend increased.",
+                "matters": "This affects shareholder income expectations.",
+            },
+            model="bedrock:test-model",
+            prompt_version="llm-announcement-summary-v3",
+        ),
+    )
+    db_session.commit()
 
-    result = _announcement_from_artifact(artifact)
+    feed = {
+        item.id: item
+        for item in get_announcements(
+            db_session,
+            start_date=date(2040, 1, 1),
+            end_date=date(2040, 1, 3),
+        )
+    }
 
-    assert result.ticker == "ASX"
-    assert result.tag == "Asx Announcement Other"
-    assert result.about.startswith("Long raw text")
-    assert result.about.endswith("...")
-    assert result.changed == "No change summary available yet."
-    assert result.matters == "No impact summary available yet."
-    assert result.url == "https://example.test/file.pdf"
+    assert feed[summarised.id].ticker == ticker.symbol
+    assert feed[summarised.id].tag == "Dividend Announcement"
+    assert (
+        feed[summarised.id].about,
+        feed[summarised.id].changed,
+        feed[summarised.id].matters,
+    ) == (
+        "Dividend details for shareholders.",
+        "The declared dividend increased.",
+        "This affects shareholder income expectations.",
+    )
+    assert (
+        feed[unsummarised.id].about,
+        feed[unsummarised.id].changed,
+        feed[unsummarised.id].matters,
+    ) == (None, None, None)
 
 
 def test_sydney_day_bounds_match_melbourne_calendar_day() -> None:

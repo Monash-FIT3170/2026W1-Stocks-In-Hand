@@ -1,79 +1,68 @@
-from pathlib import Path
+"""Every catalogue ticker's source adapter.
 
-from app.sources import SOURCES
+The ticker catalogue (``app.sources.SOURCES``) names each company's adapter.
+Discovery lists documents through ``adapter_for(ticker)`` and download
+fetches them through ``adapter_named(message.source_adapter)``.
+"""
 
-from .base import BaseScraper, Announcement
-from .companies.anz import ANZScraper
-from .companies.csl import CSLScraper
-from .companies.bhp import BHPScraper
-from .companies.cba import CBAScraper
-from .companies.col import COLScraper
-from .companies.coh import COHScraper
-from .companies.tcl import TCLScraper
-from .companies.tls import TLSScraper
-from .companies.wes import WESScraper
-from .companies.wds import WDSScraper
-from .companies.rio import RIOScraper
-from .companies.org import ORGScraper
-from .companies.mqg import MQGScraper
+from __future__ import annotations
 
-# Add one import and one line here each time a new company is onboarded, and
-# add a matching entry to app.sources.SOURCES (the ticker catalog the AWS
-# pipeline uses for adapter/URL lookups). The two are kept in sync by the
-# check below rather than by one being derived from the other, since this
-# dict's values (scraper classes) have no equivalent in app.sources.
-REGISTRY: dict[str, type[BaseScraper]] = {
-    "ANZ": ANZScraper,
-    "BHP": BHPScraper,
-    "CBA": CBAScraper,
-    "COL": COLScraper,
-    "COH": COHScraper,
-    "TCL": TCLScraper,
-    "TLS": TLSScraper,
-    "CSL": CSLScraper,
-    "WES": WESScraper,
-    "WDS": WDSScraper,
-    "RIO": RIOScraper,
-    "ORG": ORGScraper,
-    "MQG": MQGScraper,
+from app.sources import SOURCES, AdapterName, normalise_symbol
+
+from .adapter import SourceAdapter
+from .base import Announcement
+from .companies.anz import ANZAdapter
+from .companies.bhp import BHPAdapter
+from .companies.cba import CBAAdapter
+from .companies.coh import COHAdapter
+from .companies.col import COLAdapter
+from .companies.csl import CSLAdapter
+from .companies.mqg import MQGAdapter
+from .companies.org import ORGAdapter
+from .companies.rio import RIOAdapter
+from .companies.tcl import TCLAdapter
+from .companies.tls import TLSAdapter
+from .companies.wds import WDSAdapter
+from .companies.wes import WESAdapter
+
+ADAPTER_TYPES: dict[AdapterName, type[SourceAdapter]] = {
+    "anz": ANZAdapter,
+    "bhp": BHPAdapter,
+    "cba": CBAAdapter,
+    "coh": COHAdapter,
+    "col": COLAdapter,
+    "csl": CSLAdapter,
+    "mqg": MQGAdapter,
+    "org": ORGAdapter,
+    "rio": RIOAdapter,
+    "tcl": TCLAdapter,
+    "tls": TLSAdapter,
+    "wds": WDSAdapter,
+    "wes": WESAdapter,
 }
 
-_missing_scraper = set(SOURCES) - set(REGISTRY)
-_missing_source = set(REGISTRY) - set(SOURCES)
-if _missing_scraper or _missing_source:
-    raise RuntimeError(
-        "scrapers.registry.REGISTRY and app.sources.SOURCES have drifted: "
-        f"tickers in SOURCES with no scraper: {sorted(_missing_scraper) or 'none'}; "
-        f"tickers in REGISTRY with no source definition: {sorted(_missing_source) or 'none'}"
-    )
+ADAPTERS: dict[AdapterName, SourceAdapter] = {
+    source.adapter: ADAPTER_TYPES[source.adapter](source) for source in SOURCES.values()
+}
 
 
-def get_scraper(ticker: str, output_dir: Path | None = None) -> BaseScraper:
-    symbol = ticker.strip().upper()
-    scraper_type = REGISTRY.get(symbol)
-    if scraper_type is None:
+def adapter_for(ticker: str) -> SourceAdapter:
+    symbol = normalise_symbol(ticker)
+    source = SOURCES.get(symbol)
+    if source is None:
         raise ValueError(
-            f"No scraper implemented for '{symbol}'. "
-            f"Available: {list(REGISTRY.keys())}"
+            f"No source adapter for '{symbol}'. Available: {list(SOURCES)}"
         )
-    return scraper_type(output_dir=output_dir)
+    return ADAPTERS[source.adapter]
+
+
+def adapter_named(name: str) -> SourceAdapter:
+    try:
+        return ADAPTERS[name]  # type: ignore[index]
+    except KeyError:
+        raise ValueError(f"No source adapter named '{name}'") from None
 
 
 async def discover(ticker: str) -> list[Announcement]:
     """Discover announcement metadata without downloading or writing files."""
-    return await get_scraper(ticker).fetch_announcements()
-
-
-async def scrape(ticker: str, output_dir: Path) -> list[Announcement]:
-    """
-    Public entrypoint for the entire ASX scraper module.
-    When the higher-order platform system is built, this is the function it calls.
-
-    Usage:
-        results = await scrape("ANZ", Path("./output"))
-    """
-    return await get_scraper(ticker, output_dir).scrape()
-
-
-def available_tickers() -> list[str]:
-    return list(REGISTRY.keys())
+    return await adapter_for(ticker).list_documents()

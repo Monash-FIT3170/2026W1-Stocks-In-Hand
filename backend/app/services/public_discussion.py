@@ -1,7 +1,7 @@
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -13,6 +13,7 @@ from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
 from app.schemas.public_discussion import ArtifactTickerMentionCreate
+from app.status import AnalysisStatus
 
 PUBLIC_DISCUSSION_SOURCE_TYPES = frozenset(
     {"reddit", "bluesky", "mastodon", "blog"}
@@ -56,6 +57,18 @@ class TickerMentionMatch:
     match_method: str
     match_confidence: float
     matched_text: str
+
+
+class TickerNames(Protocol):
+    """What matching reads of a ticker.
+
+    A ``Ticker`` has these, and so does a row of ``Ticker.id``,
+    ``Ticker.symbol`` and ``Ticker.company_name``.
+    """
+
+    id: Any
+    symbol: Any
+    company_name: Any
 
 
 def _phrase_pattern(value: str) -> re.Pattern[str]:
@@ -111,7 +124,7 @@ def find_ticker_mentions(
     title: str | None,
     raw_text: str | None,
     metadata: dict[str, Any] | None,
-    tickers: Iterable[Ticker],
+    tickers: Iterable[TickerNames],
 ) -> list[TickerMentionMatch]:
     """Return strong, explainable ticker matches for one public post."""
 
@@ -182,7 +195,7 @@ def find_ticker_mentions(
 
 def matches_for_artifact(
     artifact: Artifact,
-    tickers: Iterable[Ticker],
+    tickers: Iterable[TickerNames],
 ) -> list[TickerMentionMatch]:
     return find_ticker_mentions(
         title=artifact.title,
@@ -196,7 +209,7 @@ def link_artifact_to_tickers(
     db: Session,
     artifact: Artifact,
     *,
-    tickers: Sequence[Ticker] | None = None,
+    tickers: Sequence[TickerNames] | None = None,
     commit: bool = True,
 ) -> list[TickerMentionMatch]:
     candidate_tickers = list(tickers) if tickers is not None else db.query(Ticker).all()
@@ -217,29 +230,6 @@ def link_artifact_to_tickers(
     if matches and commit:
         db.commit()
     return matches
-
-
-def queue_artifact_analysis(
-    db: Session,
-    artifact: Artifact,
-    _matches: Sequence[TickerMentionMatch],
-) -> bool:
-    """Queue unfinished discussion text when analysis is configured.
-
-    Ticker matches still control ticker links, but a broad ASX discussion can be
-    useful in the announcements feed even when it does not name a supported ticker.
-    """
-    if (
-        artifact.analysis_status in {"queued", "analyzing", "completed"}
-        or not settings.ANALYSIS_QUEUE_URL
-    ):
-        return False
-    from app.crud import scrape_run as scrape_run_crud
-    from app.services import analysis_queue
-
-    analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
-    scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
-    return True
 
 
 def backfill_artifact_ticker_mentions(
@@ -412,16 +402,14 @@ def requeue_pending_analysis(
     if not settings.ANALYSIS_QUEUE_URL:
         raise ValueError("ANALYSIS_QUEUE_URL is not configured")
 
-    from app.crud import scrape_run as scrape_run_crud
     from app.services import analysis_queue
 
     queued_ids = []
     errors = []
     for artifact in artifacts:
         try:
-            analysis_queue.enqueue_stored_artifact_analysis(artifact.id)
-            scrape_run_crud.mark_inline_artifact_analysis_queued(db, artifact.id)
-            queued_ids.append(artifact.id)
+            if analysis_queue.queue_stored_text(db, artifact):
+                queued_ids.append(artifact.id)
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             errors.append({"artifact_id": str(artifact.id), "message": str(exc)})
@@ -444,7 +432,11 @@ def _pending_analysis_artifacts(
     query = (
         db.query(Artifact)
         .filter(Artifact.source_type.in_(tuple(PUBLIC_DISCUSSION_SOURCE_TYPES)))
-        .filter(Artifact.analysis_status.in_(("pending", "failed")))
+        .filter(
+            Artifact.analysis_status.in_(
+                (AnalysisStatus.PENDING, AnalysisStatus.FAILED)
+            )
+        )
         .filter(
             func.length(
                 func.trim(

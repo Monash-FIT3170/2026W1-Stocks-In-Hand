@@ -1,0 +1,27 @@
+{
+ "RENDER https://www.macquarie.com/au/en/investors/reports.html": {
+  "file": "fd885aefbe4a49b5.html",
+  "kind": "page",
+  "url": "https://www.macquarie.com/au/en/investors/reports.html"
+ },
+ "RENDER https://www.macquarie.com/investors/reports/full-year-2025.html": {
+  "file": "bed147150d764bbd.html",
+  "kind": "page",
+  "url": "https://www.macquarie.com/au/en/investors/reports/full-year-2025.html"
+ },
+ "RENDER https://www.macquarie.com/investors/reports/full-year-2026.html": {
+  "file": "d89f6d3d47f863c2.html",
+  "kind": "page",
+  "url": "https://www.macquarie.com/au/en/investors/reports/full-year-2026.html"
+ },
+ "RENDER https://www.macquarie.com/investors/reports/half-year-2025.html": {
+  "file": "6699f5f4d6a77641.html",
+  "kind": "page",
+  "url": "https://www.macquarie.com/au/en/investors/reports/half-year-2025.html"
+ },
+ "RENDER https://www.macquarie.com/investors/reports/half-year-2026.html": {
+  "file": "e90fa3c36272d9f0.html",
+  "kind": "page",
+  "url": "https://www.macquarie.com/au/en/investors/reports/half-year-2026.html"
+ }
+}

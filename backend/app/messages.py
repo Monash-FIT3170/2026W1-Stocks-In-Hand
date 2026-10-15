@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -10,11 +10,13 @@ from pydantic import (
     Field,
     HttpUrl,
     JsonValue,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
 
-from app.sources import SourceAdapter, adapter_matches_ticker
+from app.alert_vocabulary import AlertSentimentLabel
+from app.sources import AdapterName, adapter_matches_ticker
 
 _FORBIDDEN_METADATA_KEYS = {
     "authorization",
@@ -56,7 +58,7 @@ class QueueAMessage(BaseModel):
     scrape_run_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     source_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: AdapterName
     requested_at: datetime = Field(default_factory=_utcnow)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -92,7 +94,7 @@ class QueueBMessage(BaseModel):
     source_url: HttpUrl
     document_url: HttpUrl
     canonical_url: HttpUrl
-    source_adapter: SourceAdapter = "csl"
+    source_adapter: AdapterName
     source_id: str | None = Field(default=None, max_length=512)
     title: str | None = Field(default=None, max_length=1000)
     published_at: datetime | None = None
@@ -128,7 +130,7 @@ class NotificationMessage(BaseModel):
     artifact_id: UUID
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z0-9.-]+$")
     scrape_run_id: UUID
-    sentiment_label: Literal["positive", "negative"]
+    sentiment_label: AlertSentimentLabel
     confidence_score: Decimal = Field(ge=0, le=1)
 
     model_config = {"extra": "forbid"}
@@ -140,8 +142,12 @@ class NotificationMessage(BaseModel):
         return value.strip().upper() if isinstance(value, str) else value
 
 
-class PublicDiscussionAnalysisMessage(BaseModel):
-    """Request analysis of public discussion text already stored in PostgreSQL."""
+class StoredTextAnalysisMessage(BaseModel):
+    """Request analysis of news or public discussion text already stored in PostgreSQL.
+
+    The wire name predates stored news. Messages already on the analysis
+    queue and its dead-letter queue carry it, so it stays.
+    """
 
     schema_version: Literal[1] = 1
     message_type: Literal["public_discussion_analysis"] = (
@@ -151,3 +157,32 @@ class PublicDiscussionAnalysisMessage(BaseModel):
     requested_at: datetime = Field(default_factory=_utcnow)
 
     model_config = {"extra": "forbid"}
+
+
+class SummaryRequestMessage(BaseModel):
+    """Request a new summary of an artifact, from its stored text."""
+
+    schema_version: Literal[1] = 1
+    message_type: Literal["artifact_summary"] = "artifact_summary"
+    artifact_id: UUID
+    requested_at: datetime = Field(default_factory=_utcnow)
+
+    model_config = {"extra": "forbid"}
+
+
+# A request on the analysis queue, told apart by its message_type. The queue's
+# only other messages are native S3 notifications, which have none.
+AnalysisRequest = Annotated[
+    StoredTextAnalysisMessage | SummaryRequestMessage,
+    Field(discriminator="message_type"),
+]
+_ANALYSIS_REQUESTS: TypeAdapter[AnalysisRequest] = TypeAdapter(AnalysisRequest)
+
+
+def analysis_request(body: object) -> AnalysisRequest:
+    """The analysis request a decoded analysis queue message body holds.
+
+    Raises ``ValidationError`` for an unknown ``message_type`` or a body that
+    does not match its type's schema.
+    """
+    return _ANALYSIS_REQUESTS.validate_python(body)

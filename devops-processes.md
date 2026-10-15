@@ -1,5 +1,8 @@
 # DevOps Deployment Process: Current Two-Person Manual Flow vs. Gated GitOps Automation
 
+> Historical: written before automatic staging releases. For the current steps see
+> `infra/README.md`; `backend/tools/release.py` builds every `sam deploy` command.
+
 ## A note on scope before comparing approaches
 
 Everything in `infra/`, `deployment.md`, and the five existing workflows targets a single

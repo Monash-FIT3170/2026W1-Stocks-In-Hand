@@ -1,19 +1,27 @@
 """Database state transitions shared by the scrape API and workers."""
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.crud import ticker as ticker_crud
 from app.models.artifact import Artifact
 from app.models.information_platform import InformationPlatform
 from app.models.scrape_run import ScrapeRun
-from app.models.ticker import Ticker
 from app.schemas.scrape_run import ScrapeRunCreate
-from app.status import AnalysisStatus, DownloadStatus, RUN_DOWNSTREAM_OF_DISCOVERY, ScrapeRunStatus
+from app.sources import AdapterName
+from app.status import (
+    ANALYSIS_QUEUED_OR_DONE,
+    RUN_DOWNSTREAM_OF_DISCOVERY,
+    AnalysisStatus,
+    DownloadStatus,
+    ScrapeRunStatus,
+)
 
 
 def _utcnow() -> datetime:
@@ -91,7 +99,7 @@ def get_or_create_public_discussion_run(
 
     run = ScrapeRun(
         platform_id=platform_id,
-        status="queued",
+        status=ScrapeRunStatus.QUEUED,
         source_url=source_url,
         idempotency_key=idempotency_key,
         trigger_type=trigger_type,
@@ -117,9 +125,12 @@ def mark_public_discussion_run_started(
     scrape_run_id: UUID,
 ) -> ScrapeRun | None:
     run = _lock_run(db, scrape_run_id)
-    if run is None or run.status in {"completed", "partial"}:
+    if run is None or run.status in {
+        ScrapeRunStatus.COMPLETED,
+        ScrapeRunStatus.PARTIAL,
+    }:
         return run
-    run.status = "running"
+    run.status = ScrapeRunStatus.RUNNING
     run.started_at = run.started_at or _utcnow()
     run.finished_at = None
     run.error_message = None
@@ -140,7 +151,9 @@ def mark_public_discussion_run_completed(
     run.items_found = max(items_found, 0)
     run.items_saved = max(items_saved, 0)
     run.items_failed = max(items_failed, 0)
-    run.status = "partial" if run.items_failed else "completed"
+    run.status = (
+        ScrapeRunStatus.PARTIAL if run.items_failed else ScrapeRunStatus.COMPLETED
+    )
     run.finished_at = _utcnow()
     run.error_message = None
     return _commit(db, run)
@@ -155,7 +168,7 @@ def mark_public_discussion_run_failed(
     run = _lock_run(db, scrape_run_id)
     if run is None:
         return None
-    run.status = "failed"
+    run.status = ScrapeRunStatus.FAILED
     run.finished_at = _utcnow()
     run.error_message = error[:8000]
     return _commit(db, run)
@@ -180,20 +193,6 @@ def _get_or_create_platform(db: Session, source_url: str) -> InformationPlatform
     return platform
 
 
-def _get_or_create_ticker(db: Session, ticker: str) -> Ticker:
-    row = db.query(Ticker).filter(Ticker.symbol == ticker).first()
-    if row:
-        return row
-    row = Ticker(
-        symbol=ticker,
-        company_name="CSL Limited" if ticker == "CSL" else ticker,
-        exchange="ASX",
-    )
-    db.add(row)
-    db.flush()
-    return row
-
-
 def get_or_create_queued_run(
     db: Session,
     *,
@@ -212,7 +211,7 @@ def get_or_create_queued_run(
         return existing, False
 
     platform = _get_or_create_platform(db, source_url)
-    ticker_row = _get_or_create_ticker(db, ticker)
+    ticker_row = ticker_crud.ensure_ticker(db, ticker)
     run = ScrapeRun(
         platform_id=platform.id,
         ticker_id=ticker_row.id,
@@ -322,13 +321,33 @@ def mark_run_discovery_failed(
     return _commit(db, run)
 
 
+def record_run_discovery_retry(
+    db: Session,
+    scrape_run_id: UUID,
+    *,
+    error: str,
+) -> ScrapeRun | None:
+    """Keep a retrying discovery run active; only the final receive fails it.
+
+    Marking the run failed here would let the API or scheduler enqueue a
+    second Queue A message while SQS is still redelivering the first.
+    """
+    run = _lock_run(db, scrape_run_id)
+    if run is None:
+        return None
+    if run.status in RUN_DOWNSTREAM_OF_DISCOVERY or run.status == ScrapeRunStatus.FAILED:
+        return run
+    run.error_message = error[:8000]
+    return _commit(db, run)
+
+
 def get_or_create_artifact(
     db: Session,
     *,
     scrape_run_id: UUID,
     canonical_url: str,
     document_url: str,
-    source_adapter: str = "csl",
+    source_adapter: AdapterName,
     source_id: str | None = None,
     title: str | None = None,
     published_at: datetime | None = None,
@@ -493,6 +512,23 @@ def mark_artifact_download_failed(
     return _commit(db, artifact)
 
 
+def record_artifact_download_retry(
+    db: Session,
+    artifact_id: UUID,
+    *,
+    error: str,
+) -> Artifact | None:
+    """Record a retryable download error without failing the artifact or run."""
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.download_status in {
+        DownloadStatus.STORED,
+        DownloadStatus.FAILED,
+    }:
+        return artifact
+    artifact.last_error = error[:8000]
+    return _commit(db, artifact)
+
+
 def mark_artifact_analysis_started(
     db: Session,
     artifact_id: UUID,
@@ -560,17 +596,38 @@ def mark_artifact_analysis_failed(
     return _commit(db, artifact)
 
 
+def record_artifact_analysis_retry(
+    db: Session,
+    artifact_id: UUID,
+    *,
+    error: str,
+) -> Artifact | None:
+    """Record a retryable analysis error without failing the artifact or run.
+
+    Used for document and stored-text analysis alike: neither touches run
+    counters until the final receive.
+    """
+    artifact = _lock_artifact(db, artifact_id)
+    if artifact is None or artifact.analysis_status in {
+        AnalysisStatus.COMPLETED,
+        AnalysisStatus.FAILED,
+    }:
+        return artifact
+    artifact.last_error = error[:8000]
+    return _commit(db, artifact)
+
+
 def mark_inline_artifact_analysis_started(
     db: Session,
     artifact_id: UUID,
 ) -> Artifact | None:
     """Start stored-text analysis without changing document-run counters."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status == "completed":
+    if artifact is None or artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
     if not (artifact.raw_text or artifact.title):
         raise ValueError(f"Artifact {artifact_id} has no stored text")
-    artifact.analysis_status = "analyzing"
+    artifact.analysis_status = AnalysisStatus.ANALYZING
     artifact.last_error = None
     return _commit(db, artifact)
 
@@ -581,13 +638,9 @@ def mark_inline_artifact_analysis_queued(
 ) -> Artifact | None:
     """Record a successful queue send while keeping retries idempotent."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status in {
-        "queued",
-        "analyzing",
-        "completed",
-    }:
+    if artifact is None or artifact.analysis_status in ANALYSIS_QUEUED_OR_DONE:
         return artifact
-    artifact.analysis_status = "queued"
+    artifact.analysis_status = AnalysisStatus.QUEUED
     artifact.last_error = None
     return _commit(db, artifact)
 
@@ -600,7 +653,7 @@ def mark_inline_artifact_analysis_completed(
     artifact = _lock_artifact(db, artifact_id)
     if artifact is None:
         return None
-    artifact.analysis_status = "completed"
+    artifact.analysis_status = AnalysisStatus.COMPLETED
     artifact.analyzed_at = artifact.analyzed_at or _utcnow()
     artifact.last_error = None
     return _commit(db, artifact)
@@ -614,8 +667,74 @@ def mark_inline_artifact_analysis_failed(
 ) -> Artifact | None:
     """Fail stored-text analysis without changing collection success state."""
     artifact = _lock_artifact(db, artifact_id)
-    if artifact is None or artifact.analysis_status == "completed":
+    if artifact is None or artifact.analysis_status == AnalysisStatus.COMPLETED:
         return artifact
-    artifact.analysis_status = "failed"
+    artifact.analysis_status = AnalysisStatus.FAILED
     artifact.last_error = error[:8000]
     return _commit(db, artifact)
+
+
+ABANDONED_ERROR = "abandoned: no outcome was recorded before SQS gave up"
+
+
+def fail_abandoned_work(
+    db: Session,
+    *,
+    older_than: timedelta,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Fail runs and artifacts whose final receive ended without an outcome.
+
+    A Lambda that times out never runs its error handler, so a timeout on a
+    message's final receive leaves its run or artifact open after SQS has
+    moved the message to its dead-letter queue. Anything left open for
+    longer than ``older_than`` (longer than any queue's redelivery window)
+    is closed here as failed. A message redriven from the dead-letter queue
+    later still reopens and completes its artifact.
+    """
+    cutoff = (now or _utcnow()) - older_than
+    artifact_last_touched = func.coalesce(Artifact.updated_at, Artifact.created_at)
+    closed = {"runs": 0, "downloads": 0, "analyses": 0}
+
+    stalled_runs = db.query(ScrapeRun.id, ScrapeRun.status).filter(
+        or_(
+            and_(
+                ScrapeRun.status == ScrapeRunStatus.QUEUED,
+                ScrapeRun.queued_at < cutoff,
+            ),
+            and_(
+                ScrapeRun.status.in_(
+                    (ScrapeRunStatus.DISCOVERING, ScrapeRunStatus.RUNNING)
+                ),
+                ScrapeRun.started_at < cutoff,
+            ),
+        )
+    ).all()
+    for run_id, status in stalled_runs:
+        if status == ScrapeRunStatus.RUNNING:
+            mark_public_discussion_run_failed(db, run_id, error=ABANDONED_ERROR)
+        else:
+            mark_run_discovery_failed(db, run_id, error=ABANDONED_ERROR)
+        closed["runs"] += 1
+
+    stalled_downloads = db.query(Artifact.id).filter(
+        Artifact.download_status == DownloadStatus.DOWNLOADING,
+        artifact_last_touched < cutoff,
+    ).all()
+    for (artifact_id,) in stalled_downloads:
+        mark_artifact_download_failed(db, artifact_id, error=ABANDONED_ERROR)
+        closed["downloads"] += 1
+
+    stalled_analyses = db.query(Artifact.id, Artifact.download_status).filter(
+        Artifact.analysis_status == AnalysisStatus.ANALYZING,
+        artifact_last_touched < cutoff,
+    ).all()
+    for artifact_id, download_status in stalled_analyses:
+        # Only a stored document goes through document analysis; news and
+        # public discussion are analysed from their stored text.
+        if download_status == DownloadStatus.STORED:
+            mark_artifact_analysis_failed(db, artifact_id, error=ABANDONED_ERROR)
+        else:
+            mark_inline_artifact_analysis_failed(db, artifact_id, error=ABANDONED_ERROR)
+        closed["analyses"] += 1
+    return closed

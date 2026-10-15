@@ -1,9 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
-from app.api.deps import require_admin_investor
 from app.database.connection import get_db
-from app.models.investor import Investor
 from app.schemas.scrape_run import ScrapeRunCreate, ScrapeRunResponse
 from app.crud import scrape_run as crud
 
@@ -13,7 +11,6 @@ router = APIRouter(prefix="/scrape-runs", tags=["scrape-runs"])
 def create_scrape_run(
     scrape_run: ScrapeRunCreate,
     db: Session = Depends(get_db),
-    _admin: Investor = Depends(require_admin_investor),
 ):
     return crud.create_scrape_run(db=db, scrape_run=scrape_run)
 

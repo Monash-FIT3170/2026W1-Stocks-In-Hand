@@ -72,22 +72,22 @@ The deployment starts with these fixed limits:
 | Amazon Bedrock access | Disabled |
 | Amazon Bedrock model | GPT-OSS 120B only |
 | Bedrock prompt per request | 30,000 characters |
-| Bedrock output per request | 1,024 tokens |
+| Bedrock output per request | 4,096 tokens |
 | Discovery lookback | 30 days |
 | New documents per ticker and run | 3 |
-| Document size | 10 MiB |
-| PDF pages | 100 |
+| Document size | 25 MiB |
+| PDF pages | 500 |
 | OCR pages | 5 |
 | Sentiment input | 50,000 characters |
 | Raw-document retention | 30 days |
 | Noncurrent frontend versions | 14 days |
 | CloudWatch log retention | 7 days |
 | ECR images retained per repository | 2 |
-| Discovery concurrency | 1 |
+| Discovery concurrency | Not capped (one message per invocation) |
 | Download concurrency | 2 |
-| Analysis concurrency | 1 |
+| Analysis concurrency | Not capped (one message per invocation) |
 | Notification delivery | Disabled by default |
-| Notification concurrency | 1 |
+| Notification concurrency | Not capped (up to 10 messages per invocation) |
 | Alert commitments per 24 hours | 180 |
 | Direct alerts per investor and run | 5, then one rollup |
 
@@ -104,13 +104,14 @@ These notifications are not a hard spending cap and billing data can be
 delayed. The only zero-charge Bedrock setting is `BedrockEnabled=false`, which
 omits model invocation permission from the API and analysis Lambdas. The
 immediate cost controls are the disabled schedule, bounded document counts,
-short retention, API throttling, and Lambda reserved concurrency.
+short retention, API throttling, and the download event source's maximum
+concurrency of two.
 
 Bedrock is restricted to on-demand `openai.gpt-oss-120b-1:0` in Sydney. No
 Provisioned Throughput is created. API requests use Standard tier. Queued
 analysis uses Flex tier. `AnalysisEnabled=false` stops Queue C from starting new
 work, while `BedrockEnabled=false` removes Bedrock permission. Prompts over
-30,000 characters are rejected and generated output is capped at 1,024 tokens.
+30,000 characters are rejected and generated output is capped at 4,096 tokens.
 Local FinBERT remains responsible for sentiment analysis.
 
 The deployment intentionally avoids paid-by-default features such as
@@ -125,20 +126,32 @@ AWS-managed SSM key:
 ```text
 /stocks-in-hand/staging/database-url
 /stocks-in-hand/staging/brevo-api-key
+/stocks-in-hand/staging/marketaux-api-token
 /stocks-in-hand/staging/reddit-client-id
 /stocks-in-hand/staging/reddit-client-secret
 /stocks-in-hand/staging/public-discussion-feed-urls
 ```
 
+A Lambda's environment names each parameter it needs in a `<SETTING>_PARAMETER`
+variable, and the backend reads the value the first time it uses a setting.
+`SECRETS` in `backend/app/core/config.py` lists the six, and
+`backend/tests/test_queue_wiring.py` checks the template against that list.
+Each worker's role may read only the parameters it names; the API may read
+every parameter under the path.
+
 The database URL must be the Supabase transaction-mode pooler URL used by
 short-lived Lambda connections. Use a direct or session-pooler connection for
-Alembic migrations. Brevo and public discussion parameters are optional. Reddit
-is disabled without both Reddit parameters. Blog collection is disabled when
-the comma-separated feed allowlist parameter is absent.
+Alembic migrations. Brevo and public discussion parameters are optional. The
+Marketaux token is read only while `MarketauxEnabled` is true, and must then
+exist. Reddit is disabled without both Reddit parameters. Blog collection is
+disabled when the comma-separated feed allowlist parameter is absent.
 
-Only `ANZ`, `BHP`, `CBA`, `CSL`, and `WES` are accepted. The scheduled subset
-is configured separately from the set available for manual administrator
-requests.
+Manual administrator scrapes accept every ticker in the catalogue
+(`backend/app/sources.py`, 13 today), because `SUPPORTED_TICKERS` defaults to
+it. The weekly schedule scrapes `ScheduledTickers`, which defaults to `ANZ`,
+`BHP`, `CBA`, `CSL`, and `WES` and may name any catalogue ticker; one outside
+the catalogue is dropped. The scheduled subset is configured separately from
+the set available for manual administrator requests.
 
 ### Brevo watchlist alerts
 
@@ -172,14 +185,14 @@ schedule runs at 9:00 AM each Monday. The public discussion schedule runs at
 
 Enable only sources that have passed an AWS smoke test. If BHP still times out,
 leave BHP available for manual runs but omit it from `ScheduledTickers`.
-Public discussion collection defaults to Bluesky and Mastodon, ten items each,
-with one concurrent scheduler invocation. Reddit and blogs require their SSM
-settings before they are included.
+Public discussion collection defaults to Bluesky and Mastodon, ten items each.
+Reddit and blogs require their SSM settings before they are included.
 
-Scheduled Marketaux articles and public discussion posts use the analysis queue
-for summary generation. General ASX posts do not need a supported ticker match.
-After deploying this wiring, repeat one bounded Marketaux and provider canary to
-queue previously stored items that still have pending summaries.
+Marketaux articles, scheduled or fetched on demand, and public discussion posts
+use the analysis queue for sentiment and summary generation. General ASX posts do
+not need a supported ticker match. After deploying this wiring, repeat one bounded
+Marketaux and provider canary to queue previously stored items that were never
+analysed.
 
 ## Security and reliability
 
@@ -204,7 +217,7 @@ queue previously stored items that still have pending summaries.
 - Discovery and download queues use 30-minute visibility timeouts. Analysis
   uses 72 minutes, which is six times its 12-minute Lambda timeout.
 - IAM permissions are scoped by worker role, queue, bucket prefix, and SSM
-  parameter path.
+  parameter. A worker can read only the secrets its environment names.
 
 ## Deployment sequence
 
@@ -218,7 +231,7 @@ queue previously stored items that still have pending summaries.
 5. Build and push immutable API, scraper, and analysis images tagged with the
    full Git commit SHA.
 6. Verify the sender in Brevo, store the Brevo API key in SSM, set the protected
-   GitHub `ALERT_SENDER_EMAIL` variable, and leave `enable_notifications=false`.
+   GitHub `ALERT_SENDER_EMAIL` variable, and leave notifications off.
 7. Complete the first reviewed SAM deployment with both schedule flags and
    notifications disabled.
 8. Keep the `ProtectMain` approval ruleset active, restrict the GitHub
@@ -243,8 +256,10 @@ The analysis Lambda also supports an IAM-only structured-summary repair event.
 Invoke it without `apply` first to inspect the bounded candidate count. Apply
 mode requires the exact `RESUMMARISE_MISSING_FIELDS` confirmation string and
 processes at most 20 completed ASX artifacts per invocation. This operation
-regenerates missing display and clarity fields through the active Bedrock model;
-it is not exposed through the public API.
+regenerates missing display and clarity fields through the active Bedrock model,
+with the same summary step as every other summary
+(`lambdas/artifact_analysis.py`), and keeps an artifact's old summary when the
+new one is still incomplete. It is not exposed through the public API.
 
 Exact commands, rollback steps, DLQ procedures, and teardown instructions are
 in `infra/README.md`.

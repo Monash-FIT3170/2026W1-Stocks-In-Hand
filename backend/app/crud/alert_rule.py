@@ -12,12 +12,13 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.alert_vocabulary import ALERT_SENTIMENT_LABELS
 from app.models.alert_rule import AlertRule
 
 
 DEFAULT_RULE_TYPE = "sentiment_threshold"
 KNOWN_RULE_TYPES = frozenset({DEFAULT_RULE_TYPE})
-KNOWN_SENTIMENT_LABELS = frozenset({"positive", "neutral", "negative"})
+KNOWN_SENTIMENT_LABELS = ALERT_SENTIMENT_LABELS
 
 
 def _validate_commit(commit: bool) -> bool:

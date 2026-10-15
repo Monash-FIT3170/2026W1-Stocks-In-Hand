@@ -12,7 +12,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import false, func
 
+from app.alert_vocabulary import VerificationStatus
 from app.database.base import Base
+
+
+_VERIFICATION_STATUSES = ", ".join(f"'{status}'" for status in VerificationStatus)
 
 
 class AlertSubscription(Base):
@@ -29,8 +33,7 @@ class AlertSubscription(Base):
             name="uq_alert_subscriptions_unsubscribe_token_hash",
         ),
         CheckConstraint(
-            "verification_status IN "
-            "('unverified', 'pending', 'verified', 'failed')",
+            f"verification_status IN ({_VERIFICATION_STATUSES})",
             name="ck_alert_subscriptions_verification_status",
         ),
     )
@@ -51,8 +54,8 @@ class AlertSubscription(Base):
     verification_status = Column(
         String,
         nullable=False,
-        default="unverified",
-        server_default="unverified",
+        default=VerificationStatus.UNVERIFIED,
+        server_default=VerificationStatus.UNVERIFIED,
     )
     verification_requested_at = Column(DateTime(timezone=True), nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)
