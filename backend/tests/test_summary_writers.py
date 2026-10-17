@@ -47,6 +47,7 @@ ANNOUNCEMENT_ANSWER = {
     "matters": "Higher revenue may support earnings.",
     "confirmed_facts": ["Revenue increased."],
     "speculation": ["Earnings may rise next year."],
+    "claim_evidence": [],
 }
 NEWS_ANSWER = {
     "summary": "BHP reported higher copper production.",
@@ -284,7 +285,7 @@ def test_every_announcement_writer_records_the_same_summary(
     assert artifact_summary.read(artifact) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model=MODEL,
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert len(_summary_rows(db_session, artifact)) == 1
 

@@ -68,6 +68,7 @@ ANNOUNCEMENT_ANSWER = {
     "matters": "Higher revenue may support earnings.",
     "confirmed_facts": ["Revenue increased."],
     "speculation": ["Earnings may rise next year."],
+    "claim_evidence": [],
 }
 NEWS_ANSWER = {
     "summary": "BHP reported higher copper production.",
@@ -575,7 +576,7 @@ def test_a_stored_announcement_is_read_classified_summarised_and_recorded(
     assert artifact_summary.read(artifact) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert (run.status, run.items_analyzed) == (ScrapeRunStatus.COMPLETED, 1)
     assert alerts == [
@@ -879,7 +880,7 @@ def test_an_announcement_is_summarised_again_from_its_stored_category_and_fields
     assert outcome == Summarised(
         artifact_id=announcement.id,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
         complete=True,
     )
     [call] = ports.provider.calls
@@ -888,7 +889,7 @@ def test_an_announcement_is_summarised_again_from_its_stored_category_and_fields
     assert artifact_summary.read(announcement) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     [sentiment] = _rows(db_session, ArtifactSentiment, announcement)
     assert (sentiment.sentiment_label, sentiment.model_used) == ("neutral", "earlier-finbert")
@@ -1024,7 +1025,7 @@ def test_the_repair_records_only_complete_summaries(db_session: Session) -> None
     assert artifact_summary.read(incomplete) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="bedrock:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert artifact_summary.read(complete).model == "bedrock:earlier-model"
     assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"

@@ -14,6 +14,7 @@ The schema these tests cover is the current migrated application schema,
 including watchlist alerts and public discussion ticker mentions.
 """
 
+import json
 import sys
 import uuid
 from collections.abc import Iterator
@@ -751,6 +752,78 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
     assert saved.summaries[0].summary_text == (
         "The dividend payment date was confirmed."
     )
+
+
+def test_claim_evidence_survives_analysis_storage_and_ticker_overview(
+    db_session: Session,
+) -> None:
+    """Generated quotations should survive worker storage and API readback."""
+    from app.read_models.ticker_brief import read_ticker_brief
+    from app.services import artifact_summary, generation
+    from app.services.generation.providers import ScriptedProvider
+    from app.services.quotes import FixedQuotes
+
+    ticker = Ticker(
+        symbol=f"T{uuid.uuid4().hex[:8].upper()}",
+        company_name="Traceability Test Limited",
+        exchange="ASX",
+    )
+    db_session.add(ticker)
+    db_session.flush()
+    passage = "Revenue totalled $112 million, up from $100 million last year."
+    summary = {
+        "summary": "Revenue rose.",
+        "about": "Annual results.",
+        "changed": "Revenue increased by 12%.",
+        "matters": "Investors can assess the results.",
+        "confirmed_facts": ["Revenue increased by 12%."],
+        "speculation": [],
+    }
+    artifact = Artifact(
+        ticker_id=ticker.id,
+        source_type="asx_announcement",
+        artifact_type="financial_results",
+        title="Annual results",
+        document_url="https://example.test/results.pdf",
+        raw_text=passage,
+        content_hash=f"traceability-{uuid.uuid4()}",
+        published_at=datetime(2040, 1, 2, tzinfo=timezone.utc),
+        analysis_status=AnalysisStatus.COMPLETED,
+        artifact_metadata=summary,
+    )
+    db_session.add(artifact)
+    db_session.flush()
+    db_session.add(ArtifactSummary(artifact_id=artifact.id, summary_text="Revenue rose."))
+    db_session.commit()
+
+    missing, _ = artifact_summary.incomplete_announcements(db_session, limit=100)
+    assert artifact.id in missing
+
+    evidence = {
+        "text": "Revenue increased by 12%.",
+        "kind": "confirmed_fact",
+        "passage": passage,
+    }
+    generated = generation.generate(
+        generation.AnnouncementSummary(
+            title=artifact.title, category="revenue", extracted_data={}, raw_text=passage,
+        ),
+        provider=ScriptedProvider([json.dumps({**summary, "claim_evidence": [evidence]})]),
+    )
+    artifact_summary.record(db_session, artifact, artifact_summary.from_generated(generated))
+    db_session.commit()
+    db_session.expire_all()
+
+    missing, _ = artifact_summary.incomplete_announcements(db_session, limit=100)
+    assert artifact.id not in missing
+    brief = read_ticker_brief(db_session, ticker.symbol, quotes=FixedQuotes({}))
+    claim = brief.overview.clarity.traceable_claims[0]
+    assert claim.text == evidence["text"]
+    assert claim.source.evidence_text == passage
+    assert claim.source.url == artifact.document_url
+    assert claim.source.published_at.startswith("2040-01-02")
+    assert artifact.artifact_metadata["claim_evidence"] == [evidence]
+    assert artifact.summaries[0].prompt_version == "llm-announcement-summary-v4"
 
 
 def test_announcements_feed_and_trending_include_supported_content_sources(

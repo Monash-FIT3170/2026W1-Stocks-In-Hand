@@ -62,7 +62,7 @@ NEWS_ANSWER = {
     "matters": "Output supports revenue.",
 }
 RAW_TEXT = "Raw filing text that is not a summary."
-UNCLASSIFIED = {"is_classified": False, "confirmed_facts": [], "speculation": []}
+UNCLASSIFIED = {"is_classified": False, "confirmed_facts": [], "speculation": [], "traceable_claims": []}
 BUCKETS = {"revenue", "strategy", "risk", "dividend", "organisational", "user_discussion"}
 
 
@@ -252,6 +252,10 @@ def test_the_brief_tells_the_latest_summary_and_its_clarity(db_session: Session)
         "is_classified": True,
         "confirmed_facts": ANNOUNCEMENT_ANSWER["confirmed_facts"],
         "speculation": ANNOUNCEMENT_ANSWER["speculation"],
+        "traceable_claims": [
+            {"text": "Net profit was $1 billion.", "kind": "confirmed_fact", "source": None},
+            {"text": "Management expects costs to fall.", "kind": "speculation", "source": None},
+        ],
     }
 
 

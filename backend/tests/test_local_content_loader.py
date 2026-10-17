@@ -151,7 +151,7 @@ def test_collect_asx_saves_each_document_and_analyses_it_once(
     assert artifact.artifact_metadata["classification"]["primary_category"] == (
         "half_year_results"
     )
-    assert artifact_summary.read(artifact).prompt_version == "llm-announcement-summary-v3"
+    assert artifact_summary.read(artifact).prompt_version == "llm-announcement-summary-v4"
 
 
 def test_a_later_run_summarises_a_document_first_analysed_without_an_llm(

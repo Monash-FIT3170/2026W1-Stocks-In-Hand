@@ -1,6 +1,6 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SourceLink(BaseModel):
@@ -11,8 +11,14 @@ class SourceLink(BaseModel):
     url: str
     # ISO 8601, or None when the artifact has no date.
     published_at: Optional[str] = None
-    # The start of the artifact's raw text. Never shown as a summary.
+    # A source preview, or a complete verified quotation for a traceable claim.
     evidence_text: Optional[str] = None
+
+
+class TraceableClaim(BaseModel):
+    text: str
+    kind: Literal["confirmed_fact", "speculation"]
+    source: Optional[SourceLink] = None
 
 
 class Clarity(BaseModel):
@@ -21,6 +27,7 @@ class Clarity(BaseModel):
     is_classified: bool
     confirmed_facts: list[str]
     speculation: list[str]
+    traceable_claims: list[TraceableClaim] = Field(default_factory=list)
 
 
 class TickerOverview(BaseModel):

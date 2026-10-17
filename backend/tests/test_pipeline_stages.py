@@ -646,6 +646,7 @@ ANNOUNCEMENT_SUMMARY = {
     "matters": "Higher revenue may support earnings.",
     "confirmed_facts": ["Revenue increased."],
     "speculation": [],
+    "claim_evidence": [],
 }
 
 
@@ -794,7 +795,7 @@ def test_analysis_records_the_summary_with_the_result(
     assert artifact_summary.read(artifact) == artifact_summary.from_answer(
         ANNOUNCEMENT_SUMMARY,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert artifact.artifact_metadata["page_count"] == 1
     assert (
@@ -1060,7 +1061,7 @@ def test_a_summary_request_records_a_summary_and_nothing_else(
     assert {key: completed[key] for key in ("event", "artifact_id", "prompt_version")} == {
         "event": "completed",
         "artifact_id": str(artifact.id),
-        "prompt_version": "llm-announcement-summary-v3",
+        "prompt_version": "llm-announcement-summary-v4",
     }
 
 

@@ -18,6 +18,7 @@ from app.read_models.ticker_sentiment import LatestSignal, latest_signals
 from app.schemas.ticker_brief import KeyNumber, TickerAside, TickerBrief, TickerOverview
 from app.services import artifact_card, artifact_summary
 from app.services.quotes import Quote, QuoteSource
+from app.services.claim_traceability import traceable_claims
 
 # The themes come from this many of the newest records, and at most
 # MAX_THEMES of them are shown.
@@ -64,7 +65,7 @@ def read_ticker_brief(db: Session, symbol: str, *, quotes: QuoteSource) -> Ticke
         latest_signal_analyzed_at=(
             signal.analyzed_at.isoformat() if signal and signal.analyzed_at else None
         ),
-        clarity=artifact_summary.clarity(summary),
+        clarity={**artifact_summary.clarity(summary), "traceable_claims": traceable_claims(latest, summary)},
         sources=sources,
     )
     aside = TickerAside(

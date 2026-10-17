@@ -419,10 +419,11 @@ FOUR_LINES = {key: ANSWER[key] for key in artifact_summary.TEXT_LINES}
 @pytest.mark.parametrize(
     ("answer", "source_type", "complete"),
     [
-        (ANSWER, "asx_announcement", True),
+        (ANSWER, "asx_announcement", False),
+        ({**ANSWER, "claim_evidence": []}, "asx_announcement", True),
         (FOUR_LINES, "asx_announcement", False),
         ({**FOUR_LINES, "confirmed_facts": []}, "asx_announcement", False),
-        ({**FOUR_LINES, "confirmed_facts": [], "speculation": []}, "asx_announcement", True),
+        ({**FOUR_LINES, "confirmed_facts": [], "speculation": []}, "asx_announcement", False),
         (FOUR_LINES, "news", True),
         (FOUR_LINES, "reddit", True),
         ({**ANSWER, "changed": " "}, "asx_announcement", False),
@@ -506,7 +507,7 @@ def test_incomplete_announcements_are_the_analysed_ones_with_an_incomplete_summa
     legacy = analysed(2)
     db_session.add(ArtifactSummary(artifact_id=legacy.id, summary_text="A legacy summary."))
     complete = analysed(1)
-    artifact_summary.record(db_session, complete, _summary())
+    artifact_summary.record(db_session, complete, _summary(claim_evidence=[]))
     pending = analysed(1, analysis_status=AnalysisStatus.PENDING)
     lines_only(pending)
     news = analysed(1, source_type="news", artifact_type="news_article")

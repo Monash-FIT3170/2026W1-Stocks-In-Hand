@@ -38,6 +38,7 @@ ANNOUNCEMENT_SUMMARY = {
     "matters": "Investors can assess the confirmed change.",
     "confirmed_facts": ["The company confirmed the update."],
     "speculation": [],
+    "claim_evidence": [],
 }
 CATEGORIES = {
     "revenue": "Revenue increased.",
@@ -105,7 +106,7 @@ def test_a_valid_answer_records_the_model_and_prompt_version() -> None:
     assert result == Generated(
         value=ANNOUNCEMENT_SUMMARY,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     [call] = provider.calls
     assert call.temperature == 0.2
@@ -169,7 +170,7 @@ def test_malformed_json_is_repaired_once() -> None:
     result = generate(_announcement(), provider=provider)
 
     assert result.value == ANNOUNCEMENT_SUMMARY
-    assert result.prompt_version == "llm-announcement-summary-v3"
+    assert result.prompt_version == "llm-announcement-summary-v4"
     repair = provider.calls[1]
     assert json.dumps(malformed, ensure_ascii=False) in repair.prompt
     assert repair.temperature == 0
