@@ -1,6 +1,6 @@
 """Ticker records: which ticker a page asks about, and the artifacts that are its records.
 
-A ticker's records are the artifacts stored against it, newest published
+A ticker's records are its distinct source documents, newest published
 first. Its news feed shows each as its artifact card, and its deep dive as
 an entry of its research history with the summary's text. Both read the
 summaries loaded with the records, so neither runs a query per record. The
@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID
 
+from sqlalchemy import Text, cast, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.crud import ticker as ticker_crud
@@ -82,16 +83,33 @@ def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
 
 
 def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifact]:
-    """A ticker's newest records.
+    """A ticker's newest distinct source documents.
 
-    Each comes with its summary and platform, so reading their cards and
-    summaries runs no query per artifact.
+    Copies of one document count once before the limit. A copy with a
+    recorded summary is preferred, then the newest copy. Unlinked records
+    stay separate. Each comes with its summary and platform, so reading
+    their cards and summaries runs no query per artifact.
     """
+    source = func.coalesce(  # pylint: disable=assignment-from-no-return
+        func.nullif(func.btrim(Artifact.document_url), ""),
+        func.nullif(func.btrim(Artifact.canonical_url), ""),
+        func.nullif(func.btrim(Artifact.url), ""),
+        cast(Artifact.id, Text),
+    )
+    distinct_records = (
+        db.query(Artifact.id)
+        .filter(Artifact.ticker_id == ticker_id)
+        .order_by(
+            source, Artifact.summaries.any().desc(), *_NEWEST_FIRST, Artifact.id.desc()
+        )
+        .distinct(source)
+        .subquery()
+    )
     return (
         db.query(Artifact)
+        .join(distinct_records, distinct_records.c.id == Artifact.id)
         .options(artifact_summary.WITH_SUMMARY, selectinload(Artifact.platform))
-        .filter(Artifact.ticker_id == ticker_id)
-        .order_by(*_NEWEST_FIRST)
+        .order_by(*_NEWEST_FIRST, Artifact.id.desc())
         .limit(limit)
         .all()
     )
