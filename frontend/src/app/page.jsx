@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { SearchIcon } from "./components/icons"
+import { HomeWatchlistSection } from "./components/home/HomeWatchlist"
 import { ArrowIcon, DocumentIcon } from "./components/company/CompanyPrimitives"
 import { displayDate } from "./components/company/companyFormat"
 import { companyRoute, meaningfulText, originalUrl, sourceKind } from "./components/announcements/recordPresentation"
@@ -11,7 +12,7 @@ import { fetchAnnouncements, fetchTickers } from "./lib/api"
 import styles from "./page.module.css"
 
 // Landing page route for "/".
-// This file should stay focused on the first-screen marketing/search experience:
+// This file should stay focused on the home experience: the signed-in watchlist,
 // hero copy, the landing search form, popular ticker links, and feature-card layout.
 // Shared navigation/footer changes belong in AppFrame.jsx.
 const features = [
@@ -88,6 +89,7 @@ export default function Home() {
 
   return (
     <section className={styles.homePage}>
+        <HomeWatchlistSection />
         <div className={styles.hero}>
           <div className={styles.heroIntro}>
           <h1>Understand any ASX stock{" "}<span>in 60 seconds</span></h1>
