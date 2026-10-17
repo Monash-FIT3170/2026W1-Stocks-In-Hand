@@ -1,0 +1,16 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "26px",
+      "text": "Source records",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 380,
+    "height": 844,
+    "width": 390
+  }
+}

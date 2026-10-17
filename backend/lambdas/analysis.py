@@ -1,118 +1,68 @@
+"""The analysis stage: every analysis queue message, through artifact analysis.
+
+The analysis queue carries three kinds of message: a native S3
+ObjectCreated notification for each stored document, a stored-text request
+for a news or public discussion artifact, and a summary request. The
+handler parses each one, names the subject a failure is recorded against,
+runs it through ``lambdas.artifact_analysis`` with the deployed ports and
+logs the outcome.
+
+A summary request has no subject, so a failure records nothing on the
+artifact: a permanent one is logged and dropped, and a retryable one is
+retried until it reaches the dead-letter queue.
+
+The IAM-only ``resummarise_missing_fields`` operation completes the
+summaries of analysed announcements in bounded batches.
+"""
+
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import os
-import re
-import time
-from functools import lru_cache
-from pathlib import PurePosixPath
-from typing import Any
-from urllib.parse import unquote_plus, urlparse
+from urllib.parse import unquote_plus
 from uuid import UUID
 
-import boto3
-from app.messages import PublicDiscussionAnalysisMessage
-from app.services.summary_metadata import (
-    combine_summary_text,
-    has_complete_summary_metadata,
-    normalise_summary_metadata,
-)
-from parsing.analysis import (
-    AnalysisOutput,
-    analyse_document,
-    analyse_news_text,
-    analyse_public_discussion_text,
-)
 from pydantic import ValidationError
 
-from app.messages import NotificationMessage
-from lambdas.common import (
-    PermanentDocumentError,
-    correlation_id,
-    database_session,
-    log_event,
-    receive_attempt,
+from app.messages import AnalysisRequest, SummaryRequestMessage, analysis_request
+from lambdas import artifact_analysis
+from lambdas.artifact_analysis import AlreadyAnalysed, SummaryUnavailable, deployed_ports
+from lambdas.common import PermanentDocumentError
+from lambdas.pipeline_stage import (
+    StageRecord,
+    analysed_document,
+    analysed_stored_text,
+    run_stage,
 )
-from app.status import AnalysisStatus, DownloadStatus
-from lambdas.download_validation import (
-    DOCUMENT_CONTENT_TYPES,
-    DocumentFormat,
-    validate_document_content,
-)
-from parsing.classification_metadata import merge_classification_metadata
+from lambdas.raw_documents import DocumentLocation, locate
 
 STAGE = "analysis"
-SUPPORTED_TICKERS = frozenset(
-    {
-        "ANZ",
-        "BHP",
-        "CBA",
-        "COH",
-        "COL",
-        "CSL",
-        "MQG",
-        "ORG",
-        "RIO",
-        "TCL",
-        "TLS",
-        "WDS",
-        "WES",
-    }
-)
-FORMAT_BY_EXTENSION: dict[str, DocumentFormat] = {
-    "pdf": "pdf",
-    "txt": "txt",
-    "html": "html",
-    "docx": "docx",
-}
-OBJECT_KEY = re.compile(
-    r"^raw/(?P<ticker>ANZ|BHP|CBA|COH|COL|CSL|MQG|ORG|RIO|TCL|TLS|WDS|WES)/"
-    r"(?P<artifact_id>[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/"
-    r"(?P<checksum>[0-9a-f]{64})\.(?P<extension>pdf|txt|html|docx)$",
-    re.IGNORECASE,
-)
 
-def parse_public_discussion_message(
-    record: dict,
-) -> PublicDiscussionAnalysisMessage | None:
+
+def parse_analysis_request(record: dict) -> AnalysisRequest | None:
+    """The request a message carries, or None for an S3 notification.
+
+    S3 notifications are the queue's only messages without a
+    ``message_type``. A request whose type this worker does not know, or
+    that does not match its schema, fails as ``invalid_message``.
+    """
     try:
         body = json.loads(record["body"])
     except (KeyError, TypeError, json.JSONDecodeError):
         return None
-    if not isinstance(body, dict) or body.get("message_type") != (
-        "public_discussion_analysis"
-    ):
+    if not isinstance(body, dict) or "message_type" not in body:
         return None
     try:
-        return PublicDiscussionAnalysisMessage.model_validate(body)
+        return analysis_request(body)
     except ValidationError as exc:
         raise PermanentDocumentError(
-            "Public discussion analysis message does not match schema version 1",
+            "Analysis request does not match schema version 1",
             code="invalid_message",
         ) from exc
 
 
-def _artifact_filename(artifact) -> str | None:
-    metadata = getattr(artifact, "artifact_metadata", None)
-    if isinstance(metadata, dict):
-        filename = metadata.get("filename")
-        if isinstance(filename, str) and filename.strip():
-            return filename.strip()
-    for attribute in ("document_url", "url"):
-        value = getattr(artifact, attribute, None)
-        if isinstance(value, str) and value:
-            filename = PurePosixPath(unquote_plus(urlparse(value).path)).name
-            if filename:
-                return filename
-    return None
-
-
-def parse_s3_notifications(
-    record: dict,
-) -> list[tuple[str, str, str, UUID, str, DocumentFormat]]:
+def parse_s3_notifications(record: dict) -> list[DocumentLocation]:
+    """The stored documents a native S3 ObjectCreated notification names."""
     try:
         body = json.loads(record["body"])
         notifications = body["Records"]
@@ -122,7 +72,7 @@ def parse_s3_notifications(
             code="invalid_s3_event",
         ) from exc
 
-    parsed: list[tuple[str, str, str, UUID, str, DocumentFormat]] = []
+    locations: list[DocumentLocation] = []
     for notification in notifications:
         try:
             event_name = str(notification["eventName"])
@@ -138,729 +88,81 @@ def parse_s3_notifications(
                 "S3 notification is not an ObjectCreated event",
                 code="invalid_s3_event",
             )
-        match = OBJECT_KEY.fullmatch(key)
-        if not match:
-            raise PermanentDocumentError(
-                "S3 object key does not match the immutable document layout",
-                code="invalid_object_key",
-            )
-        parsed.append(
-            (
-                bucket,
-                key,
-                match.group("ticker").upper(),
-                UUID(match.group("artifact_id")),
-                match.group("checksum").lower(),
-                FORMAT_BY_EXTENSION[match.group("extension").lower()],
-            )
-        )
-    if not parsed:
+        locations.append(locate(bucket, key))
+    if not locations:
         raise PermanentDocumentError(
             "S3 notification contains no records",
             code="empty_s3_event",
         )
-    return parsed
+    return locations
 
 
-def _artifact_state(
-    *,
-    s3,
-    artifact_id: UUID,
-    bucket: str,
-    key: str,
-    checksum: str,
-    ticker: str,
-    document_format: DocumentFormat,
-) -> dict:
-    with database_session() as db:
-        from app.crud.artifact import get_artifact
-
-        artifact = get_artifact(db, artifact_id)
-        if artifact is None:
-            raise PermanentDocumentError(
-                "Artifact does not exist",
-                code="artifact_not_found",
-            )
-        artifact_ticker = artifact.ticker.symbol if artifact.ticker is not None else None
-        if (
-            artifact.source_adapter != ticker.lower()
-            or artifact_ticker != ticker
-            or ticker not in SUPPORTED_TICKERS
-            or artifact.scrape_run_id is None
-        ):
-            raise PermanentDocumentError(
-                "S3 notification does not identify a supported pipeline artifact",
-                code="artifact_identity_mismatch",
-            )
-        state = {
-            "completed": artifact.analysis_status == AnalysisStatus.COMPLETED,
-            "run_id": artifact.scrape_run_id,
-            "title": artifact.title or "Untitled ASX announcement",
-            "download_status": artifact.download_status,
-            "s3_bucket": artifact.s3_bucket,
-            "s3_key": artifact.s3_key,
-            "checksum": artifact.checksum_sha256,
-            "source_type": getattr(artifact, "source_type", None),
-            "source_adapter": getattr(artifact, "source_adapter", None),
-            "filename": _artifact_filename(artifact),
-        }
-
-    if state["download_status"] == DownloadStatus.STORED:
-        if (
-            state["s3_bucket"] != bucket
-            or state["s3_key"] != key
-            or state["checksum"] != checksum
-        ):
-            raise PermanentDocumentError(
-                "S3 notification is stale or does not match the artifact",
-                code="artifact_identity_mismatch",
-            )
-        return state
-
-    # S3 can deliver ObjectCreated before the downloader commits its database
-    # update. Reconcile from the immutable object so the event is not delayed
-    # for the queue's 72-minute visibility timeout.
-    response = s3.head_object(Bucket=bucket, Key=key)
-    content_type = (
-        str(response.get("ContentType", ""))
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
-    content_length = int(response.get("ContentLength", 0))
-    metadata = {
-        str(name).lower(): str(value)
-        for name, value in (response.get("Metadata") or {}).items()
-    }
-    if (
-        metadata.get("artifact-id") != str(artifact_id)
-        or metadata.get("sha256") != checksum
-        or metadata.get("ticker") != ticker
-        or metadata.get("document-format") != document_format
-        or content_type != DOCUMENT_CONTENT_TYPES[document_format]
-    ):
-        raise PermanentDocumentError(
-            "Stored object metadata does not match the S3 event",
-            code="artifact_identity_mismatch",
-        )
-    if content_length > int(os.getenv("MAX_DOCUMENT_BYTES", "10485760")):
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_artifact_stored
-
-        artifact = mark_artifact_stored(
-            db,
-            artifact_id,
-            checksum_sha256=checksum,
-            s3_bucket=bucket,
-            s3_key=key,
-            content_type=content_type,
-            file_size_bytes=content_length,
-        )
-        if artifact is None:
-            raise PermanentDocumentError(
-                "Artifact does not exist",
-                code="artifact_not_found",
-            )
-    return state
-
-
-def _read_s3_document(
-    s3,
-    *,
-    bucket: str,
-    key: str,
-    checksum: str,
-    document_format: DocumentFormat,
-) -> bytes:
-    max_bytes = int(os.getenv("MAX_DOCUMENT_BYTES", "10485760"))
-    response = s3.get_object(Bucket=bucket, Key=key)
-    content_type = (
-        str(response.get("ContentType", ""))
-        .split(";", 1)[0]
-        .strip()
-        .lower()
-    )
-    if content_type != DOCUMENT_CONTENT_TYPES[document_format]:
-        raise PermanentDocumentError(
-            "Stored document content type does not match its immutable key",
-            code="content_type_mismatch",
-        )
-    if int(response.get("ContentLength", 0)) > max_bytes:
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-    body = response["Body"]
-    try:
-        content = body.read(max_bytes + 1)
-    finally:
-        body.close()
-    if len(content) > max_bytes:
-        raise PermanentDocumentError(
-            "Stored document is larger than the configured limit",
-            code="document_too_large",
-        )
-    if hashlib.sha256(content).hexdigest() != checksum:
-        raise PermanentDocumentError(
-            "Stored document checksum does not match its immutable key",
-            code="checksum_mismatch",
-        )
-    validate_document_content(
-        content,
-        declared_content_type=DOCUMENT_CONTENT_TYPES[document_format],
-        final_url=key,
-        expected_format=document_format,
-    )
-    return content
-
-
-def _summary_values(output: AnalysisOutput) -> dict | None:
-    if output.summary is None:
-        return None
-    fields = normalise_summary_metadata(output.summary)
-    text = combine_summary_text(fields)
-    if not text:
-        return None
-    return {
-        "summary_text": text,
-        "model_used": output.summary_model,
-        "prompt_version": output.summary_prompt_version,
-        **fields,
-    }
-
-
-def _missing_summary_artifact_ids(limit: int) -> tuple[list[UUID], int]:
-    """Find completed ASX artifacts missing display or clarity summary fields."""
-    with database_session() as db:
-        from app.models.artifact import Artifact
-        from app.models.artifact_summary import ArtifactSummary
-
-        rows = (
-            db.query(Artifact.id, Artifact.artifact_metadata)
-            .join(ArtifactSummary, ArtifactSummary.artifact_id == Artifact.id)
-            .filter(Artifact.source_type == "asx_announcement")
-            .filter(Artifact.analysis_status == "completed")
-            .order_by(Artifact.created_at.asc(), Artifact.id.asc())
-            .all()
-        )
-    missing = [
-        artifact_id
-        for artifact_id, metadata in rows
-        if not has_complete_summary_metadata(metadata, require_evidence=True)
-    ]
-    return missing[:limit], len(missing)
-
-
-def _summary_input(artifact_id: UUID) -> dict:
-    with database_session() as db:
-        from app.crud.artifact import get_artifact
-
-        artifact = get_artifact(db, artifact_id)
-        if artifact is None or artifact.analysis_status != "completed":
-            raise RuntimeError("Completed artifact is no longer available")
-        metadata = (
-            artifact.artifact_metadata
-            if isinstance(artifact.artifact_metadata, dict)
-            else {}
-        )
-        return {
-            "title": artifact.title or "Untitled ASX announcement",
-            "category": str(
-                metadata.get("category") or artifact.artifact_type or "UNKNOWN"
-            ),
-            "extracted_data": metadata.get("extracted_data")
-            if isinstance(metadata.get("extracted_data"), dict)
-            else {},
-            "raw_text": artifact.raw_text or "",
-        }
-
-
-def _resummarise_missing_fields(  # pylint: disable=too-many-locals
-    *,
-    apply: bool,
-    limit: int,
-) -> dict:
-    """Boundedly regenerate missing structured fields through the active LLM."""
-    capped_limit = max(min(limit, 20), 1)
-    artifact_ids, total_missing = _missing_summary_artifact_ids(capped_limit)
-    result: dict[str, object] = {
-        "apply": apply,
-        "selected": len(artifact_ids),
-        "missing_before": total_missing,
-        "updated": 0,
-        "failed": [],
-    }
-    if not apply:
-        result["artifact_ids"] = [str(artifact_id) for artifact_id in artifact_ids]
-        return result
-
-    from app.services import llm as llm_service
-    from app.crud.artifact import store_artifact_analysis
-
-    model_used = llm_service.active_model_name()
-    if not model_used.startswith("bedrock:"):
-        raise RuntimeError("Structured summary repair requires Amazon Bedrock")
-
-    for artifact_id in artifact_ids:
-        try:
-            summary_input = _summary_input(artifact_id)
-            summary = llm_service.summarise_announcement(**summary_input)
-            fields = normalise_summary_metadata(summary)
-            if not has_complete_summary_metadata(fields):
-                raise RuntimeError("Bedrock response omitted structured summary fields")
-            summary_values = {
-                "summary_text": combine_summary_text(fields),
-                "model_used": model_used,
-                "prompt_version": llm_service.SUMMARY_PROMPT_VERSION,
-                **fields,
-            }
-            with database_session() as db:
-                store_artifact_analysis(
-                    db,
-                    artifact_id=artifact_id,
-                    raw_text=summary_input["raw_text"],
-                    metadata=fields,
-                    summary=summary_values,
-                )
-            result["updated"] = int(result["updated"]) + 1
-        # Continue so one malformed model response cannot block the batch.
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            result["failed"].append(
-                {
-                    "artifact_id": str(artifact_id),
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-
-    _remaining_ids, remaining = _missing_summary_artifact_ids(1)
-    result["missing_after"] = remaining
-    return result
-
-
-def _sentiment_values(output: AnalysisOutput) -> dict:
-    return {
-        "sentiment_label": output.sentiment["sentiment_label"],
-        "stance": output.sentiment.get("label"),
-        "confidence_score": output.sentiment.get("confidence_score"),
-        "model_used": output.sentiment.get("model_used"),
-    }
-
-
-@lru_cache(maxsize=1)
-def _notification_sqs_client() -> Any:
-    """Reuse the notification queue client within one warm Lambda process."""
-    return boto3.client("sqs")
-
-
-def _publish_notification(
-    *,
-    artifact_id: UUID,
-    ticker: str,
-    scrape_run_id: UUID,
-    sentiment: dict,
-) -> None:
-    """Publish one validated notification message to the configured queue."""
-    queue_url = os.getenv("NOTIFICATION_QUEUE_URL", "").strip()
-    if not queue_url:
-        raise RuntimeError("Notification queue URL is not configured")
-    message = NotificationMessage(
-        artifact_id=artifact_id,
-        ticker=ticker,
-        scrape_run_id=scrape_run_id,
-        sentiment_label=sentiment["sentiment_label"],
-        confidence_score=sentiment["confidence_score"],
-    )
-    _notification_sqs_client().send_message(
-        QueueUrl=queue_url,
-        MessageBody=message.model_dump_json(),
-    )
-
-
-def _try_publish_notification(  # pylint: disable=too-many-arguments
-    *,
-    artifact_id: UUID,
-    ticker: str,
-    scrape_run_id: UUID,
-    sentiment: dict,
-    correlation: str,
-    attempt: int,
-) -> None:
-    """Publish an eligible result without risking the analysis pipeline."""
-    if os.getenv("NOTIFICATIONS_ENABLED", "false").lower() != "true":
-        return
-    if sentiment.get("sentiment_label") not in {"negative", "positive"}:
-        return
-    try:
-        _publish_notification(
-            artifact_id=artifact_id,
-            ticker=ticker,
-            scrape_run_id=scrape_run_id,
-            sentiment=sentiment,
-        )
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        log_event(
-            stage=STAGE,
-            event="notification_publish_failed",
-            level=logging.ERROR,
-            correlation_id=correlation,
-            run_id=scrape_run_id,
-            artifact_id=artifact_id,
-            attempt=attempt,
-            error_code=type(exc).__name__,
-        )
-
-
-def _mark_failed(artifact_id: UUID, error: str) -> None:
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_artifact_analysis_failed
-
-            mark_artifact_analysis_failed(db, artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            artifact_id=artifact_id,
-            error_code="database_error",
-        )
-        # Do not acknowledge a queue message until its failure is durable.
-        raise
-
-
-def _mark_public_discussion_failed(artifact_id: UUID, error: str) -> None:
-    try:
-        with database_session() as db:
-            from app.crud.scrape_run import mark_inline_artifact_analysis_failed
-
-            mark_inline_artifact_analysis_failed(db, artifact_id, error=error)
-    except Exception:
-        log_event(
-            stage=STAGE,
-            event="state_update_failed",
-            level=logging.ERROR,
-            artifact_id=artifact_id,
-            error_code="database_error",
-        )
-        raise
-
-
-def _public_discussion_artifact_state(artifact_id: UUID) -> dict:
-    """Load a stored-text artifact for the legacy inline-analysis queue contract."""
-    with database_session() as db:
-        from app.crud.artifact import get_artifact
-        from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
-
-        artifact = get_artifact(db, artifact_id)
-        if artifact is None:
-            raise PermanentDocumentError(
-                "Artifact does not exist",
-                code="artifact_not_found",
-            )
-        source_type = str(artifact.source_type or "").lower()
-        supported_source_types = PUBLIC_DISCUSSION_SOURCE_TYPES | {"news"}
-        if source_type not in supported_source_types:
-            raise PermanentDocumentError(
-                "Artifact is not a supported stored-text source",
-                code="artifact_identity_mismatch",
-            )
-        title = (artifact.title or "").strip()
-        raw_text = (artifact.raw_text or "").strip()
-        if not title and not raw_text:
-            raise PermanentDocumentError(
-                "Stored-text artifact has no text",
-                code="no_extractable_text",
-            )
-        metadata = (
-            artifact.artifact_metadata
-            if isinstance(artifact.artifact_metadata, dict)
-            else {}
-        )
-        source_name = metadata.get("source_name") or metadata.get("provider")
-        return {
-            "completed": artifact.analysis_status == "completed",
-            "run_id": artifact.scrape_run_id,
-            "title": title or (
-                "Untitled news article"
-                if source_type == "news"
-                else "Untitled public discussion"
-            ),
-            "raw_text": raw_text,
-            "source_type": source_type,
-            "source_name": source_name if isinstance(source_name, str) else None,
-        }
-
-
-def _analyse_public_discussion_artifact(
-    *,
-    artifact_id: UUID,
-    correlation: str,
-    attempt: int,
-) -> None:
-    started_at = time.monotonic()
-    state = _public_discussion_artifact_state(artifact_id)
-    if state["completed"]:
-        log_event(
-            stage=STAGE,
-            event="duplicate_skipped",
-            started_at=started_at,
-            correlation_id=correlation,
-            run_id=state["run_id"],
-            artifact_id=artifact_id,
-            attempt=attempt,
-        )
-        return
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_inline_artifact_analysis_started
-
-        mark_inline_artifact_analysis_started(db, artifact_id)
-
-    is_news = state["source_type"] == "news"
-    if is_news:
-        output = analyse_news_text(
-            title=state["title"],
-            raw_text=state["raw_text"],
-            source_name=state.get("source_name"),
-        )
+def _analyse(current: StageRecord) -> None:
+    request = parse_analysis_request(current.record)
+    if isinstance(request, SummaryRequestMessage):
+        _summarise(current, request.artifact_id)
+    elif request is not None:
+        _analyse_stored_text(current, request.artifact_id)
     else:
-        output = analyse_public_discussion_text(
-            title=state["title"],
-            raw_text=state["raw_text"],
-            source_type=state["source_type"],
+        _analyse_stored_documents(current)
+
+
+def _analyse_stored_documents(current: StageRecord) -> None:
+    locations = parse_s3_notifications(current.record)
+    ports = deployed_ports()
+    for location in locations:
+        current.subject = analysed_document(location.artifact_id)
+        outcome = artifact_analysis.analyse_stored_document(location, ports)
+        if isinstance(outcome, AlreadyAnalysed):
+            current.log("duplicate_skipped", run_id=outcome.run_id)
+            continue
+        if outcome.alert_error is not None:
+            current.log(
+                "notification_publish_failed",
+                level=logging.ERROR,
+                run_id=outcome.run_id,
+                error_code=outcome.alert_error,
+            )
+        classification = outcome.classification
+        current.log(
+            "completed",
+            run_id=outcome.run_id,
+            page_count=outcome.page_count,
+            category=outcome.category,
+            classification_status=classification.status,
+            primary_category=classification.primary_category,
+            classification_score=classification.score,
+            classifier_version=classification.classifier_version,
+            source_adapter=outcome.source_adapter,
         )
 
-    category = "news_article" if is_news else "user_discussion"
 
-    with database_session() as db:
-        from app.crud.artifact import store_artifact_analysis
-
-        store_artifact_analysis(
-            db,
-            artifact_id=artifact_id,
-            raw_text=output.parsed.raw_text,
-            metadata={
-                "category": category,
-                "category_confidence": 1.0,
-            },
-            summary=_summary_values(output),
-            sentiment=_sentiment_values(output),
-        )
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_inline_artifact_analysis_completed
-
-        mark_inline_artifact_analysis_completed(db, artifact_id)
-
-    log_event(
-        stage=STAGE,
-        event="completed",
-        started_at=started_at,
-        correlation_id=correlation,
-        run_id=state["run_id"],
-        artifact_id=artifact_id,
-        attempt=attempt,
-        category=category.upper(),
-        source_type=state["source_type"],
-    )
-
-
-def _analyse_object(
-    *,
-    s3,
-    bucket: str,
-    key: str,
-    artifact_id: UUID,
-    checksum: str,
-    ticker: str,
-    document_format: DocumentFormat,
-    correlation: str,
-    attempt: int,
-) -> None:
-    started_at = time.monotonic()
-    state = _artifact_state(
-        s3=s3,
-        artifact_id=artifact_id,
-        bucket=bucket,
-        key=key,
-        checksum=checksum,
-        ticker=ticker,
-        document_format=document_format,
-    )
-    if state["completed"]:
-        log_event(
-            stage=STAGE,
-            event="duplicate_skipped",
-            started_at=started_at,
-            correlation_id=correlation,
-            run_id=state["run_id"],
-            artifact_id=artifact_id,
-            attempt=attempt,
-        )
+def _analyse_stored_text(current: StageRecord, artifact_id: UUID) -> None:
+    current.subject = analysed_stored_text(artifact_id)
+    outcome = artifact_analysis.analyse_stored_text(artifact_id, deployed_ports())
+    if isinstance(outcome, AlreadyAnalysed):
+        current.log("duplicate_skipped", run_id=outcome.run_id)
         return
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_artifact_analysis_started
-
-        mark_artifact_analysis_started(db, artifact_id)
-
-    content = _read_s3_document(
-        s3,
-        bucket=bucket,
-        key=key,
-        checksum=checksum,
-        document_format=document_format,
+    current.log(
+        "completed",
+        run_id=outcome.run_id,
+        category=outcome.category.upper(),
+        source_type=outcome.source_type,
     )
-    output = analyse_document(
-        content,
-        title=state["title"],
-        max_pages=int(os.getenv("MAX_PDF_PAGES", "100")),
-        document_format=document_format,
-        max_ocr_pages=int(os.getenv("MAX_OCR_PAGES", "5")),
-        filename=state.get("filename") or key.rsplit("/", 1)[-1],
-        source_type=state.get("source_type"),
-        source_adapter=state.get("source_adapter"),
-    )
-    if output.parsed.classification is None:
-        raise RuntimeError("Analysis output is missing structured classification")
-    analysis_metadata = merge_classification_metadata(
-        {}, output.parsed.classification
-    )
-    analysis_metadata.update(
-        {
-            "extracted_data": output.parsed.extracted_data,
-            "page_count": output.parsed.page_count,
-            "document_format": document_format,
-        }
-    )
-    sentiment = _sentiment_values(output)
 
-    with database_session() as db:
-        from app.crud.artifact import store_artifact_analysis
 
-        store_artifact_analysis(
-            db,
-            artifact_id=artifact_id,
-            raw_text=output.parsed.raw_text,
-            metadata=analysis_metadata,
-            summary=_summary_values(output),
-            sentiment=sentiment,
-        )
-
-    with database_session() as db:
-        from app.crud.scrape_run import mark_artifact_analysis_completed
-
-        mark_artifact_analysis_completed(db, artifact_id)
-
-    _try_publish_notification(
+def _summarise(current: StageRecord, artifact_id: UUID) -> None:
+    outcome = artifact_analysis.summarise(artifact_id, deployed_ports())
+    if isinstance(outcome, SummaryUnavailable):
+        current.log("summary_unavailable", artifact_id=artifact_id, reason=outcome.reason)
+        return
+    current.log(
+        "completed",
         artifact_id=artifact_id,
-        ticker=ticker,
-        scrape_run_id=state["run_id"],
-        sentiment=sentiment,
-        correlation=correlation,
-        attempt=attempt,
+        model=outcome.model,
+        prompt_version=outcome.prompt_version,
+        complete=outcome.complete,
     )
-
-    log_event(
-        stage=STAGE,
-        event="completed",
-        started_at=started_at,
-        correlation_id=correlation,
-        run_id=state["run_id"],
-        artifact_id=artifact_id,
-        attempt=attempt,
-        page_count=output.parsed.page_count,
-        category=output.parsed.category,
-        classification_status=output.parsed.classification.status,
-        primary_category=output.parsed.classification.primary_category,
-        classification_score=output.parsed.classification.score,
-        classifier_version=output.parsed.classification.classifier_version,
-        source_adapter=state.get("source_adapter"),
-    )
-
-
-def _handle_record(record: dict) -> None:
-    correlation = correlation_id(record)
-    attempt = receive_attempt(record)
-    artifact_id: UUID | None = None
-    public_discussion_message: PublicDiscussionAnalysisMessage | None = None
-    started_at = time.monotonic()
-    try:
-        public_discussion_message = parse_public_discussion_message(record)
-        if public_discussion_message is not None:
-            artifact_id = public_discussion_message.artifact_id
-            _analyse_public_discussion_artifact(
-                artifact_id=artifact_id,
-                correlation=correlation,
-                attempt=attempt,
-            )
-            return
-        notifications = parse_s3_notifications(record)
-        s3 = boto3.client("s3")
-        expected_bucket = os.environ["RAW_DOCUMENT_BUCKET"]
-        for bucket, key, ticker, artifact_id, checksum, document_format in notifications:
-            if bucket != expected_bucket:
-                raise PermanentDocumentError(
-                    "S3 event came from an unexpected bucket",
-                    code="unexpected_bucket",
-                )
-            _analyse_object(
-                s3=s3,
-                bucket=bucket,
-                key=key,
-                artifact_id=artifact_id,
-                checksum=checksum,
-                ticker=ticker,
-                document_format=document_format,
-                correlation=correlation,
-                attempt=attempt,
-            )
-    except PermanentDocumentError as exc:
-        untrusted_event_errors = {
-            "artifact_identity_mismatch",
-            "artifact_not_found",
-            "unexpected_bucket",
-        }
-        if artifact_id is not None and exc.code not in untrusted_event_errors:
-            if public_discussion_message is not None:
-                _mark_public_discussion_failed(artifact_id, f"{exc.code}: {exc}")
-            else:
-                _mark_failed(artifact_id, f"{exc.code}: {exc}")
-        log_event(
-            stage=STAGE,
-            event="permanent_failure",
-            started_at=started_at,
-            level=logging.WARNING,
-            correlation_id=correlation,
-            artifact_id=artifact_id,
-            attempt=attempt,
-            error_code=exc.code,
-        )
-    except Exception as exc:
-        if artifact_id is not None:
-            if public_discussion_message is not None:
-                _mark_public_discussion_failed(
-                    artifact_id,
-                    f"{type(exc).__name__}: {exc}",
-                )
-            else:
-                _mark_failed(artifact_id, f"{type(exc).__name__}: {exc}")
-        log_event(
-            stage=STAGE,
-            event="retryable_failure",
-            started_at=started_at,
-            level=logging.ERROR,
-            correlation_id=correlation,
-            artifact_id=artifact_id,
-            attempt=attempt,
-            error_code=type(exc).__name__,
-        )
-        raise
 
 
 def handler(event: dict, _context) -> dict:
@@ -868,10 +170,11 @@ def handler(event: dict, _context) -> dict:
         apply = event.get("apply") is True
         if apply and event.get("confirmation") != "RESUMMARISE_MISSING_FIELDS":
             raise ValueError("Summary repair apply mode requires confirmation")
-        return _resummarise_missing_fields(
+        return artifact_analysis.repair_missing_summaries(
             apply=apply,
             limit=int(event.get("limit", 10)),
+            ports=deployed_ports(),
         )
     for record in event.get("Records", []):
-        _handle_record(record)
+        run_stage(STAGE, record, _analyse)
     return {"processed": len(event.get("Records", []))}

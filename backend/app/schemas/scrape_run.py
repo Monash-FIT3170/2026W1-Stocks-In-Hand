@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.status import ScrapeRunStatus
+
 
 class ScrapeRunBase(BaseModel):
     platform_id: UUID
@@ -24,7 +26,7 @@ class ScrapeRunBase(BaseModel):
 
 
 class ScrapeRunCreate(ScrapeRunBase):
-    pass
+    status: ScrapeRunStatus
 
 
 class ScrapeRunResponse(ScrapeRunBase):

@@ -1,0 +1,188 @@
+{
+  "nodes": [
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Open navigation",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 42
+    },
+    {
+      "height": 1519,
+      "lineHeight": "normal",
+      "maxWidth": "900px",
+      "padding": "56px 16px 72px",
+      "size": "16px",
+      "tag": "SECTION",
+      "text": "Data sources\n\nEach brief can combine different source types. A source link is shown whenev",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 375
+    },
+    {
+      "height": 46,
+      "lineHeight": "45.864px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "46.8px",
+      "tag": "H1",
+      "text": "Data sources",
+      "tracking": "-2.4336px",
+      "weight": "550",
+      "width": 343
+    },
+    {
+      "height": 92,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Each brief can combine different source types. A source link is shown whenever the stored ",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "ASX and issuer filings",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 92,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Company announcements and related documents collected from supported issuer or ASX-facing ",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "Publisher news",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 122,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Stored publisher records supplied through the configured news integration, with the origin",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "Investor discussion",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 122,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Public discussion records from configured communities such as Reddit. Discussion is clearl",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "Market quotes",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 92,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Current and previous-close quote fields requested from Yahoo Finance. Quotes can be delaye",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 195,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "20px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Always open the original filing or publisher page before relying on a material claim. A mi",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "ASX company research with the source material kept close.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 57,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "24px 0px 0px",
+      "size": "12px",
+      "tag": "P",
+      "text": "© 2026 StonksInHand. AI-assisted briefs are informational and should be checked against or",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

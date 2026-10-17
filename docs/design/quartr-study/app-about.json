@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Open navigation",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 42
+    },
+    {
+      "height": 991,
+      "lineHeight": "normal",
+      "maxWidth": "900px",
+      "padding": "56px 16px 72px",
+      "size": "16px",
+      "tag": "SECTION",
+      "text": "About StonksInHand\n\nStonksInHand helps people scan recent ASX company information without ",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 375
+    },
+    {
+      "height": 92,
+      "lineHeight": "45.864px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "46.8px",
+      "tag": "H1",
+      "text": "About StonksInHand",
+      "tracking": "-2.4336px",
+      "weight": "550",
+      "width": 343
+    },
+    {
+      "height": 122,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "StonksInHand helps people scan recent ASX company information without replacing the underl",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "How briefs are prepared",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 184,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Automated workers collect supported announcements and publisher records, extract their tex",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 33,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "25px",
+      "tag": "H2",
+      "text": "What it is not",
+      "tracking": "-0.75px",
+      "weight": "560",
+      "width": 343
+    },
+    {
+      "height": 153,
+      "lineHeight": "30.6px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "The service is an information and research aid. It does not provide personal financial adv",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "ASX company research with the source material kept close.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 57,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "24px 0px 0px",
+      "size": "12px",
+      "tag": "P",
+      "text": "© 2026 StonksInHand. AI-assisted briefs are informational and should be checked against or",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

@@ -1,8 +1,15 @@
 """Validate claim evidence against the stored source document."""
 
+from __future__ import annotations
+
 import re
+from urllib.parse import urlparse
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.models.artifact import Artifact
+    from app.services.artifact_summary import Summary
 
 
 CLAIM_KINDS = {"confirmed_fact": "confirmed_facts", "speculation": "speculation"}
@@ -68,3 +75,53 @@ def validated_claim_evidence(
         if passage:
             evidence.append({**record, "passage": passage})
     return evidence
+
+
+def safe_source_url(value: object) -> str | None:
+    """Return a usable web source URL, rejecting malformed or unsafe schemes."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        parsed = urlparse(value)
+        return value if parsed.scheme in {"http", "https"} and parsed.hostname else None
+    except ValueError:
+        return None
+
+
+def traceable_claims(artifact: Artifact | None, summary: Summary | None) -> list[dict[str, Any]]:
+    """Attach verified quotations and original publication dates to summary claims."""
+    if artifact is None or summary is None:
+        return []
+    claims = {
+        "confirmed_facts": list(summary.confirmed_facts or ()),
+        "speculation": list(summary.speculation or ()),
+        "claim_evidence": summary.extensions.get("claim_evidence", []),
+    }
+    evidence = {
+        (record["kind"], record["text"]): record["passage"]
+        for record in validated_claim_evidence(claims, artifact.raw_text)
+    }
+    url = artifact_source_url(artifact)
+    result = []
+    for kind, key in CLAIM_KINDS.items():
+        for claim in claims[key]:
+            passage = evidence.get((kind, claim)) or exact_source_passage(artifact.raw_text, claim)
+            source = {
+                "label": (artifact.source_type or "Source").replace("_", " ").title(),
+                "title": artifact.title or "Source",
+                "url": url,
+                "published_at": artifact.published_at.isoformat() if artifact.published_at else None,
+                "evidence_text": passage,
+            } if url else None
+            result.append({"text": claim, "kind": kind, "source": source})
+    return result
+
+
+def artifact_source_url(artifact: Artifact) -> str | None:
+    """Prefer the direct document, then the canonical and legacy source links."""
+    return next(
+        (url for value in (artifact.document_url, artifact.canonical_url, artifact.url)
+         if (url := safe_source_url(value))),
+        None,
+    )

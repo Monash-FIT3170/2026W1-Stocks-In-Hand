@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Open navigation",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 42
+    },
+    {
+      "height": 720,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "56px 16px",
+      "size": "16px",
+      "tag": "SECTION",
+      "text": "Welcome back\n\nAccess your saved ASX watchlist and company research.\n\nEmail address\nPasswor",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 375
+    },
+    {
+      "height": 36,
+      "lineHeight": "36px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "36px",
+      "tag": "H1",
+      "text": "Welcome back",
+      "tracking": "-1.8px",
+      "weight": "550",
+      "width": 297
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "Access your saved ASX watchlist and company research.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 297
+    },
+    {
+      "height": 50,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "1px 2px",
+      "size": "16px",
+      "tag": "INPUT",
+      "text": "",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 275
+    },
+    {
+      "height": 50,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "1px 2px",
+      "size": "16px",
+      "tag": "INPUT",
+      "text": "",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 223
+    },
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Show password",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 44
+    },
+    {
+      "height": 46,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px 18px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Sign In",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 297
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "ASX company research with the source material kept close.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 57,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "24px 0px 0px",
+      "size": "12px",
+      "tag": "P",
+      "text": "© 2026 StonksInHand. AI-assisted briefs are informational and should be checked against or",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

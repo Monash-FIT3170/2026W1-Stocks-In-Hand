@@ -12,7 +12,8 @@ Route modules should:
 - define URL paths and HTTP methods;
 - receive request data;
 - get a database session with `Depends(get_db)`;
-- call CRUD functions;
+- call CRUD functions, or the one read-model function (`app/read_models/`)
+  that answers a page's question;
 - raise `HTTPException` for HTTP-specific errors;
 - return response objects that match the Pydantic response schemas.
 
@@ -64,12 +65,20 @@ Examples:
 
 ## How Routes Are Registered
 
-The routers are imported and registered in `backend/main.py`:
+The routers are imported and registered in `backend/main.py`, in one of four
+access policy groups. The group decides who may call every route in the
+router, so route handlers do not add their own login dependency:
 
-```python
-app.include_router(artifact.router)
-app.include_router(watchlist.router)
-```
+- `PUBLIC_READ_ROUTERS`: reads are open unless the route asks for a login,
+  and every other method needs an admin.
+- `INVESTOR_ROUTERS`: every route needs a signed-in investor.
+- `ADMIN_ROUTERS`: every route needs an admin.
+- `SELF_MANAGED_ROUTERS`: `auth.py` and `notification_preferences.py` set
+  access per route, because some of their routes must work without a session.
+
+`tests/test_access_policy.py` fails if a router is included without a group
+(other than the self-managed ones), or if a write route is not admin-only
+and not on its short allowlists.
 
 If a route module is not included in `main.py`, its endpoints will not be
 available in the running API.
@@ -80,30 +89,43 @@ Investor and watchlist routes:
 
 - `investor.py`: create, read, update, and delete investors.
 - `auth.py`: sign up, sign in, sign out, and current-identity lookup.
-- `watchlist.py`: create, read, update, and delete watchlists.
+- `watchlist.py`: create, read, update, and delete watchlists, plus
+  `/watchlists/me/summary`, the watchlist page's one read
+  (`app/read_models/watchlist_summary.py`): the investor's oldest watchlist
+  and each company's latest signal and brief line.
 - `watchlist_ticker.py`: add/list/remove tickers in a watchlist.
 
 Ticker routes:
 
 - `ticker.py`: create, list, fetch, and update tickers, plus the brief
-  endpoints the frontend reads (`/overview`, `/brief-aside`, `/news-feed`,
-  `/deep-dive-timeline`). Prices are fetched live from Yahoo here rather than
-  stored, so there is no market data route.
+  endpoints the frontend reads (`/brief`, `/news-feed`,
+  `/deep-dive-timeline`). Each of those is one read-model call: the brief
+  is the ticker brief (`app/read_models/ticker_brief.py`), and the news feed
+  and deep dive are the ticker's records
+  (`app/read_models/ticker_records.py`). The brief's prices come live from
+  Yahoo through the quote source (`app/services/quotes.py`) rather than
+  being stored, so there is no market data route. Each news-feed item is the
+  artifact's card (`app/services/artifact_card.py`), and the deep dive reads
+  summaries through the artifact summary module.
 
 Source content routes:
 
 - `information_platform.py`: manage source platforms.
 - `artifact.py`: create and fetch artifacts.
-- `artifact_summary.py`: create and fetch summaries.
+- `artifact_summary.py`: fetch summary rows. Summaries are written only
+  through the artifact summary module (`app/services/artifact_summary.py`).
 - `artifact_sentiment.py`: create and fetch sentiment records.
 - `announcement.py`: the ASX announcement feed and trending list, derived from
   artifacts.
 
 Analysis routes:
 
-- `category_sentiment.py`: the `/sentiment/{ticker}` pipeline.
+- `category_sentiment.py`: `GET /sentiment/{ticker}`, a ticker's stored
+  sentiment in each sentiment bucket, read through the ticker sentiment
+  read-model (`app/read_models/ticker_sentiment.py`). It never runs FinBERT.
 - `reddit.py`: Reddit scraping and per-ticker Reddit summaries.
-- `gemini.py`: Legacy route name for provider-routed summarisation and categorisation.
+- `llm.py`: admin category splits generated on request, and admin summary
+  requests queued for the analysis worker.
 
 Operational routes:
 

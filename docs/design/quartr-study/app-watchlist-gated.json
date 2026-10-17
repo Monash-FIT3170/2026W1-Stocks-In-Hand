@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "height": 42,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Open navigation",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 42
+    },
+    {
+      "height": 635,
+      "lineHeight": "normal",
+      "maxWidth": "1240px",
+      "padding": "56px 16px 72px",
+      "size": "16px",
+      "tag": "SECTION",
+      "text": "My watchlist\n\nSign in to view your watchlist.\n\nSaved companies\nAdd company\nLoading watchli",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 375
+    },
+    {
+      "height": 46,
+      "lineHeight": "45.864px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "46.8px",
+      "tag": "H1",
+      "text": "My watchlist",
+      "tracking": "-2.4336px",
+      "weight": "550",
+      "width": 238
+    },
+    {
+      "height": 27,
+      "lineHeight": "27px",
+      "maxWidth": "670px",
+      "padding": "0px",
+      "size": "18px",
+      "tag": "P",
+      "text": "Sign in to view your watchlist.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 238
+    },
+    {
+      "height": 30,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "22px",
+      "tag": "H2",
+      "text": "Saved companies",
+      "tracking": "normal",
+      "weight": "700",
+      "width": 238
+    },
+    {
+      "height": 46,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "0px 18px",
+      "size": "16px",
+      "tag": "BUTTON",
+      "text": "Add company",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 164
+    },
+    {
+      "height": 27,
+      "lineHeight": "27px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "20px",
+      "tag": "H3",
+      "text": "Loading watchlist",
+      "tracking": "normal",
+      "weight": "700",
+      "width": 165
+    },
+    {
+      "height": 24,
+      "lineHeight": "24px",
+      "maxWidth": "none",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "Fetching your saved companies",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 222
+    },
+    {
+      "height": 50,
+      "lineHeight": "24.8px",
+      "maxWidth": "440px",
+      "padding": "0px",
+      "size": "16px",
+      "tag": "P",
+      "text": "ASX company research with the source material kept close.",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    },
+    {
+      "height": 57,
+      "lineHeight": "normal",
+      "maxWidth": "none",
+      "padding": "24px 0px 0px",
+      "size": "12px",
+      "tag": "P",
+      "text": "© 2026 StonksInHand. AI-assisted briefs are informational and should be checked against or",
+      "tracking": "normal",
+      "weight": "400",
+      "width": 343
+    }
+  ],
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

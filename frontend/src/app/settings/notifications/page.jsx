@@ -38,6 +38,10 @@ const VERIFICATION_COPY = {
   },
 }
 
+// The last delivery statuses reported as a problem. The backend tests check
+// this list and the VERIFICATION_COPY keys against app/alert_vocabulary.py.
+const DELIVERY_PROBLEM_STATUSES = ["failed", "rejected"]
+
 function draftFromPreferences(preferences) {
   return {
     enabled: Boolean(preferences.enabled),
@@ -113,7 +117,7 @@ export default function NotificationSettingsPage() {
     [draft, preferences]
   )
   const verification = VERIFICATION_COPY[preferences?.verification_status] || VERIFICATION_COPY.unverified
-  const deliveryFailed = ["failed", "rejected"].includes(preferences?.last_delivery_status)
+  const deliveryFailed = DELIVERY_PROBLEM_STATUSES.includes(preferences?.last_delivery_status)
   const lastDeliveryAt = formatDate(preferences?.last_delivery_at)
   const canResend = Boolean(
     preferences?.feature_enabled &&
@@ -258,7 +262,7 @@ export default function NotificationSettingsPage() {
           <fieldset className={styles.ruleGroup} disabled={!draft.enabled || isSaving}>
             <legend>Confidence threshold</legend>
             <div className={styles.rangeHeader}>
-              <span>Only send stronger signals</span>
+              <span>Classification confidence</span>
               <output htmlFor="confidence-threshold">{Math.round(draft.min_confidence * 100)}%</output>
             </div>
             <input

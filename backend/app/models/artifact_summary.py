@@ -22,4 +22,4 @@ class ArtifactSummary(Base):
     confidence_score = Column(Numeric, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    artifact = relationship("Artifact", backref="summaries")
+    artifact = relationship("Artifact", back_populates="summaries")

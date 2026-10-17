@@ -4,29 +4,29 @@
 
 from __future__ import annotations
 
-import re
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import cast
 from uuid import UUID
 
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import case, func, update
+from sqlalchemy import ColumnElement, case, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.alert_vocabulary import VerificationStatus
 from app.models.alert_subscription import AlertSubscription
+from app.services.alert_tokens import is_token_hash
 
 
-VERIFICATION_STATUSES: Final[frozenset[str]] = frozenset(
-    {"unverified", "pending", "verified", "failed"}
-)
-SHA256_HEX: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
-DELIVERY_ERROR_CODE_LIMIT: Final[int] = 128
-_UNSET: Final[object] = object()
+def normalise_email(email: str) -> str:
+    """The one form an alert address is stored and compared in.
 
-
-def _normalise_email(email: str) -> str:
-    """Return one deliverable-independent, lower-case mailbox address."""
+    The address is checked with the rules every email sender uses: one
+    mailbox, no display name and nothing that needs SMTPUTF8. Its domain
+    is in ASCII (punycode) form, and the whole address is lower case.
+    Raises ``ValueError`` for an address alerts cannot be sent to.
+    """
     try:
         validated = validate_email(
             str(email).strip(),
@@ -42,25 +42,16 @@ def _normalise_email(email: str) -> str:
 def _expected_email(email: str) -> str:
     """Require the mailbox generation a verification callback observed."""
     try:
-        return _normalise_email(email)
+        return normalise_email(email)
     except ValueError as exc:
         raise ValueError("expected_email must contain one valid email address") from exc
 
 
 def _normalise_token_hash(token_hash: str) -> str:
     """Validate the stored SHA-256 form of an unsubscribe token."""
-    if not SHA256_HEX.fullmatch(token_hash):
+    if not is_token_hash(token_hash):
         raise ValueError("unsubscribe token hash must be 64 lowercase hex characters")
     return token_hash
-
-
-def _verification_status(value: str) -> str:
-    """Validate one persisted application confirmation status."""
-    status = str(value).strip().lower()
-    if status not in VERIFICATION_STATUSES:
-        allowed = ", ".join(sorted(VERIFICATION_STATUSES))
-        raise ValueError(f"verification status must be one of: {allowed}")
-    return status
 
 
 def _aware_timestamp(value: object, *, field: str) -> datetime:
@@ -127,7 +118,7 @@ def upsert_subscription(  # pylint: disable=too-many-arguments
 ) -> AlertSubscription:
     """Create or update one subscription, resetting verification on email change."""
     commit = _validate_commit(commit)
-    normalised_email = _normalise_email(email)
+    normalised_email = normalise_email(email)
     enabled = _optional_bool(enabled, field="enabled")
     normalised_hash = (
         _normalise_token_hash(unsubscribe_token_hash)
@@ -181,91 +172,139 @@ def upsert_subscription(  # pylint: disable=too-many-arguments
     return subscription
 
 
-def update_verification_state(  # pylint: disable=too-many-arguments,too-many-branches,too-many-locals
+@dataclass(frozen=True)
+class VerificationState:
+    """The address, status and request time a verification change expects to find.
+
+    A change writes only while the subscription still holds all three, so it
+    cannot undo another change it did not see.
+    """
+
+    email: str
+    status: VerificationStatus
+    requested_at: datetime | None
+
+    @classmethod
+    def of(cls, subscription: AlertSubscription) -> VerificationState:
+        """The state ``subscription`` holds now."""
+        return cls(
+            email=str(subscription.email),
+            status=VerificationStatus(str(subscription.verification_status)),
+            requested_at=cast(datetime | None, subscription.verification_requested_at),
+        )
+
+
+def reserve_verification(
     db: Session,
-    *,
     investor_id: UUID,
-    verification_status: str,
-    expected_verification_status: str,
-    expected_email: str,
-    expected_verification_requested_at: datetime | None,
-    verification_requested_at: datetime | None | object = _UNSET,
-    verified_at: datetime | None | object = _UNSET,
+    *,
+    observed: VerificationState,
+    requested_at: datetime,
     commit: bool = True,
 ) -> AlertSubscription | None:
-    """Apply a guarded email-confirmation transition for one subscription."""
-    commit = _validate_commit(commit)
-    status = _verification_status(verification_status)
-    expected_status = _verification_status(expected_verification_status)
-    normalised_expected_email = _expected_email(expected_email)
-    if verification_requested_at is not _UNSET and verification_requested_at is not None:
-        _aware_timestamp(
-            verification_requested_at,
-            field="verification_requested_at",
-        )
-    if verified_at is not _UNSET and verified_at is not None:
-        _aware_timestamp(verified_at, field="verified_at")
-    if expected_verification_requested_at is not None:
-        _aware_timestamp(
-            expected_verification_requested_at,
-            field="expected_verification_requested_at",
-        )
-    values: dict[str, object] = {
-        "verification_status": status,
-        "updated_at": func.now(),
-    }
-    if status == "pending":
-        values["verification_requested_at"] = (
-            func.now()
-            if verification_requested_at is _UNSET
-            or verification_requested_at is None
-            else _aware_timestamp(
-                verification_requested_at,
-                field="verification_requested_at",
-            )
-        )
-        values["verified_at"] = None
-    elif status == "verified":
-        if verification_requested_at is not _UNSET:
-            values["verification_requested_at"] = (
-                None
-                if verification_requested_at is None
-                else _aware_timestamp(
-                    verification_requested_at,
-                    field="verification_requested_at",
-                )
-            )
-        values["verified_at"] = (
-            func.now()
-            if verified_at is _UNSET or verified_at is None
-            else _aware_timestamp(verified_at, field="verified_at")
-        )
-    else:
-        if verification_requested_at is not _UNSET:
-            values["verification_requested_at"] = (
-                None
-                if verification_requested_at is None
-                else _aware_timestamp(
-                    verification_requested_at,
-                    field="verification_requested_at",
-                )
-            )
-        values["verified_at"] = None
+    """Record a verification request made at ``requested_at``, before its email goes out.
 
-    conditions = [AlertSubscription.investor_id == investor_id]
-    conditions.append(AlertSubscription.email == normalised_expected_email)
-    conditions.append(AlertSubscription.verification_status == expected_status)
-    if expected_verification_requested_at is None:
-        conditions.append(AlertSubscription.verification_requested_at.is_(None))
+    The subscription becomes pending. Returns None, and writes nothing, when
+    it no longer holds ``observed``. A verified address is never requested
+    again, so it cannot lose its confirmation here.
+    """
+    if observed.status == VerificationStatus.VERIFIED:
+        raise ValueError("a verified subscription takes no verification request")
+    return _change_verification(
+        db,
+        investor_id,
+        expected=observed,
+        status=VerificationStatus.PENDING,
+        requested_at=requested_at,
+        verified_at=None,
+        commit=commit,
+    )
+
+
+def fail_verification(
+    db: Session,
+    investor_id: UUID,
+    *,
+    email: str,
+    requested_at: datetime,
+) -> AlertSubscription | None:
+    """Mark the pending request made at ``requested_at`` failed, and commit.
+
+    The request time stays, so the resend interval still counts from it.
+    Returns None when that request is no longer the pending one.
+    """
+    return _change_verification(
+        db,
+        investor_id,
+        expected=VerificationState(email, VerificationStatus.PENDING, requested_at),
+        status=VerificationStatus.FAILED,
+        requested_at=requested_at,
+        verified_at=None,
+        commit=True,
+    )
+
+
+def confirm_verification(
+    db: Session,
+    investor_id: UUID,
+    *,
+    email: str,
+    requested_at: datetime,
+    verified_at: datetime,
+) -> AlertSubscription | None:
+    """Mark the address of the pending request made at ``requested_at`` verified, and commit.
+
+    Returns None when that request is no longer the pending one, or the
+    address changed.
+    """
+    return _change_verification(
+        db,
+        investor_id,
+        expected=VerificationState(email, VerificationStatus.PENDING, requested_at),
+        status=VerificationStatus.VERIFIED,
+        requested_at=requested_at,
+        verified_at=verified_at,
+        commit=True,
+    )
+
+
+def _change_verification(  # pylint: disable=too-many-arguments
+    db: Session,
+    investor_id: UUID,
+    *,
+    expected: VerificationState,
+    status: VerificationStatus,
+    requested_at: datetime,
+    verified_at: datetime | None,
+    commit: bool,
+) -> AlertSubscription | None:
+    """Write one verification change while the subscription still holds ``expected``."""
+    commit = _validate_commit(commit)
+    expected_email = _expected_email(expected.email)
+    requested_at = _aware_timestamp(requested_at, field="requested_at")
+    if verified_at is not None:
+        verified_at = _aware_timestamp(verified_at, field="verified_at")
+    requested_at_matches: ColumnElement[bool]
+    if expected.requested_at is None:
+        requested_at_matches = AlertSubscription.verification_requested_at.is_(None)
     else:
-        conditions.append(
-            AlertSubscription.verification_requested_at
-            == expected_verification_requested_at
+        requested_at_matches = AlertSubscription.verification_requested_at == (
+            _aware_timestamp(expected.requested_at, field="expected requested_at")
         )
     subscription_id = db.execute(
         update(AlertSubscription)
-        .where(*conditions)
-        .values(**values)
+        .where(
+            AlertSubscription.investor_id == investor_id,
+            AlertSubscription.email == expected_email,
+            AlertSubscription.verification_status == expected.status,
+            requested_at_matches,
+        )
+        .values(
+            verification_status=status,
+            verification_requested_at=requested_at,
+            verified_at=verified_at,
+            updated_at=func.now(),
+        )
         .returning(AlertSubscription.id)
     ).scalar_one_or_none()
     _finish_write(db, commit=commit)
@@ -275,57 +314,6 @@ def update_verification_state(  # pylint: disable=too-many-arguments,too-many-br
     subscription = db.get(AlertSubscription, subscription_id)
     if subscription is None:
         raise RuntimeError("alert subscription disappeared after verification update")
-    db.refresh(subscription)
-    return subscription
-
-
-def record_delivery_outcome(  # pylint: disable=too-many-arguments
-    db: Session,
-    *,
-    investor_id: UUID,
-    delivery_status: str,
-    delivery_at: datetime,
-    error_code: str | None = None,
-    commit: bool = True,
-) -> AlertSubscription | None:
-    """Record an outcome without allowing an older event to replace a newer one."""
-    commit = _validate_commit(commit)
-    delivery_at = _aware_timestamp(delivery_at, field="delivery_at")
-    status = str(delivery_status).strip()
-    if not status:
-        raise ValueError("delivery status must not be empty")
-    if "\r" in status or "\n" in status:
-        raise ValueError("delivery status must not contain line breaks")
-    if error_code is not None and ("\r" in error_code or "\n" in error_code):
-        raise ValueError("error code must not contain line breaks")
-    normalised_error_code = (
-        error_code.strip()[:DELIVERY_ERROR_CODE_LIMIT] or None
-        if error_code is not None
-        else None
-    )
-
-    subscription_id = db.execute(
-        update(AlertSubscription)
-        .where(
-            AlertSubscription.investor_id == investor_id,
-            (AlertSubscription.last_delivery_at.is_(None))
-            | (AlertSubscription.last_delivery_at < delivery_at),
-        )
-        .values(
-            last_delivery_status=status,
-            last_delivery_error_code=normalised_error_code,
-            last_delivery_at=delivery_at,
-            updated_at=func.now(),
-        )
-        .returning(AlertSubscription.id)
-    ).scalar_one_or_none()
-    _finish_write(db, commit=commit)
-    if subscription_id is None:
-        return get_subscription_by_investor(db, investor_id)
-
-    subscription = db.get(AlertSubscription, subscription_id)
-    if subscription is None:
-        raise RuntimeError("alert subscription disappeared after delivery update")
     db.refresh(subscription)
     return subscription
 

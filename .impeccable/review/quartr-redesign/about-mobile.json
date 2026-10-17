@@ -1,0 +1,26 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "34px",
+      "text": "About StonksInHand",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "How briefs are prepared",
+      "weight": "550"
+    },
+    {
+      "size": "24px",
+      "text": "What it is not",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 380,
+    "height": 844,
+    "width": 390
+  }
+}

@@ -1,0 +1,606 @@
+.surface {
+  --research-ink: var(--ink);
+  --research-muted: var(--ink-secondary);
+  --research-soft: var(--surface-context);
+  --research-line: var(--line);
+  --research-line-strong: var(--line-strong);
+  --research-brand: var(--brand);
+  --research-brand-soft: var(--brand-soft);
+  color: var(--ink);
+}
+
+.feedHero {
+  display: grid;
+  grid-template-columns: minmax(0,1.35fr) minmax(280px,.65fr);
+  gap: 64px;
+  align-items: center;
+  margin-bottom: 36px;
+}
+
+.feedIntro h1 {
+  font-size: 44px;
+  font-weight: 550;
+  line-height: 1.1;
+  letter-spacing: -.035em;
+  margin: 0 0 20px;
+  max-width: 760px;
+  text-wrap: balance;
+}
+
+.feedIntro p {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--ink-secondary);
+  max-width: 62ch;
+  margin: 0;
+}
+
+.feedScope {
+  border-left: 1px solid var(--line);
+  padding-left: 32px;
+}
+
+.feedScope strong {
+  display: block;
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 550;
+  letter-spacing: -.02em;
+}
+
+.feedScope p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-secondary);
+  margin: 12px 0 8px;
+}
+
+.feedScope a {
+  display: inline-flex;
+  gap: 12px;
+  min-height: 44px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.feedScope svg {
+  width: 16px;
+  height: 16px;
+}
+
+.feedWorkbench {
+  margin-bottom: 40px;
+}
+
+.filterPanel {
+  background: var(--canvas-subtle);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px 24px;
+  display: grid;
+  grid-template-columns: 180px minmax(0,1fr);
+  gap: 32px;
+  align-items: end;
+}
+
+.panelHeading {
+  margin: 0;
+}
+
+.panelHeading h2 {
+  font-size: 19px;
+  line-height: 1.3;
+  letter-spacing: -.015em;
+  font-weight: 550;
+  margin: 0;
+}
+
+.panelHeading p {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 12px 0 0;
+}
+
+.resetLink {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.filterFields {
+  display: grid;
+  grid-template-columns: minmax(180px,1fr) minmax(230px,1fr);
+  gap: 20px;
+  align-items: end;
+}
+
+.field,.dateField {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.field>span,.dateField>span {
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+
+.field select,.dateField input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  padding: 0 12px;
+  min-height: 48px;
+  min-width: 0;
+  width: 100%;
+  font-size: 16px;
+}
+
+.dateRangePicker {
+  position: relative;
+}
+
+.dateRangePicker>summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.dateRangePicker>summary::-webkit-details-marker {
+  display: none;
+}
+
+.dateRangePicker>summary>span {
+  display: grid;
+  gap: 4px;
+}
+
+.dateRangePicker small {
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.dateRangePicker strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.dateRangePicker i {
+  border: 1.5px solid var(--ink-secondary);
+  border-radius: 2px;
+  width: 16px;
+  height: 16px;
+  position: relative;
+}
+
+.dateRangePicker i::before {
+  content: "";
+  border-top: 1px solid;
+  position: absolute;
+  top: 4px;
+  left: 2px;
+  right: 2px;
+}
+
+.dateRangePicker[open]>summary {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.dateRangePopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 10;
+  width: min(420px,calc(100vw - 64px));
+  padding: 20px;
+  background: var(--surface);
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: 16px;
+}
+
+.rangePresets {
+  display: flex;
+  gap: 8px;
+}
+
+.rangePreset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.rangePresetActive {
+  background: var(--ink);
+  color: white;
+  border-color: var(--ink);
+}
+
+.dateRangeInputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.dateRangePopover>p {
+  font-size: 13px;
+  color: var(--ink-secondary);
+  margin: 0;
+}
+
+.feedLayout {
+  display: grid;
+  grid-template-columns: minmax(0,1.85fr) minmax(280px,.85fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.feedReading {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 28px 32px;
+  min-width: 0;
+}
+
+.feedHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.feedHeading h2 {
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 550;
+  letter-spacing: -.025em;
+  margin: 0;
+}
+
+.feedHeading>span {
+  color: var(--ink-tertiary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.feedList {
+  min-width: 0;
+}
+
+.dateGroup {
+  margin-top: 28px;
+}
+
+.dateGroup>h3 {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0 0 4px;
+}
+
+.feedContext {
+  position: sticky;
+  top: 104px;
+  min-width: 0;
+}
+
+.trendingPanel {
+  background: var(--surface-context);
+  border-radius: 8px;
+  padding: 28px;
+}
+
+.trendingList {
+  display: grid;
+  margin-top: 24px;
+}
+
+.trendItem {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 16px 0;
+  min-height: 64px;
+  border-top: 1px solid #d4d5d2;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.trendItem:hover .trendSymbol {
+  text-decoration: underline;
+}
+
+.trendRank {
+  font-size: 12px;
+  color: var(--ink-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.trendSymbol {
+  font-size: 17px;
+  font-weight: 550;
+}
+
+.trendCount {
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+.trendEmpty {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-secondary);
+}
+
+.contextGuide {
+  padding: 28px 4px;
+}
+
+.contextGuide h2 {
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 550;
+  letter-spacing: -.02em;
+  margin: 0 0 12px;
+}
+
+.contextGuide p {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.contextGuide a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 14px;
+  color: var(--ink);
+  margin-top: 8px;
+}
+
+.previewNotice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 14px 16px;
+  margin-bottom: 24px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  color: var(--ink-secondary);
+  font-size: 14px;
+}
+
+.statePanel {
+  padding: 24px;
+  margin-top: 24px;
+  background: var(--canvas-subtle);
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.statePanel h2 {
+  font-size: 22px;
+  font-weight: 550;
+  margin: 0 0 12px;
+}
+
+.statePanel p {
+  color: var(--ink-secondary);
+  margin: 0 0 20px;
+}
+
+.loadMore {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
+  margin: 28px auto 0;
+  background: var(--ink);
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.loadMore:hover {
+  background: #292c30;
+}
+
+.loadMore:disabled {
+  opacity: .55;
+}
+
+.secondaryButton {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+@media(max-width:1050px) {
+  .feedHero {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .feedScope {
+    display: none;
+  }
+  .feedLayout {
+    grid-template-columns: minmax(0,1fr) 290px;
+    gap: 24px;
+  }
+  .feedReading {
+    padding: 24px;
+  }
+  .trendingPanel {
+    padding: 24px;
+  }
+}
+
+@media(max-width:767px) {
+  .feedIntro h1 {
+    font-size: 32px;
+  }
+  .feedIntro p {
+    font-size: 16px;
+  }
+  .feedHero {
+    margin-bottom: 28px;
+  }
+  .filterPanel {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 16px;
+  }
+  .filterFields {
+    grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+    gap: 12px;
+    position: relative;
+  }
+  .dateRangePicker {
+    position: static;
+  }
+  .filterPanel .panelHeading {
+    display: none;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .filterPanel .panelHeading:has(.resetLink) {
+    display: flex;
+  }
+  .filterPanel .panelHeading>div {
+    min-width: 0;
+  }
+  .feedWorkbench {
+    margin-bottom: 28px;
+  }
+  .feedLayout {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .feedReading {
+    width: 100%;
+    padding: 20px;
+  }
+  .feedHeading {
+    align-items: flex-start;
+    padding-bottom: 20px;
+  }
+  .feedHeading h2 {
+    font-size: 24px;
+  }
+  .feedContext {
+    position: static;
+    width: 100%;
+  }
+  .trendingPanel {
+    padding: 24px;
+  }
+  .contextGuide {
+    display: none;
+  }
+  .dateRangePicker>summary {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .dateRangePicker small {
+    display: none;
+  }
+  .dateRangePopover {
+    position: absolute;
+    width: 100%;
+    margin-top: 12px;
+    box-shadow: none;
+    border: 1px solid var(--line);
+  }
+  .dateRangeInputs {
+    grid-template-columns: 1fr;
+  }
+  .dateGroup {
+    margin-top: 24px;
+  }
+}
+
+.citationList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.citationList>a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--ink);
+}
+
+.citationList>span {
+  color: var(--ink-secondary);
+}
+
+.citationList strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.citationList em {
+  font-size: 13px;
+  font-style: normal;
+  color: var(--ink-secondary);
+}
+
+.metric {
+  border-top: 1px solid var(--line);
+  padding: 20px 0;
+  display: grid;
+  gap: 12px;
+}
+
+.metric>span {
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+
+.metric strong {
+  font-size: 24px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}

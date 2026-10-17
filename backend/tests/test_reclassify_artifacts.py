@@ -18,13 +18,16 @@ def _artifact(
     title: str,
     raw_text: str,
     metadata: dict | None = None,
+    source_type: str = "asx_announcement",
+    artifact_type: str = "asx_announcement_other",
 ):
     return SimpleNamespace(
         id=artifact_id,
         ticker=SimpleNamespace(symbol=ticker),
         title=title,
         raw_text=raw_text,
-        source_type="asx_announcement",
+        source_type=source_type,
+        artifact_type=artifact_type,
         source_adapter=ticker.lower(),
         document_url=f"https://example.test/{artifact_id}.pdf",
         s3_key=None,
@@ -100,6 +103,48 @@ def test_applied_reclassification_is_idempotent_and_preserves_analysis() -> None
     assert artifact.artifact_metadata["extracted_data_stale"] is True
     assert artifact.artifact_metadata["about"] == "Existing summary"
     assert artifact.artifact_metadata["sentiment_label"] == "neutral"
+
+
+def test_reclassification_stores_an_announcements_category_type() -> None:
+    dividend = (
+        "The board declared a dividend of 83 cents per share. "
+        "Record date 10 March 2026. Payment date 2 April 2026."
+    )
+    announcement = _artifact(
+        artifact_id=1,
+        ticker="CSL",
+        title="Interim Dividend",
+        raw_text=dividend,
+    )
+    story = _artifact(
+        artifact_id=2,
+        ticker="CSL",
+        title="Interim Dividend",
+        raw_text=dividend,
+        source_type="news",
+        artifact_type="news_article",
+    )
+    unapplied = _artifact(
+        artifact_id=3,
+        ticker="CSL",
+        title="Interim Dividend",
+        raw_text=dividend,
+    )
+
+    reclassify_records(
+        [announcement, story],
+        ReclassificationOptions(dry_run=False, batch_size=10, limit=10),
+    )
+    reclassify_records(
+        [unapplied],
+        ReclassificationOptions(dry_run=True, batch_size=10, limit=10),
+    )
+
+    assert announcement.artifact_metadata["category"] == "DividendAnnouncement"
+    assert announcement.artifact_type == "dividend_announcement"
+    assert "classification" in story.artifact_metadata
+    assert story.artifact_type == "news_article"
+    assert unapplied.artifact_type == "asx_announcement_other"
 
 
 def test_reclassification_reports_unknown_documents() -> None:

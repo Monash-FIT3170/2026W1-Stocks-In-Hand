@@ -1,530 +1,25 @@
-import re
-import time
-from urllib.parse import urlparse
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.crud import ticker as crud
 from app.database.connection import get_db
-from app.models.artifact import Artifact
-from app.models.artifact_sentiment import ArtifactSentiment
-from app.models.artifact_summary import ArtifactSummary
-from app.models.ticker import Ticker
-from app.schemas.ticker import TickerCreate, TickerResponse
-from app.services.claim_traceability import exact_source_passage, validated_claim_evidence
+from app.read_models import ticker_brief, ticker_records
+from app.read_models.ticker_records import TickerNotFound
+from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
+from app.schemas.ticker_brief import TickerBrief
+from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
+from app.services.quotes import QuoteSource, live_quotes
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
 
-_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
-DEFAULT_TICKERS = {
-    "ANZ": {
-        "company_name": "ANZ Group Holdings Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "BHP": {
-        "company_name": "BHP Group Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-    "CBA": {
-        "company_name": "Commonwealth Bank of Australia",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Banks",
-    },
-    "COL": {
-        "company_name": "Coles Group Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Staples",
-        "industry": "Food & Staples Retailing",
-    },
-    "COH": {
-        "company_name": "Cochlear Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Health Care Equipment & Supplies",
-    },
-    "CSL": {
-        "company_name": "CSL Limited",
-        "exchange": "ASX",
-        "sector": "Health Care",
-        "industry": "Biotechnology",
-    },
-    "TCL": {
-        "company_name": "Transurban Group",
-        "exchange": "ASX",
-        "sector": "Industrials",
-        "industry": "Highways & Railtracks",
-    },
-    "TLS": {
-        "company_name": "Telstra Group Limited",
-        "exchange": "ASX",
-        "sector": "Communication Services",
-        "industry": "Diversified Telecommunication Services",
-    },
-    "WES": {
-        "company_name": "Wesfarmers Limited",
-        "exchange": "ASX",
-        "sector": "Consumer Discretionary",
-        "industry": "Consumer Staples Distribution & Retail",
-    },
-    "WDS": {
-        "company_name": "Woodside Energy Group Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "MQG": {
-        "company_name": "Macquarie Group Limited",
-        "exchange": "ASX",
-        "sector": "Financials",
-        "industry": "Capital Markets",
-    },
-    "ORG": {
-        "company_name": "Origin Energy Limited",
-        "exchange": "ASX",
-        "sector": "Energy",
-        "industry": "Oil, Gas & Consumable Fuels",
-    },
-    "RIO": {
-        "company_name": "Rio Tinto Limited",
-        "exchange": "ASX",
-        "sector": "Materials",
-        "industry": "Diversified Metals & Mining",
-    },
-}
-
-
-def _ensure_default_tickers(db: Session) -> None:
-    changed = False
-
-    for symbol, defaults in DEFAULT_TICKERS.items():
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol)
-        if not ticker:
-            db.add(Ticker(symbol=symbol, **defaults))
-            changed = True
-            continue
-
-        for key, value in defaults.items():
-            current = getattr(ticker, key)
-            if not current or (key == "company_name" and current == symbol):
-                setattr(ticker, key, value)
-                changed = True
-
-    if changed:
-        db.commit()
-
-
-QUOTE_CACHE_TTL_SECONDS = 300
-QUOTE_FAILURE_TTL_SECONDS = 60
-# symbol -> (fetched_at, quote or None). Quotes are read live from Yahoo instead of being
-# stored, so there is no market data table behind the price cards. Failures are cached too,
-# for a shorter window, so a symbol Yahoo cannot resolve does not cost an HTTP timeout on
-# every page load.
-_QUOTE_CACHE: dict[str, tuple[float, tuple[float, float] | None]] = {}
-
-
-def _fetch_quote(symbol: str) -> tuple[float, float] | None:
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.AX"
-    try:
-        timeout = httpx.Timeout(2.5, connect=1.5)
-        with httpx.Client(timeout=timeout) as client:
-            response = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        result = response.json().get("chart", {}).get("result") or []
-        if not result:
-            return None
-
-        meta = result[0].get("meta", {})
-        current_price = meta.get("regularMarketPrice")
-        previous_close = meta.get("chartPreviousClose") or meta.get(
-            "regularMarketPreviousClose"
-        )
-        if current_price is None or previous_close is None:
-            return None
-        return float(current_price), float(previous_close)
-    except Exception:
-        return None
-
-
-def _live_quote(symbol: str) -> tuple[float, float] | None:
-    """Current price and previous close for a ticker, cached briefly in-process.
-
-    Returns None when Yahoo is unreachable or the response cannot be parsed, so
-    callers degrade to "N/A" rather than failing the request.
-    """
-    now = time.monotonic()
-    cached = _QUOTE_CACHE.get(symbol)
-    if cached:
-        fetched_at, cached_quote = cached
-        ttl = QUOTE_CACHE_TTL_SECONDS if cached_quote else QUOTE_FAILURE_TTL_SECONDS
-        if now - fetched_at < ttl:
-            return cached_quote
-
-    quote = _fetch_quote(symbol)
-    _QUOTE_CACHE[symbol] = (now, quote)
-    return quote
-
-
-def _money(value) -> str:
-    if value is None:
-        return "N/A"
-    return f"${float(value):,.2f}"
-
-
-def _day_change(quote: tuple[float, float] | None) -> str:
-    if not quote:
-        return "N/A"
-    current, previous = quote
-    if previous == 0:
-        return "N/A"
-    change = ((current - previous) / previous) * 100
-    return f"{change:+.2f}%"
-
-
-def _sentiment_label(value: str | None) -> str:
-    labels = {
-        "positive": "Generally Positive",
-        "negative": "Generally Negative",
-        "neutral": "Neutral",
-    }
-    return labels.get((value or "").lower(), "Unavailable")
-
-
-def _clean_text(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    cleaned = " ".join(value.split())
-    return cleaned or None
-
-
-def _preview(value: object, max_length: int = 220) -> str | None:
-    cleaned = _clean_text(value)
-    if not cleaned:
-        return None
-    if len(cleaned) <= max_length:
-        return cleaned
-    return f"{cleaned[:max_length].rstrip()}..."
-
-
-def _metadata_value(artifact: Artifact, key: str, fallback: str) -> str:
-    metadata = artifact.artifact_metadata or {}
-    return _clean_text(metadata.get(key)) or fallback
-
-
-def _metadata_source_name(artifact: Artifact) -> str | None:
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    return _clean_text(metadata.get("source_name"))
-
-
-def _source_action_label(artifact: Artifact) -> str:
-    source_type = (artifact.source_type or "").lower()
-    if source_type == "asx_announcement":
-        return "View original ASX filing"
-    if source_type == "news":
-        source_name = _metadata_source_name(artifact)
-        if source_name:
-            return f"View original at {source_name}"
-    return "View original source"
-
-
-def _metadata_text_list(metadata: dict, key: str) -> list[str]:
-    values = metadata.get(key)
-    if not isinstance(values, list):
-        return []
-
-    cleaned_values = []
-    seen = set()
-    for value in values:
-        cleaned = _clean_text(value)
-        if cleaned and cleaned not in seen:
-            cleaned_values.append(cleaned)
-            seen.add(cleaned)
-    return cleaned_values
-
-
-def _clarity_for_artifact(artifact: Artifact | None) -> dict:
-    metadata = (
-        artifact.artifact_metadata
-        if artifact and isinstance(artifact.artifact_metadata, dict)
-        else {}
-    )
-    clarity_keys = ("confirmed_facts", "speculation")
-    confirmed_facts = _metadata_text_list(metadata, "confirmed_facts")
-    speculation = _metadata_text_list(metadata, "speculation")
-    return {
-        "is_classified": all(isinstance(metadata.get(key), list) for key in clarity_keys),
-        "confirmed_facts": confirmed_facts,
-        "speculation": speculation,
-        "traceable_claims": _traceable_claims_for_artifact(
-            artifact,
-            confirmed_facts=confirmed_facts,
-            speculation=speculation,
-        ),
-    }
-
-
-def _format_announcement_time(artifact: Artifact) -> str:
-    if artifact.published_at:
-        return f"{artifact.published_at.strftime('%b')} {artifact.published_at.day}, {artifact.published_at.year}"
-    return "Recently"
-
-
-def _format_month(value):
-    if not value:
-        return "Recent"
-    return value.strftime("%b %Y")
-
-
-def _format_label(value, fallback):
-    cleaned = _clean_text(value)
-    if not cleaned or cleaned.upper() == "UNKNOWN":
-        cleaned = _clean_text(fallback) or "Announcement"
-    label = cleaned.replace("_", " ").replace("-", " ")
-    # Split CamelCase category names such as "DividendAnnouncement", but leave
-    # all-caps words alone so acronyms do not come back as "U N K N O W N".
-    label = " ".join(
-        word if word.isupper() else _CAMEL_BOUNDARY.sub(" ", word)
-        for word in label.split()
-    )
-    return label.title()
-
-
-def _format_key_date(value):
-    if not value:
-        return "No filings yet"
-    return value.strftime("%b %Y")
-
-
-def _source_from_values(label, title, url, published_at=None, evidence_text=None):
-    cleaned_url = _clean_text(url)
-    if not _is_safe_source_url(cleaned_url):
-        return None
-    return {
-        "label": label,
-        "title": _clean_text(title) or label,
-        "url": cleaned_url,
-        "published_at": published_at.isoformat() if published_at else None,
-        "evidence_text": _preview(evidence_text, 180),
-    }
-
-
-def _is_safe_source_url(value: str | None) -> bool:
-    if not value:
-        return False
-    try:
-        parsed_url = urlparse(value)
-    except ValueError:
-        return False
-    return parsed_url.scheme in {"http", "https"} and bool(parsed_url.netloc)
-
-
-def _artifact_source_url(artifact: Artifact) -> str | None:
-    for value in (artifact.document_url, artifact.canonical_url, artifact.url):
-        cleaned = _clean_text(value)
-        if _is_safe_source_url(cleaned):
-            return cleaned
-    return None
-
-
-def _exact_source_passage(raw_text: object, claim: object) -> str | None:
-    """Return the claim only when it is a verbatim passage in the document."""
-    return exact_source_passage(raw_text, claim)
-
-
-def _source_for_claim(
-    artifact: Artifact,
-    claim: str,
-    passage: str | None = None,
-) -> dict | None:
-    exact_passage = passage or _exact_source_passage(artifact.raw_text, claim)
-    source = _source_from_values(
-        label=_format_label(artifact.source_type, "Source"),
-        title=artifact.title,
-        url=_artifact_source_url(artifact),
-        published_at=artifact.published_at,
-        evidence_text=exact_passage,
-    )
-    if source and exact_passage:
-        # Keep the complete verified passage rather than a generic preview.
-        source["evidence_text"] = exact_passage
-    return source
-
-
-def _traceable_claims_for_artifact(
-    artifact: Artifact | None,
-    *,
-    confirmed_facts: list[str],
-    speculation: list[str],
-) -> list[dict]:
-    if not artifact:
-        return []
-
-    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-    evidence = {
-        (record["kind"], record["text"]): record["passage"]
-        for record in validated_claim_evidence(metadata, artifact.raw_text)
-    }
-
-    return [
-        {
-            "text": claim,
-            "kind": kind,
-            "source": _source_for_claim(artifact, claim, evidence.get((kind, claim))),
-        }
-        for kind, claims in (
-            ("confirmed_fact", confirmed_facts),
-            ("speculation", speculation),
-        )
-        for claim in claims
-    ]
-
-
-def _sources_for_artifact(artifact: Artifact):
-    source = _source_from_values(
-        label=_format_label(artifact.source_type, "Source"),
-        title=artifact.title,
-        url=_artifact_source_url(artifact),
-        published_at=artifact.published_at or artifact.created_at,
-        evidence_text=artifact.raw_text,
-    )
-    return [source] if source else []
-
-
-def _ticker_artifacts(db: Session, ticker_id: UUID, limit: int = 10) -> list[Artifact]:
-    return (
-        db.query(Artifact)
-        .filter(Artifact.ticker_id == ticker_id)
-        .order_by(Artifact.published_at.desc().nullslast(), Artifact.created_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-
-def _latest_sentiment_for_ticker(db: Session, ticker_id: UUID) -> ArtifactSentiment | None:
-    return (
-        db.query(ArtifactSentiment)
-        .join(Artifact, ArtifactSentiment.artifact_id == Artifact.id)
-        .filter(Artifact.ticker_id == ticker_id)
-        .order_by(ArtifactSentiment.created_at.desc())
-        .first()
-    )
-
-
-def _themes_from_artifacts(artifacts: list[Artifact], limit: int = 5) -> list[str]:
-    themes: list[str] = []
-    seen: set[str] = set()
-
-    for artifact in artifacts:
-        metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
-        label = _format_label(metadata.get("category"), artifact.artifact_type)
-        if label.lower() == "unknown":
-            label = _format_label(artifact.artifact_type, "Announcement")
-        theme = f"{label} activity"
-        key = theme.lower()
-        if key not in seen:
-            themes.append(theme)
-            seen.add(key)
-        if len(themes) >= limit:
-            break
-
-    return themes
-
-
-def _ticker_brief_payload(symbol: str, db: Session) -> dict:
-    _ensure_default_tickers(db)
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    quote = _live_quote(ticker.symbol)
-    artifacts = _ticker_artifacts(db, ticker.id, limit=20)
-    latest_artifact = artifacts[0] if artifacts else None
-    latest_sentiment = _latest_sentiment_for_ticker(db, ticker.id)
-    sources = _sources_for_artifact(latest_artifact) if latest_artifact else []
-    confidence_pct = (
-        f"{round(float(latest_sentiment.confidence_score) * 100)}%"
-        if latest_sentiment and latest_sentiment.confidence_score is not None
-        else "N/A"
-    )
-    story = (
-        _metadata_value(latest_artifact, "about", _preview(latest_artifact.raw_text, 240))
-        if latest_artifact and latest_artifact.raw_text
-        else (
-            f"{ticker.symbol} is tracked from the StonksInHand database. "
-            "Add announcements and analysis data to enrich this brief."
-        )
-    )
-
-    overview = {
-        "symbol": ticker.symbol,
-        "company_name": ticker.company_name,
-        "sector": ticker.sector or ticker.industry or ticker.exchange,
-        "sentiment_status": "available" if latest_sentiment else "unavailable",
-        "sentiment_label": _sentiment_label(
-            latest_sentiment.sentiment_label if latest_sentiment else None
-        ),
-        "last_updated": (
-            _format_announcement_time(latest_artifact)
-            if latest_artifact
-            else "No updates yet"
-        ),
-        "current_price": _money(quote[0] if quote else None),
-        "day_change": _day_change(quote),
-        "story": story,
-        "sources_count": len(sources),
-        "latest_signal_confidence_pct": confidence_pct,
-        "latest_signal_model": latest_sentiment.model_used if latest_sentiment else None,
-        "latest_signal_analyzed_at": (
-            latest_sentiment.created_at.isoformat()
-            if latest_sentiment and latest_sentiment.created_at
-            else None
-        ),
-        # Deprecated compatibility field. New consumers must use the accurately
-        # named latest-signal field above.
-        "public_sentiment_pct": confidence_pct,
-        "clarity": _clarity_for_artifact(latest_artifact),
-        "sources": sources,
-    }
-    aside = {
-        "key_numbers": [
-            {"label": "Current price", "value": _money(quote[0] if quote else None)},
-            {"label": "Day change", "value": _day_change(quote)},
-            {
-                "label": "Latest filing",
-                "value": _format_key_date(
-                    latest_artifact.published_at if latest_artifact else None
-                ),
-            },
-            {
-                "label": "Latest type",
-                "value": (
-                    _format_label(
-                        _metadata_value(
-                            latest_artifact,
-                            "category",
-                            latest_artifact.artifact_type,
-                        ),
-                        latest_artifact.artifact_type,
-                    )
-                    if latest_artifact
-                    else "No filings yet"
-                ),
-            },
-        ],
-        "themes": _themes_from_artifacts(artifacts),
-    }
-    return {"overview": overview, "aside": aside}
-
 
 @router.post("/", response_model=TickerResponse)
-def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
+def create_ticker(
+    ticker: TickerCreate,
+    db: Session = Depends(get_db),
+):
     existing = crud.get_ticker_by_symbol(db, symbol=ticker.symbol)
     if existing:
         raise HTTPException(status_code=400, detail="Ticker symbol already exists")
@@ -533,13 +28,11 @@ def create_ticker(ticker: TickerCreate, db: Session = Depends(get_db)):
 
 @router.get("/", response_model=list[TickerResponse])
 def get_tickers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     return crud.get_tickers(db, skip=skip, limit=limit)
 
 
 @router.get("/symbol/{symbol}", response_model=TickerResponse)
 def get_ticker_by_symbol(symbol: str, db: Session = Depends(get_db)):
-    _ensure_default_tickers(db)
     ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
@@ -555,123 +48,47 @@ def get_ticker(ticker_id: UUID, db: Session = Depends(get_db)):
 
 
 @router.patch("/{ticker_id}", response_model=TickerResponse)
-def update_ticker(ticker_id: UUID, data: dict, db: Session = Depends(get_db)):
+def update_ticker(
+    ticker_id: UUID,
+    data: TickerUpdate,
+    db: Session = Depends(get_db),
+):
     ticker = crud.get_ticker(db, ticker_id=ticker_id)
     if not ticker:
         raise HTTPException(status_code=404, detail="Ticker not found")
-    return crud.update_ticker(db=db, ticker_id=ticker_id, data=data)
+    return crud.update_ticker(
+        db=db,
+        ticker_id=ticker_id,
+        data=data.model_dump(exclude_unset=True),
+    )
 
 
-@router.get("/symbol/{symbol}/overview")
-def get_ticker_overview(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["overview"]
+@router.get("/symbol/{symbol}/brief", response_model=TickerBrief)
+def get_ticker_brief(
+    symbol: str,
+    db: Session = Depends(get_db),
+    quotes: QuoteSource = Depends(live_quotes),
+):
+    """The overview and aside a ticker's research summary opens with."""
+    try:
+        return ticker_brief.read_ticker_brief(db, symbol, quotes=quotes)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc
 
 
-@router.get("/symbol/{symbol}/brief-aside")
-def get_ticker_brief_aside(symbol: str, db: Session = Depends(get_db)):
-    return _ticker_brief_payload(symbol, db)["aside"]
-
-
-@router.get("/symbol/{symbol}/brief")
-def get_ticker_brief(symbol: str, db: Session = Depends(get_db)):
-    """Return the overview and aside from one quote and artifact lookup."""
-    return _ticker_brief_payload(symbol, db)
-
-
-@router.get("/symbol/{symbol}/news-feed")
+@router.get("/symbol/{symbol}/news-feed", response_model=list[NewsFeedRecord])
 def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    artifacts = _ticker_artifacts(db, ticker.id)
-    return [
-        {
-            "id": str(artifact.id),
-            "ticker": ticker.symbol,
-            "tag": _format_label(
-                _metadata_value(
-                    artifact,
-                    "category",
-                    artifact.source_type or artifact.artifact_type,
-                ),
-                artifact.artifact_type,
-            ),
-            "time": _format_announcement_time(artifact),
-            "title": artifact.title or f"{ticker.symbol} announcement",
-            "about": _metadata_value(
-                artifact,
-                "about",
-                _metadata_value(
-                    artifact,
-                    "summary",
-                    "Summary pending.",
-                ),
-            ),
-            "changed": _metadata_value(
-                artifact,
-                "changed",
-                "No change summary available yet.",
-            ),
-            "matters": _metadata_value(
-                artifact,
-                "matters",
-                "No investment impact summary available yet.",
-            ),
-            "url": artifact.url,
-            "source_type": artifact.source_type,
-            "source_name": _metadata_source_name(artifact),
-            "source_label": _source_action_label(artifact),
-            "sources": _sources_for_artifact(artifact),
-        }
-        for artifact in artifacts
-    ]
+    """A ticker's newest records, each as its artifact card."""
+    try:
+        return ticker_records.read_news_feed(db, symbol)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc
 
 
-@router.get("/symbol/{symbol}/deep-dive-timeline")
+@router.get("/symbol/{symbol}/deep-dive-timeline", response_model=list[DeepDiveEvent])
 def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
-    """Return only persisted filing events; an empty history stays empty."""
-    ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        # Deep-dive can be the first ticker endpoint requested by the client.
-        # Keep it consistent with the brief endpoints instead of relying on a
-        # separate request to create the deployed ticker records first.
-        _ensure_default_tickers(db)
-        ticker = crud.get_ticker_by_symbol(db, symbol=symbol.upper())
-    if not ticker:
-        raise HTTPException(status_code=404, detail="Ticker not found")
-
-    artifacts = _ticker_artifacts(db, ticker.id)
-    timeline = []
-    for artifact in artifacts:
-        summary = (
-            db.query(ArtifactSummary)
-            .filter(ArtifactSummary.artifact_id == artifact.id)
-            .order_by(ArtifactSummary.created_at.desc())
-            .first()
-        )
-        timeline.append(
-            {
-                "month": _format_month(artifact.published_at),
-                "tag": _format_label(
-                    _metadata_value(artifact, "category", artifact.artifact_type),
-                    artifact.artifact_type,
-                ),
-                "title": artifact.title or f"{ticker.symbol} update",
-                "date": _format_announcement_time(artifact),
-                "detail": (
-                    summary.summary_text
-                    if summary
-                    else (
-                        _preview(artifact.raw_text, 240)
-                        if artifact.raw_text
-                        else "No detail available yet."
-                    )
-                ),
-                "metrics": [f"Source: {artifact.source_type or artifact.artifact_type}"],
-                "tone": "green",
-                "sources": _sources_for_artifact(artifact),
-            }
-        )
-
-    return timeline
+    """A ticker's research history from its stored records; with none it is empty."""
+    try:
+        return ticker_records.read_deep_dive(db, symbol)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc

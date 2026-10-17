@@ -1,0 +1,236 @@
+{
+ "shortName": "TRANSURBAN",
+ "symbol": "tcl.asx",
+ "date": "2026-10-07",
+ "itemCount": 15,
+ "pageSize": 15,
+ "page": 1,
+ "totalCount": 2002,
+ "pageCount": 134,
+ "underlyingIssuerSymbol": "tcl.asx",
+ "items": {
+  "retracted": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "time": [
+   "2026-10-07 08:50:39",
+   "2026-10-01 08:23:38",
+   "2026-10-01 07:40:43",
+   "2026-09-30 17:37:40",
+   "2026-09-17 08:31:38",
+   "2026-09-14 08:36:14",
+   "2026-09-07 09:33:50",
+   "2026-09-03 09:17:14",
+   "2026-09-03 09:05:49",
+   "2026-09-03 09:03:39",
+   "2026-08-27 16:51:11",
+   "2026-08-21 14:27:47",
+   "2026-08-20 09:43:52",
+   "2026-08-13 08:28:44",
+   "2026-08-13 08:19:49"
+  ],
+  "types": [
+   [
+    "02009"
+   ],
+   [
+    "07001",
+    "11001"
+   ],
+   [
+    "11001"
+   ],
+   [
+    "11001"
+   ],
+   [
+    "03014"
+   ],
+   [
+    "14014",
+    "08001",
+    "08004",
+    "16002"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "06027"
+   ],
+   [
+    "06020"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "02009"
+   ],
+   [
+    "11001"
+   ],
+   [
+    "10001",
+    "10002",
+    "10003"
+   ],
+   [
+    "03025"
+   ]
+  ],
+  "pageCount": [
+   2,
+   2,
+   1,
+   1,
+   2,
+   24,
+   2,
+   3,
+   4,
+   6,
+   4,
+   2,
+   1,
+   5,
+   12
+  ],
+  "timestamp": [
+   1791323439,
+   1790807018,
+   1790804443,
+   1790753860,
+   1789597898,
+   1789338974,
+   1788737630,
+   1788391034,
+   1788390349,
+   1788390219,
+   1787813471,
+   1787286467,
+   1787183032,
+   1786573724,
+   1786573189
+  ],
+  "fileID": [
+   "3A703481",
+   "3A703044",
+   "3A703037",
+   "3A703000",
+   "3A701929",
+   "3A701643",
+   "3A701178",
+   "3A700897",
+   "3A700890",
+   "3A700889",
+   "3A700127",
+   "3A699431",
+   "3A699293",
+   "3A698725",
+   "3A698715"
+  ],
+  "fileSize": [
+   390673,
+   133423,
+   82164,
+   80220,
+   112312,
+   5406202,
+   387467,
+   393919,
+   13169,
+   17046,
+   460644,
+   392216,
+   77101,
+   16679,
+   333098
+  ],
+  "fileType": [
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf",
+   "pdf"
+  ],
+  "priceSensitive": [
+   0,
+   1,
+   0,
+   0,
+   1,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   1,
+   0,
+   0
+  ],
+  "attachmentCount": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0
+  ],
+  "heading": [
+   "Appendix 3Y - Change of Director's Interest Notice",
+   "Acquisition of additional interests in Westlink M7, NCX, WCX",
+   "I-24 Southeast Choice Lanes, Tennessee",
+   "NSW Toll Reform finalised",
+   "August 2026 traffic",
+   "2026 Notice of meetings",
+   "Appendix 3Y - Change of Director's Interest Notice",
+   "Appendix 3Y - Change of Director's Interest Notice",
+   "Notification of cessation of securities - TCL",
+   "Application for quotation of securities - TCL",
+   "Appendix 3Y - Change of Director's Interest Notices x 2",
+   "Appendix 3Y - Change of Director's Interest Notice",
+   "I-24 Choice Lanes Tennessee",
+   "Update - Dividend/Distribution - TCL",
+   "Appendix 4G"
+  ]
+ }
+}

@@ -1,22 +1,31 @@
 """Request and response contracts for investor notification preferences."""
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.alert_vocabulary import (
+    AlertSentimentLabel,
+    DEFAULT_ALERT_MIN_CONFIDENCE,
+    DEFAULT_ALERT_SENTIMENT_LABELS,
+    VerificationStatus,
+)
 
-SentimentLabel = Literal["positive", "neutral", "negative"]
-VerificationStatus = Literal["unverified", "pending", "verified", "failed"]
+
+SentimentLabel = AlertSentimentLabel
 
 
 class NotificationPreferencesUpdate(BaseModel):
     """Editable settings for sentiment-driven watchlist alerts."""
 
     enabled: bool
-    min_confidence: float = Field(default=0.75, ge=0, le=1)
+    min_confidence: float = Field(
+        default=float(DEFAULT_ALERT_MIN_CONFIDENCE),
+        ge=0,
+        le=1,
+    )
     sentiment_labels: list[SentimentLabel] = Field(
-        default_factory=lambda: ["negative"],
+        default_factory=lambda: list(DEFAULT_ALERT_SENTIMENT_LABELS),
         min_length=1,
         max_length=3,
     )

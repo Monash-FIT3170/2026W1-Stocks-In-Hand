@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import math
-import os
 import zipfile
 from dataclasses import dataclass
 from functools import lru_cache
@@ -21,7 +20,7 @@ from parsing.classification import (
     ClassificationResult,
     classify_document,
 )
-from parsing.extractors import extractor_for
+from parsing.classification.taxonomy import category_definition
 
 
 @dataclass(frozen=True)
@@ -32,15 +31,6 @@ class ParsedDocument:
     category_confidence: float
     extracted_data: dict[str, Any]
     classification: ClassificationResult | None = None
-
-
-@dataclass(frozen=True)
-class AnalysisOutput:
-    parsed: ParsedDocument
-    summary: dict[str, str] | None
-    summary_model: str | None
-    summary_prompt_version: str | None
-    sentiment: dict[str, Any]
 
 
 @lru_cache(maxsize=1)
@@ -109,8 +99,8 @@ def extract_pdf(
     content: bytes,
     *,
     max_pages: int,
-    max_ocr_pages: int = 20,
-    max_ocr_pixels_per_page: int = 8_000_000,
+    max_ocr_pages: int,
+    max_ocr_pixels_per_page: int,
 ) -> ParsedDocument:
     if not content.startswith(b"%PDF-"):
         raise PermanentDocumentError("S3 object is not a PDF", code="invalid_pdf")
@@ -298,15 +288,14 @@ def extract_document(
     document_format: DocumentFormat,
     max_pages: int,
     max_ocr_pages: int,
+    max_ocr_pixels_per_page: int,
 ) -> ParsedDocument:
     if document_format == "pdf":
         return extract_pdf(
             content,
             max_pages=max_pages,
             max_ocr_pages=max_ocr_pages,
-            max_ocr_pixels_per_page=int(
-                os.getenv("MAX_OCR_PIXELS_PER_PAGE", "8000000")
-            ),
+            max_ocr_pixels_per_page=max_ocr_pixels_per_page,
         )
     if document_format == "txt":
         return extract_text(content)
@@ -337,11 +326,12 @@ def apply_rules(
             source_adapter=source_adapter,
         )
     )
-    extractor = (
-        extractor_for(classification.primary_category)
+    definition = (
+        category_definition(classification.primary_category)
         if classification.status == "classified"
         else None
     )
+    extractor = definition.extractor if definition else None
     extracted_data = extractor.extract(title, parsed.raw_text) if extractor else {}
     return ParsedDocument(
         raw_text=parsed.raw_text,
@@ -350,171 +340,4 @@ def apply_rules(
         category_confidence=classification.score,
         extracted_data=extracted_data,
         classification=classification,
-    )
-
-
-def analyse_document(
-    content: bytes,
-    *,
-    title: str,
-    max_pages: int,
-    document_format: DocumentFormat = "pdf",
-    max_ocr_pages: int | None = None,
-    filename: str | None = None,
-    source_type: str | None = None,
-    source_adapter: str | None = None,
-) -> AnalysisOutput:
-    parsed = apply_rules(
-        extract_document(
-            content,
-            document_format=document_format,
-            max_pages=max_pages,
-            max_ocr_pages=max_ocr_pages
-            if max_ocr_pages is not None
-            else int(os.getenv("MAX_OCR_PAGES", "5")),
-        ),
-        title=title,
-        filename=filename,
-        source_type=source_type,
-        source_adapter=source_adapter,
-    )
-
-    # Sentiment is based on deterministic source text. An LLM response must not
-    # change the FinBERT input on message retries.
-    from app.services import sentiment as sentiment_service
-
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
-    sentiment_text = f"{title}\n\n{parsed.raw_text}"[:max_chars]
-    sentiment = sentiment_service.analyse_text(sentiment_text)
-
-    from app.services import llm as llm_service
-
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        summary = llm_service.summarise_announcement(
-            title=title,
-            category=parsed.category,
-            extracted_data=parsed.extracted_data,
-            raw_text=parsed.raw_text,
-        )
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = llm_service.SUMMARY_PROMPT_VERSION
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
-
-    return AnalysisOutput(
-        parsed=parsed,
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
-    )
-
-
-def analyse_public_discussion_text(
-    *,
-    title: str,
-    raw_text: str,
-    source_type: str,
-) -> AnalysisOutput:
-    """Analyse stored discussion text without treating it as a company filing."""
-    parsed = _text_document(raw_text or title)
-    from app.services import sentiment as sentiment_service
-
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
-    sentiment = sentiment_service.analyse_text(
-        f"{title}\n\n{parsed.raw_text}"[:max_chars]
-    )
-
-    from app.services import llm as llm_service
-
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        response = llm_service.summarise_public_discussion(
-            title=title,
-            source_type=source_type,
-            raw_text=parsed.raw_text,
-        )
-        summary = {
-            key: value
-            for key in ("summary", "about", "changed", "matters")
-            if isinstance((value := response.get(key)), str)
-        }
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = (
-            llm_service.PUBLIC_DISCUSSION_SUMMARY_PROMPT_VERSION
-        )
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
-
-    return AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text=parsed.raw_text,
-            page_count=1,
-            category="USER_DISCUSSION",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
-    )
-
-
-def analyse_news_text(
-    *,
-    title: str,
-    raw_text: str,
-    source_name: str | None = None,
-) -> AnalysisOutput:
-    """Analyse stored publisher text with the news-specific summary prompt."""
-    parsed = _text_document(raw_text or title)
-    from app.services import sentiment as sentiment_service
-
-    max_chars = int(os.getenv("MAX_ANALYSIS_CHARS", "50000"))
-    sentiment = sentiment_service.analyse_text(
-        f"{title}\n\n{parsed.raw_text}"[:max_chars]
-    )
-
-    from app.services import llm as llm_service
-
-    summary: dict[str, str] | None = None
-    summary_model: str | None = None
-    summary_prompt_version: str | None = None
-    try:
-        response = llm_service.summarise_news_article(
-            title=title,
-            source_name=source_name,
-            raw_text=parsed.raw_text,
-        )
-        summary = {
-            key: value
-            for key in ("summary", "about", "changed", "matters")
-            if isinstance((value := response.get(key)), str)
-        }
-        summary_model = llm_service.active_model_name()
-        summary_prompt_version = llm_service.NEWS_SUMMARY_PROMPT_VERSION
-    except RuntimeError as exc:
-        if "not configured" not in str(exc).lower():
-            raise
-
-    return AnalysisOutput(
-        parsed=ParsedDocument(
-            raw_text=parsed.raw_text,
-            page_count=1,
-            category="NEWS_ARTICLE",
-            category_confidence=1.0,
-            extracted_data={},
-        ),
-        summary=summary,
-        summary_model=summary_model,
-        summary_prompt_version=summary_prompt_version,
-        sentiment=sentiment,
     )

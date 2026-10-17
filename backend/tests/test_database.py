@@ -21,8 +21,6 @@ from collections.abc import Iterator
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from fastapi import Request
@@ -50,6 +48,7 @@ from app.models.scrape_run import ScrapeRun
 from app.models.ticker import Ticker
 from app.models.watchlist import Watchlist
 from app.models.watchlist_ticker import WatchlistTicker
+from app.services.artifact_summary import Summary
 from app.status import AnalysisStatus, DownloadStatus, ScrapeRunStatus
 
 # Every application table at the current Alembic head. Kept as an exact set so a
@@ -640,69 +639,6 @@ def test_database_can_persist_reddit_artifact(db_session: Session) -> None:
     assert saved.artifact_metadata["subreddit"] == "ASX"
 
 
-def test_ticker_mentions_connect_social_sentiment_to_ticker(
-    db_session: Session,
-) -> None:
-    """A social artifact can reach ticker sentiment through the join table."""
-    from app.api.routes.category_sentiment import read_ticker_category_sentiment
-
-    ticker = Ticker(
-        symbol=f"P{uuid.uuid4().hex[:8].upper()}",
-        company_name="Public Discussion Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.flush()
-
-    artifact = Artifact(
-        ticker_id=None,
-        source_type="mastodon",
-        artifact_type="mastodon_post",
-        title=f"Investors discuss {ticker.symbol}",
-        url="https://aus.social/@investor/123",
-        raw_text=f"I am positive about {ticker.symbol} after the update.",
-        content_hash=f"public-discussion-{uuid.uuid4()}",
-        published_at=datetime.now(timezone.utc),
-    )
-    db_session.add(artifact)
-    db_session.flush()
-    db_session.add_all(
-        [
-            ArtifactTickerMention(
-                artifact_id=artifact.id,
-                ticker_id=ticker.id,
-                match_method="ticker_symbol",
-                match_confidence=0.95,
-                matched_text=ticker.symbol,
-            ),
-            ArtifactSentiment(
-                artifact_id=artifact.id,
-                sentiment_label="positive",
-                confidence_score=0.9,
-                model_used="test-finbert",
-            ),
-        ]
-    )
-    db_session.commit()
-
-    result = read_ticker_category_sentiment(ticker.symbol, db_session)
-    discussion = result["categories"]["user_discussion"]
-
-    assert artifact.ticker_id is None
-    assert discussion["available"] is True
-    assert discussion["sentiment_label"] == "positive"
-    assert discussion["sources_count"] == 1
-    assert discussion["sources"] == [
-        {
-            "source_type": "mastodon",
-            "title": f"Investors discuss {ticker.symbol}",
-            "url": "https://aus.social/@investor/123",
-            "author": None,
-            "published_at": artifact.published_at,
-        }
-    ]
-
-
 def test_public_discussion_backfill_is_dry_run_first_and_idempotent(
     db_session: Session,
 ) -> None:
@@ -766,9 +702,9 @@ def test_artifact_carries_its_sentiment_and_summary(db_session: Session) -> None
 
     ``Ticker -> Artifact -> ArtifactSentiment / ArtifactSummary`` is the whole
     analysis path that survived the schema refactor. ``crud.artifact.store_artifact_analysis``
-    (called from ``lambdas/analysis.py``) writes all three in one pass, and the
+    (called from ``lambdas/artifact_analysis_records.py``) writes all three in one pass, and the
     ticker overview and deep-dive endpoints read them back through the
-    ``sentiments`` and ``summaries`` backrefs, so both directions need to work.
+    ``sentiments`` and ``summaries`` relationships, so both directions need to work.
     """
     ticker = Ticker(
         symbol=f"S{uuid.uuid4().hex[:8].upper()}",
@@ -822,10 +758,10 @@ def test_claim_evidence_survives_analysis_storage_and_ticker_overview(
     db_session: Session,
 ) -> None:
     """Generated quotations should survive worker storage and API readback."""
-    from app.api.routes import ticker as ticker_route
-    from app.crud.artifact import store_artifact_analysis
-    from app.services import llm
-    from lambdas import analysis
+    from app.read_models.ticker_brief import read_ticker_brief
+    from app.services import artifact_summary, generation
+    from app.services.generation.providers import ScriptedProvider
+    from app.services.quotes import FixedQuotes
 
     ticker = Ticker(
         symbol=f"T{uuid.uuid4().hex[:8].upper()}",
@@ -860,9 +796,7 @@ def test_claim_evidence_survives_analysis_storage_and_ticker_overview(
     db_session.add(ArtifactSummary(artifact_id=artifact.id, summary_text="Revenue rose."))
     db_session.commit()
 
-    with patch.object(analysis, "database_session") as session:
-        session.return_value.__enter__.return_value = db_session
-        missing, _ = analysis._missing_summary_artifact_ids(100)
+    missing, _ = artifact_summary.incomplete_announcements(db_session, limit=100)
     assert artifact.id in missing
 
     evidence = {
@@ -870,36 +804,24 @@ def test_claim_evidence_survives_analysis_storage_and_ticker_overview(
         "kind": "confirmed_fact",
         "passage": passage,
     }
-    with patch.object(llm, "_call_llm", return_value=json.dumps({
-        **summary,
-        "claim_evidence": [evidence],
-    })):
-        generated = llm.summarise_announcement(
-            title=artifact.title,
-            category="revenue",
-            extracted_data={},
-            raw_text=passage,
-        )
-    values = analysis._summary_values(SimpleNamespace(
-        summary=generated,
-        summary_model="bedrock:test-model",
-        summary_prompt_version=llm.SUMMARY_PROMPT_VERSION,
-    ))
-    store_artifact_analysis(db_session, artifact_id=artifact.id, raw_text=passage, summary=values)
+    generated = generation.generate(
+        generation.AnnouncementSummary(
+            title=artifact.title, category="revenue", extracted_data={}, raw_text=passage,
+        ),
+        provider=ScriptedProvider([json.dumps({**summary, "claim_evidence": [evidence]})]),
+    )
+    artifact_summary.record(db_session, artifact, artifact_summary.from_generated(generated))
+    db_session.commit()
     db_session.expire_all()
 
-    with patch.object(analysis, "database_session") as session:
-        session.return_value.__enter__.return_value = db_session
-        missing, _ = analysis._missing_summary_artifact_ids(100)
+    missing, _ = artifact_summary.incomplete_announcements(db_session, limit=100)
     assert artifact.id not in missing
-
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        overview = ticker_route.get_ticker_overview(ticker.symbol, db=db_session)
-    claim = overview["clarity"]["traceable_claims"][0]
-    assert claim["text"] == evidence["text"]
-    assert claim["source"]["evidence_text"] == passage
-    assert claim["source"]["url"] == artifact.document_url
-    assert claim["source"]["published_at"].startswith("2040-01-02")
+    brief = read_ticker_brief(db_session, ticker.symbol, quotes=FixedQuotes({}))
+    claim = brief.overview.clarity.traceable_claims[0]
+    assert claim.text == evidence["text"]
+    assert claim.source.evidence_text == passage
+    assert claim.source.url == artifact.document_url
+    assert claim.source.published_at.startswith("2040-01-02")
     assert artifact.artifact_metadata["claim_evidence"] == [evidence]
     assert artifact.summaries[0].prompt_version == "llm-announcement-summary-v4"
 
@@ -947,6 +869,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": True},
     )
     news = Artifact(
         ticker_id=ticker.id,
@@ -956,9 +879,30 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="News article body",
         published_at=published_at,
         content_hash=f"news-{uuid.uuid4()}",
-        artifact_metadata={"source_name": "Example News"},
+        artifact_metadata={"source_name": "Example News", "feed_eligible": True},
     )
-    db_session.add_all([announcement, reddit, news])
+    legacy_news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Previously analysed publisher report",
+        raw_text="Legacy news article body",
+        published_at=published_at,
+        content_hash=f"legacy-news-{uuid.uuid4()}",
+        analysis_status=AnalysisStatus.COMPLETED,
+        artifact_metadata={"source_name": "Legacy News"},
+    )
+    rejected_news = Artifact(
+        ticker_id=ticker.id,
+        source_type="news",
+        artifact_type="news_article",
+        title="Irrelevant publisher chatter",
+        raw_text="Non-substantive content",
+        published_at=published_at,
+        content_hash=f"rejected-news-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": False},
+    )
+    db_session.add_all([announcement, reddit, news, legacy_news, rejected_news])
     db_session.flush()
     db_session.add(
         ArtifactTickerMention(
@@ -981,6 +925,8 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     assert announcement.id in announcement_ids
     assert reddit.id in announcement_ids
     assert news.id in announcement_ids
+    assert legacy_news.id in announcement_ids
+    assert rejected_news.id not in announcement_ids
     items_by_id = {item.id: item for item in announcements}
     assert items_by_id[announcement.id].source_type == "asx_announcement"
     assert items_by_id[reddit.id].source_type == "reddit"
@@ -990,65 +936,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
     trend = next(item for item in trending if item.symbol == symbol)
 
-    assert trend.count == 3
-
-
-def test_ticker_brief_aside_returns_empty_database_state(
-    db_session: Session,
-) -> None:
-    """The ticker sidebar API should not fall back to mocked values."""
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"E{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Empty Sidebar Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        result = ticker_route.get_ticker_brief_aside(symbol.lower(), db=db_session)
-
-    assert result["key_numbers"] == [
-        {"label": "Current price", "value": "N/A"},
-        {"label": "Day change", "value": "N/A"},
-        {"label": "Latest filing", "value": "No filings yet"},
-        {"label": "Latest type", "value": "No filings yet"},
-    ]
-    assert result["themes"] == []
-
-
-def test_ticker_overview_reports_live_quote(db_session: Session) -> None:
-    """The overview API should format the live quote it is given.
-
-    The quote is fetched from Yahoo at request time rather than stored, so the
-    lookup is patched here and only the formatting and failure handling are
-    under test.
-    """
-    from app.api.routes import ticker as ticker_route
-
-    symbol = f"Q{uuid.uuid4().hex[:8].upper()}"
-    ticker = Ticker(
-        symbol=symbol,
-        company_name="Quote Test Limited",
-        exchange="ASX",
-    )
-    db_session.add(ticker)
-    db_session.commit()
-
-    with patch.object(ticker_route, "_live_quote", return_value=(31.25, 30.0)):
-        result = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
-
-    assert result["current_price"] == "$31.25"
-    assert result["day_change"] == "+4.17%"
-
-    with patch.object(ticker_route, "_live_quote", return_value=None):
-        unavailable = ticker_route.get_ticker_overview(symbol.lower(), db=db_session)
-
-    assert unavailable["current_price"] == "N/A"
-    assert unavailable["day_change"] == "N/A"
+    assert trend.count == 4
 
 
 def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
@@ -1140,10 +1028,7 @@ def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
     analysis = {
         "raw_text": "CSL announced a test result.",
         "metadata": {"page_count": 1},
-        "summary": {
-            "summary_text": "CSL announced a test result.",
-            "model_used": "test-summary",
-        },
+        "summary": Summary(summary="CSL announced a test result.", model="test-summary"),
         "sentiment": {
             "sentiment_label": "neutral",
             "confidence_score": 0.9,

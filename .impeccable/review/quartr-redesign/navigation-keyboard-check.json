@@ -1,0 +1,74 @@
+{
+  "keySteps": [
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "Search"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "Market feed"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "About StonksInHand"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "Terms of use"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "Data sources"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "A",
+      "text": "Sign in"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "BODY",
+      "text": "{\"reference\":\"user-pinned-quartr-2026-10-13\",\"thesis\":\"Wide source-first composi"
+    },
+    {
+      "covered": false,
+      "label": null,
+      "tag": "NEXTJS-PORTAL",
+      "text": ""
+    },
+    {
+      "covered": false,
+      "label": "StonksInHand home",
+      "tag": "A",
+      "text": "StonksInHand"
+    },
+    {
+      "covered": false,
+      "label": "Close navigation",
+      "tag": "BUTTON",
+      "text": ""
+    }
+  ],
+  "openInert": {
+    "footer": true,
+    "main": true
+  },
+  "focusAfterEscape": {
+    "bodyOverflow": "",
+    "footerInert": false,
+    "label": "Open navigation",
+    "mainInert": false
+  }
+}

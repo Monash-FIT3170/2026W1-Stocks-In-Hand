@@ -1,0 +1,36 @@
+{
+  "font": "inter, \"inter Fallback\", Arial, sans-serif",
+  "headings": [
+    {
+      "size": "34px",
+      "text": "Terms of use",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "No financial advice",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "AI-assisted content",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "Account use",
+      "weight": "550"
+    },
+    {
+      "size": "22px",
+      "text": "Availability",
+      "weight": "550"
+    }
+  ],
+  "overflow": [],
+  "viewport": {
+    "documentWidth": 380,
+    "height": 844,
+    "width": 390
+  }
+}

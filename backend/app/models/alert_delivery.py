@@ -19,7 +19,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
+from app.alert_vocabulary import DeliveryStatus
 from app.database.base import Base
+
+
+_STATUSES = ", ".join(f"'{status}'" for status in DeliveryStatus)
 
 
 class AlertDelivery(Base):
@@ -49,9 +53,7 @@ class AlertDelivery(Base):
         Index("ix_alert_deliveries_rule_id", "rule_id"),
         Index("ix_alert_deliveries_sent_at", "sent_at"),
         CheckConstraint(
-            "status IN "
-            "('claimed', 'sent', 'rejected', 'failed', 'suppressed_cap', "
-            "'suppressed_budget', 'rollup_sent')",
+            f"status IN ({_STATUSES})",
             name="ck_alert_deliveries_status",
         ),
         CheckConstraint(
@@ -84,8 +86,8 @@ class AlertDelivery(Base):
     status = Column(
         String,
         nullable=False,
-        default="claimed",
-        server_default="claimed",
+        default=DeliveryStatus.CLAIMED,
+        server_default=DeliveryStatus.CLAIMED,
     )
     provider_message_id = Column(String, nullable=True)
     error_code = Column(String, nullable=True)

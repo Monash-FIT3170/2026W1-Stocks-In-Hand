@@ -1,20 +1,7 @@
-import { TickerBriefShell } from "../../components/ticker/TickerBriefShell"
-
-const DEPLOYED_TICKERS = [
-  "ANZ",
-  "BHP",
-  "CBA",
-  "COL",
-  "COH",
-  "CSL",
-  "MQG",
-  "ORG",
-  "RIO",
-  "TCL",
-  "TLS",
-  "WDS",
-  "WES",
-]
+import { CompanyData } from "../../components/company/CompanyData"
+import { CompanyWorkspace } from "../../components/company/CompanyWorkspace"
+// Generated from the backend ticker catalogue: run `python -m tools.sync_tickers` in backend/.
+import DEPLOYED_TICKERS from "../tickers.json"
 
 export const dynamicParams = false
 
@@ -29,5 +16,5 @@ export async function generateMetadata({ params }) {
 
 export default async function TickerLayout({ children, params }) {
   const { symbol } = await params
-  return <TickerBriefShell symbol={symbol.toUpperCase()}>{children}</TickerBriefShell>
+  return <CompanyData key={symbol.toUpperCase()} symbol={symbol.toUpperCase()}><CompanyWorkspace>{children}</CompanyWorkspace></CompanyData>
 }
