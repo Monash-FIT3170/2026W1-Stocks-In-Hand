@@ -23,6 +23,7 @@ from app.services.generation.kinds import (
     Kind,
     NewsSummary,
     RedditDigest,
+    TopicTagging,
 )
 from app.services.generation.providers import TextProvider
 from app.services.llm_errors import LLMUnavailableError, PromptTooLargeError
@@ -38,6 +39,7 @@ __all__ = (
     "Generated",
     "NewsSummary",
     "RedditDigest",
+    "TopicTagging",
     "Unavailable",
     "generate",
 )

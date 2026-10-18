@@ -78,6 +78,14 @@ _Avoid_: inline text, public discussion message (it covers news too)
 The kind of company announcement an artifact is, such as a dividend announcement or half-year results, decided by fixed rules over its title, filename and text. An announcement the rules cannot place with confidence has no category.
 _Avoid_: artifact type (the stored field), report type, classification (for the category itself)
 
+**Content topic**:
+What an artifact is about, from a fixed list: earnings and guidance, litigation, regulation, product launches and macro-economic exposure. An artifact of any kind may have several, each with a confidence, how it was decided (the LLM, or the rules alone when no LLM is switched on) and the source passage that shows it. It is not a category, which only announcements have and of which each has one, nor a sentiment bucket.
+_Avoid_: theme (a sentiment bucket), category, tag, topic (alone, where the brief's topical research means a sentiment bucket)
+
+**Topic cluster**:
+One ticker's artifacts about one development under one content topic, such as an announcement, the news about it and the posts discussing it. An artifact joins the cluster whose words its own event label and title share, among those seen within the cluster window; otherwise it starts one.
+_Avoid_: story, thread, event (for the group)
+
 **Prompt version**:
 The version of the instructions an LLM summary was written from, recorded with each summary so summaries from older instructions can be found and regenerated.
 _Avoid_: model version, template

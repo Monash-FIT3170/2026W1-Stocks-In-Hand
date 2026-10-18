@@ -12,3 +12,8 @@ from .artifact_summary import ArtifactSummary
 from .alert_subscription import AlertSubscription
 from .alert_rule import AlertRule
 from .alert_delivery import AlertDelivery
+from .content_topic import (
+    ArtifactContentTopic,
+    ContentTopicCluster,
+    ContentTopicClusterMember,
+)

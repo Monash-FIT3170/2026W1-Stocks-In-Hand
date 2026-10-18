@@ -22,6 +22,8 @@ class NewsFeedRecord(BaseModel):
     about: Optional[str]
     changed: Optional[str]
     matters: Optional[str]
+    # The content topics recorded for the record, most confident first.
+    topics: list[str] = []
     sources: list[SourceLink]
 
 

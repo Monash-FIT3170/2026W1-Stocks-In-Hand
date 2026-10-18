@@ -108,7 +108,11 @@ def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifa
     return (
         db.query(Artifact)
         .join(distinct_records, distinct_records.c.id == Artifact.id)
-        .options(artifact_summary.WITH_SUMMARY, selectinload(Artifact.platform))
+        .options(
+            artifact_summary.WITH_SUMMARY,
+            selectinload(Artifact.platform),
+            selectinload(Artifact.content_topics),
+        )
         .order_by(*_NEWEST_FIRST, Artifact.id.desc())
         .limit(limit)
         .all()

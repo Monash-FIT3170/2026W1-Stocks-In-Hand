@@ -1,0 +1,156 @@
+.section {
+  margin: 0 0 40px;
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--line);
+}
+
+.heading h2 {
+  font-size: 28px;
+  font-weight: 550;
+  letter-spacing: -.025em;
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+.heading p {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 72ch;
+}
+
+.trend,
+.trend_new,
+.trend_rising,
+.trend_steady,
+.trend_falling,
+.trend_quiet {
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.4;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.trend,
+.trend_steady,
+.trend_quiet {
+  background: var(--canvas-subtle);
+  color: var(--ink-secondary);
+}
+
+.trend_new,
+.trend_rising {
+  background: var(--brand-soft);
+  color: var(--brand-hover);
+}
+
+.trend_falling {
+  background: var(--surface-context);
+  color: var(--ink);
+}
+
+.topicBody {
+  display: grid;
+  gap: 20px;
+  padding: 4px 0 24px;
+}
+
+.description {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 72ch;
+}
+
+.cluster {
+  background: var(--surface-context);
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 0;
+}
+
+.clusterHeading h4 {
+  font-size: 18px;
+  font-weight: 550;
+  letter-spacing: -.01em;
+  line-height: 1.35;
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+
+.clusterHeading p,
+.more {
+  color: var(--ink-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.records {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.record {
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+  min-width: 0;
+}
+
+.record:last-child {
+  padding-bottom: 0;
+}
+
+.recordMeta {
+  color: var(--ink-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 4px 14px;
+}
+
+.record h5 {
+  font-size: 16px;
+  font-weight: 550;
+  line-height: 1.45;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.evidence {
+  border-left: 2px solid var(--line-strong);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+  max-width: 72ch;
+  overflow-wrap: anywhere;
+  padding: 2px 0 2px 14px;
+}
+
+.noEvidence {
+  color: var(--ink-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.more {
+  margin-top: 12px;
+}
+
+@media (max-width: 767px) {
+  .cluster {
+    padding: 16px;
+  }
+  .heading h2 {
+    font-size: 24px;
+  }
+}

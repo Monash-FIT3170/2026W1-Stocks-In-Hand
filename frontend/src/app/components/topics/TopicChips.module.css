@@ -1,0 +1,50 @@
+.topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 4px 0 10px;
+  padding: 0;
+}
+
+.topic {
+  align-items: center;
+  background: var(--canvas-subtle);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-secondary);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.4;
+  min-height: 32px;
+  padding: 4px 8px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.topic {
+  transition: background-color 160ms var(--ease-standard), color 160ms var(--ease-standard);
+}
+
+a.topic:hover {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+a.topic:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  a.topic {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  a.topic {
+    transition: none;
+  }
+}

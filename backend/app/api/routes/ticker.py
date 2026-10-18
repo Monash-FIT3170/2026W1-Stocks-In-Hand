@@ -1,15 +1,16 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.crud import ticker as crud
 from app.database.connection import get_db
-from app.read_models import ticker_brief, ticker_records
+from app.read_models import ticker_brief, ticker_records, ticker_topics
 from app.read_models.ticker_records import TickerNotFound
 from app.schemas.ticker import TickerCreate, TickerResponse, TickerUpdate
 from app.schemas.ticker_brief import TickerBrief
 from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
+from app.schemas.ticker_topics import TickerTopics
 from app.services.quotes import QuoteSource, live_quotes
 
 router = APIRouter(prefix="/tickers", tags=["tickers"])
@@ -90,5 +91,22 @@ def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
     """A ticker's research history from its stored records; with none it is empty."""
     try:
         return ticker_records.read_deep_dive(db, symbol)
+    except TickerNotFound as exc:
+        raise HTTPException(status_code=404, detail="Ticker not found") from exc
+
+
+@router.get("/symbol/{symbol}/topics", response_model=TickerTopics)
+def get_ticker_topics(
+    symbol: str,
+    days: int = Query(
+        default=ticker_topics.DEFAULT_WINDOW_DAYS,
+        ge=1,
+        le=ticker_topics.MAX_WINDOW_DAYS,
+    ),
+    db: Session = Depends(get_db),
+):
+    """A ticker's content topics, their trends, and the topic clusters seen in ``days``."""
+    try:
+        return ticker_topics.read_ticker_topics(db, symbol, window_days=days)
     except TickerNotFound as exc:
         raise HTTPException(status_code=404, detail="Ticker not found") from exc

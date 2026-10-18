@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import styles from "../research/ResearchSurface.module.css"
+import { CONTENT_TOPICS } from "../../lib/contentTopics"
 
 const SECTORS = [
   "Materials",
@@ -15,13 +16,16 @@ const SECTORS = [
   "Energy",
 ]
 
-function buildFilterHref({ today, sector, startDate = "", endDate = "" }) {
+function buildFilterHref({ today, sector, topic = "", startDate = "", endDate = "" }) {
   const params = new URLSearchParams()
   if (today) {
     params.set("today", "true")
   }
   if (sector) {
     params.set("sector", sector)
+  }
+  if (topic) {
+    params.set("topic", topic)
   }
   if (startDate) {
     params.set("start_date", startDate)
@@ -41,12 +45,12 @@ function formatDisplayDate(value) {
   return `${day}/${month}/${year}`
 }
 
-export function AnnouncementFilters({ today = false, sector = "", startDate = "", endDate = "" }) {
+export function AnnouncementFilters({ today = false, sector = "", topic = "", startDate = "", endDate = "" }) {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const hasFilters = today || sector || startDate || endDate
-  const todayHref = buildFilterHref({ today: !today, sector })
-  const allHref = buildFilterHref({ today: false, sector })
+  const hasFilters = today || sector || topic || startDate || endDate
+  const todayHref = buildFilterHref({ today: !today, sector, topic })
+  const allHref = buildFilterHref({ today: false, sector, topic })
   const dateSummary = startDate || endDate
     ? `${startDate ? formatDisplayDate(startDate) : "Any date"} – ${endDate ? formatDisplayDate(endDate) : "Now"}`
     : ""
@@ -59,6 +63,18 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
       params.set("sector", nextSector)
     } else {
       params.delete("sector")
+    }
+    const query = params.toString()
+    router.push(query ? `/announcements?${query}` : "/announcements")
+  }
+
+  function handleTopicChange(event) {
+    const params = new URLSearchParams(searchParams.toString())
+    const nextTopic = event.target.value
+    if (nextTopic) {
+      params.set("topic", nextTopic)
+    } else {
+      params.delete("topic")
     }
     const query = params.toString()
     router.push(query ? `/announcements?${query}` : "/announcements")
@@ -90,6 +106,13 @@ export function AnnouncementFilters({ today = false, sector = "", startDate = ""
           <select aria-label="Filter by sector" onChange={handleSectorChange} value={sector}>
             <option value="">All sectors</option>
             {SECTORS.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span>Topic</span>
+          <select aria-label="Filter by topic" onChange={handleTopicChange} value={topic}>
+            <option value="">All topics</option>
+            {CONTENT_TOPICS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
         </label>
         <details className={styles.dateRangePicker}>

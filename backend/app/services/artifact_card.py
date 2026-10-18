@@ -2,7 +2,8 @@
 
 The market feed (``/announcements``) and a ticker's news feed show each
 artifact as the same card: a tag, a title, where it came from with a link to
-the original, and the about, changed and matters lines of its summary. A
+the original, the about, changed and matters lines of its summary, and the
+content topics recorded for it. A
 line the summary does not have is None. A card never shows placeholder text
 or the artifact's raw text in place of a summary. A ticker's brief and deep
 dive show an artifact's tag and sources the same way.
@@ -11,7 +12,7 @@ dive show an artifact's tag and sources the same way.
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.models.artifact import Artifact
@@ -32,6 +33,8 @@ class ArtifactCard:
     about: str | None
     changed: str | None
     matters: str | None
+    # Content topic identifiers, most confident first.
+    topics: tuple[str, ...] = field(default=())
 
     def fields(self) -> dict[str, object]:
         """The card's fields, for a feed item to include."""
@@ -39,7 +42,11 @@ class ArtifactCard:
 
 
 def artifact_card(artifact: Artifact) -> ArtifactCard:
-    """The card for one artifact. Reads its summary, so load lists ``WITH_SUMMARY``."""
+    """The card for one artifact.
+
+    Reads its summary and content topics, so a list loads ``WITH_SUMMARY``
+    and its ``content_topics``.
+    """
     metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
     source_type = _clean_text(artifact.source_type) or "market_update"
     source_name, source_label = _origin(artifact, source_type, metadata)
@@ -56,7 +63,17 @@ def artifact_card(artifact: Artifact) -> ArtifactCard:
         about=artifact_summary.brief(summary),
         changed=_clean_text(summary.changed) if summary else None,
         matters=_clean_text(summary.matters) if summary else None,
+        topics=topics(artifact),
     )
+
+
+def topics(artifact: Artifact) -> tuple[str, ...]:
+    """The content topics recorded for the artifact, most confident first."""
+    recorded = sorted(
+        artifact.content_topics or (),
+        key=lambda topic: (-float(topic.confidence or 0), topic.topic),
+    )
+    return tuple(topic.topic for topic in recorded)
 
 
 def tag(artifact: Artifact) -> str:
