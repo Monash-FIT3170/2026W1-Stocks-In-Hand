@@ -61,7 +61,7 @@ class RedditSource:
                 {
                     "id": submission.id,
                     "title": submission.title,
-                    "body": submission.selftext[:1000] if submission.selftext else "",
+                    "body": submission.selftext or "",
                     "score": submission.score,
                     "upvote_ratio": submission.upvote_ratio,
                     "num_comments": submission.num_comments,
