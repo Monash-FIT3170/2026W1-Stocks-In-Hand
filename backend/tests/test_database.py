@@ -871,6 +871,24 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         content_hash=f"reddit-{uuid.uuid4()}",
         artifact_metadata={"feed_eligible": True},
     )
+    bluesky = Artifact(
+        source_type="bluesky",
+        artifact_type="bluesky_post",
+        title="Bluesky investor chatter",
+        raw_text="Bluesky post body",
+        published_at=published_at,
+        content_hash=f"bluesky-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": True},
+    )
+    rejected_bluesky = Artifact(
+        source_type="bluesky",
+        artifact_type="bluesky_post",
+        title="Bluesky spam",
+        raw_text="Buy crypto now",
+        published_at=published_at,
+        content_hash=f"rejected-bluesky-{uuid.uuid4()}",
+        artifact_metadata={"feed_eligible": False},
+    )
     news = Artifact(
         ticker_id=ticker.id,
         source_type="news",
@@ -902,11 +920,30 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         content_hash=f"rejected-news-{uuid.uuid4()}",
         artifact_metadata={"feed_eligible": False},
     )
-    db_session.add_all([announcement, reddit, news, legacy_news, rejected_news])
+    db_session.add_all(
+        [
+            announcement,
+            reddit,
+            bluesky,
+            rejected_bluesky,
+            news,
+            legacy_news,
+            rejected_news,
+        ]
+    )
     db_session.flush()
     db_session.add(
         ArtifactTickerMention(
             artifact_id=reddit.id,
+            ticker_id=ticker.id,
+            match_method="ticker_symbol",
+            match_confidence=0.85,
+            matched_text=symbol,
+        )
+    )
+    db_session.add(
+        ArtifactTickerMention(
+            artifact_id=bluesky.id,
             ticker_id=ticker.id,
             match_method="ticker_symbol",
             match_confidence=0.85,
@@ -927,16 +964,19 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
     assert news.id in announcement_ids
     assert legacy_news.id in announcement_ids
     assert rejected_news.id not in announcement_ids
+    assert bluesky.id in announcement_ids
+    assert rejected_bluesky.id not in announcement_ids
     items_by_id = {item.id: item for item in announcements}
     assert items_by_id[announcement.id].source_type == "asx_announcement"
     assert items_by_id[reddit.id].source_type == "reddit"
     assert items_by_id[reddit.id].ticker == symbol
+    assert items_by_id[bluesky.id].source_type == "bluesky"
     assert items_by_id[news.id].source_name == "Example News"
 
     trending = list_trending_announcements(days=1, limit=10, db=db_session)
     trend = next(item for item in trending if item.symbol == symbol)
 
-    assert trend.count == 4
+    assert trend.count == 5
 
 
 def test_scrape_pipeline_state_is_idempotent(db_session: Session) -> None:
