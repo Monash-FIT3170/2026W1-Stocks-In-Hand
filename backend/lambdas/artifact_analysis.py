@@ -446,10 +446,10 @@ def _stored_text_eligibility(
     text: str,
     ports: AnalysisPorts,
 ) -> dict[str, Any] | None:
-    """Use a saved decision, reject unmatched Reddit, or assess the text."""
+    """Use a saved decision, reject unmatched social posts, or assess the text."""
     if facts.feed_eligible is not None:
         return {"feed_eligible": facts.feed_eligible}
-    if facts.source_type == "reddit" and not facts.has_ticker_match:
+    if facts.source_type in {"reddit", "bluesky"} and not facts.has_ticker_match:
         return {
             "feed_eligible": False,
             "eligibility_confidence": 1.0,
