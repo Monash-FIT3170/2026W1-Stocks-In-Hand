@@ -508,7 +508,7 @@ source passages without regeneration.
 
 ## Document classification
 
-ASX documents use the deterministic, in-process `rules-v2` classifier. It
+ASX documents use the deterministic, in-process `rules-v3` classifier. It
 returns `classified`, `needs_review` or `unknown`, together with stable category
 identifiers, ordered candidates and matched rule evidence. Its numeric score is
 a rules score, not a probability. Ambiguous and unknown results remain
@@ -517,3 +517,8 @@ a rules score, not a probability. Ambiguous and unknown results remain
 See [the advanced content classification guide](docs/advanced-content-classification.md)
 for the taxonomy, fixture evaluator, extension process and bounded
 reclassification command.
+
+Appendix 2A applications for quotation of securities are classified as security
+notifications. They remain visible as source records and are excluded from
+category-sentiment buckets. Existing stored classifications change only when
+documents are analysed or the bounded reclassification tool is applied.
