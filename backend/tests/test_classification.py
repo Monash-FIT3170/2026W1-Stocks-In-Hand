@@ -21,7 +21,7 @@ def test_strong_form_evidence_selects_half_year_results() -> None:
     assert result.primary_category == "half_year_results"
     assert result.compatibility_category == "HalfYearResults"
     assert result.score >= 0.65
-    assert result.classifier_version == "rules-v2"
+    assert result.classifier_version == "rules-v3"
     assert result.candidates[0].category == "half_year_results"
     assert any(
         evidence.rule == "appendix_4d"
@@ -242,5 +242,5 @@ def test_metadata_merge_preserves_unrelated_and_prior_extracted_data() -> None:
     assert updated["extracted_data_stale"] is True
     assert updated["category"] == "UNKNOWN"
     assert updated["category_confidence"] == ambiguous.score
-    assert updated["classification_method"] == "rules-v2"
+    assert updated["classification_method"] == "rules-v3"
     assert updated["classification"]["status"] == "needs_review"

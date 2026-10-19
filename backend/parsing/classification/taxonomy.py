@@ -213,8 +213,15 @@ TAXONOMY: tuple[CategoryDefinition, ...] = (
             PatternRule("issue_securities", "notification of issue of securities"),
             PatternRule("cessation_securities", "notification of cessation of securities"),
             PatternRule("change_number_securities", "change in number of securities"),
+            PatternRule("quotation_securities", "application for quotation of securities"),
+            PatternRule("quotation_marked_securities", "application for quotation of +securities"),
         ),
         form_identifiers=(
+            PatternRule(
+                "appendix_2a",
+                r"(?<![A-Za-z0-9])appendix[\s_\-‐-―]*2a(?![A-Za-z0-9]|\.\d)",
+                regex=True,
+            ),
             PatternRule("appendix_3g", "Appendix 3G"),
             PatternRule("appendix_3h", "Appendix 3H"),
         ),

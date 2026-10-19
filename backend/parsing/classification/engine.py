@@ -15,7 +15,7 @@ from .types import (
 )
 
 
-CLASSIFIER_VERSION = "rules-v2"
+CLASSIFIER_VERSION = "rules-v3"
 
 
 @dataclass(frozen=True)
