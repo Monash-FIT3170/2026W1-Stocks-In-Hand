@@ -517,3 +517,28 @@ a rules score, not a probability. Ambiguous and unknown results remain
 See [the advanced content classification guide](docs/advanced-content-classification.md)
 for the taxonomy, fixture evaluator, extension process and bounded
 reclassification command.
+
+## Dividend extraction precision
+
+Dividend extraction preserves fractional cents and franking percentages in both
+Appendix 3A.1 forms and prose. For example, `AUD 0.12500000` and `12.5 cents per
+share` both produce `amount_per_share: "12.5 cents"`; `75.5000%` produces
+`franking_percent: "75.5%"`. Whole-cent values retain their existing format.
+Malformed or unsupported numbers are omitted rather than extracting a partial
+value. The supported Appendix amount currency remains AUD.
+
+These fields are stored in artifact metadata and supplied to the announcement
+summary prompt. This correction applies when a document is analysed; existing
+completed artifacts are not automatically reprocessed. Regenerating a summary
+alone reuses its stored extracted fields. No database migration or historical
+data rewrite is included.
+
+Run the extraction regressions with:
+
+```sh
+PYTHONPATH=backend pytest -q backend/tests/test_dividend_extraction.py backend/tests/test_classification.py
+```
+
+`backend/tests/test_artifact_analysis.py` also checks that fractional values
+reach persisted metadata and summary prompts through the worker and local-loader
+analysis paths.
