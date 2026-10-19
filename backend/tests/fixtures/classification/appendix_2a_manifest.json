@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "description": "Synthetic ASX-style Appendix 2A regression cases, separate from the frozen legacy baseline corpus.",
+  "fixtures": [
+    {"id":"quotation_title","title":"Application for quotation of securities - ANZ","text_path":"text/appendix_2a_generic.txt","expected_category":"security_notification","rationale":"The official quotation-application title is sufficient without a form identifier."},
+    {"id":"quotation_markup","title":"Application for quotation of +securities","text_path":"text/appendix_2a_generic.txt","expected_category":"security_notification","rationale":"ASX plus-sign markup does not change the notice category."},
+    {"id":"quotation_compact_form","title":"Appendix2A - Company announcement","text_path":"text/appendix_2a_generic.txt","expected_category":"security_notification","rationale":"A bounded compact form identifier is strong title evidence."},
+    {"id":"quotation_filename","title":"Company update","filename":"issuer_appendix_2a.pdf","text_path":"text/appendix_2a_generic.txt","expected_category":"security_notification","rationale":"The document filename identifies the quotation notice."},
+    {"id":"quotation_body","title":"Company update","text_path":"text/appendix_2a_notice.txt","expected_category":"security_notification","rationale":"A body form identifier plus securities-on-issue context confirms the category."},
+    {"id":"quotation_partial_form","title":"Appendix 2A.1","text_path":"text/appendix_2a_generic.txt","expected_category":"unknown","rationale":"A longer form identifier must not match Appendix 2A by prefix."},
+    {"id":"quotation_publisher_news","title":"Application for quotation of securities","source_type":"news","text_path":"text/appendix_2a_notice.txt","expected_category":"unknown","rationale":"Publisher coverage is outside official-document classification."},
+    {"id":"quotation_reference_only","title":"Company update","text_path":"text/appendix_2a_reference.txt","expected_category":"unknown","rationale":"An incidental reference alone remains a review outcome, not a confirmed notice."},
+    {"id":"quotation_capital_raising","title":"Placement and Entitlement Offer","text_path":"text/appendix_2a_capital.txt","expected_category":"capital_management","rationale":"A raising announcement retains its category despite a future form reference."}
+  ]
+}

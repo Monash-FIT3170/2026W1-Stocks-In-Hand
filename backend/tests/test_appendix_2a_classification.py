@@ -1,8 +1,11 @@
 """Appendix 2A quotation notices are administrative security notifications."""
 
+from pathlib import Path
+
 import pytest
 
 from parsing.classification import ClassificationInput, classify_document
+from tools.evaluate_classification import evaluate_manifest
 
 
 @pytest.mark.parametrize(
@@ -65,3 +68,13 @@ def test_capital_raising_context_is_not_hidden_by_an_appendix_reference():
 
     assert result.status == "classified"
     assert result.primary_category == "capital_management"
+
+
+def test_appendix_2a_regression_corpus_has_no_misclassifications():
+    manifest = Path(__file__).parent / "fixtures" / "classification" / "appendix_2a_manifest.json"
+    report = evaluate_manifest(manifest, classifier="current")
+
+    assert report["fixture_count"] == 9
+    assert report["macro_f1"] == 1.0
+    assert report["unknown_false_positive_rate"] == 0.0
+    assert report["ambiguous_count"] == 1
