@@ -50,9 +50,7 @@ def artifact_card(artifact: Artifact) -> ArtifactCard:
         source_type=source_type,
         source_name=source_name,
         source_label=source_label,
-        url=_clean_text(artifact.url)
-        or _clean_text(metadata.get("source_url"))
-        or _clean_text(metadata.get("pdf_url")),
+        url=artifact_source_url(artifact),
         about=artifact_summary.brief(summary),
         changed=_clean_text(summary.changed) if summary else None,
         matters=_clean_text(summary.matters) if summary else None,
