@@ -223,6 +223,7 @@ export function AppFrame({ children }) {
           <nav className={styles.navLinks} aria-label="Primary">
             <Link aria-current={active === "search" ? "page" : undefined} className={active === "search" ? styles.activeNavLink : styles.navLink} href="/search">Search</Link>
             <Link aria-current={active === "announcements" ? "page" : undefined} className={active === "announcements" ? styles.activeNavLink : styles.navLink} href="/announcements">Market feed</Link>
+            {hasSession && <Link aria-current={active === "watchlist" ? "page" : undefined} className={active === "watchlist" ? styles.activeNavLink : styles.navLink} href="/watchlist">My watchlist</Link>}
             <button aria-controls="desktop-mega-menu" aria-expanded={openMenu === "about"} className={`${styles.navLink} ${openMenu === "about" ? styles.openNavLink : ""}`} onClick={() => setOpenMenu((value) => value === "about" ? null : "about")} ref={(node) => { menuButtonRefs.current.about = node }} type="button">
               About <span aria-hidden="true" className={styles.navToggle}>+</span>
             </button>

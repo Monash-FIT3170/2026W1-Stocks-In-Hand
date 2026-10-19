@@ -276,11 +276,6 @@ export default function WatchlistRoute() {
                   <p>Add a company to start your watchlist.</p>
                 </article>
               )}
-              {state.investorId ? <button className={styles.emptyCard} onClick={openAddCompany} type="button">
-                <PlusIcon />
-                <h3>Add company</h3>
-                <p>Choose another supported ASX company.</p>
-              </button> : null}
             </div>
           </section>
         </div>
