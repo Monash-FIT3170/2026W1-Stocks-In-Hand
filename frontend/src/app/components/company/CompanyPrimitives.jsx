@@ -22,7 +22,7 @@ export function SourceLinks({ sources = [], url, label = "Open original source",
     {records.map((source, index) => {
       const href = safeSourceUrl(source.url)
       return <div className={styles.source} key={`${source.url || source.title || "source"}-${index}`}>
-        <DocumentIcon /><div>{href ? <a href={href} title={source.title || source.label} target="_blank" rel="noopener noreferrer">{compact ? publisherLabel(source.label) || "Open original source" : source.title || source.label || "Original source"}<ArrowIcon /></a> : <span>{source.title || source.label || "Source record"} · Link unavailable</span>}
+        <DocumentIcon /><div>{href ? <a href={href} title={source.title || source.label} target="_blank" rel="noopener noreferrer">{source.title || (compact ? publisherLabel(source.label) || "Open original source" : source.label || "Original source")}<ArrowIcon /></a> : <span>{source.title || source.label || "Source record"} · Link unavailable</span>}
           <small>{[source.source_type ? sourceKind(source.source_type) : null, source.author, includeDate && source.published_at ? displayDate(source.published_at) : null].filter(Boolean).join(" · ")}</small>
           {!compact && excerpts && source.evidence_text && <details className={styles.evidenceExcerpt}><summary>Source excerpt</summary><p>{source.evidence_text}</p></details>}
         </div>
