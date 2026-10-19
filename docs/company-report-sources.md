@@ -53,3 +53,24 @@ npm run build
 
 The source component tests check visible document titles in both compact and full
 layouts, supplied dates, legacy title fallbacks and unavailable unsafe links.
+
+## Docker verification — 19 October 2026
+
+`docker compose up --build -d` builds and starts the local stack. The frontend
+image copies `package-lock.json` and uses `npm ci`; its previous unlocked
+installation failed during this verification.
+
+- All 107 focused backend tests passed in Docker, including announcements and
+  ticker read-model integration tests against a separate disposable database.
+- All 52 frontend tests passed in Docker; the image's production build passed.
+- Read-only live HTTP checks verified exact PDF URLs for 35 existing reports
+  across 12 companies: 20 company records, 20 history entries, 28 sentiment
+  citations and 12 brief citations were also checked.
+- Existing report data was preserved.
+- After native browser control timed out, the user authorized Playwright.
+  Screenshots of the market feed and ANZ summary, source records and history
+  were reviewed at 1440 × 1000 and 390 × 844. All eight views had no page errors
+  or horizontal overflow; report titles and source actions remained readable.
+- Clicking the displayed ANZ “Notification regarding unquoted securities”
+  citation requested its specific YourIR PDF and received HTTP 200 with
+  `application/pdf`. The downloaded content's PDF header was also verified.
