@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from decimal import Decimal
 
 from .base import ReportCategory
 
@@ -11,6 +11,12 @@ _MONTHS = {
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
+
+
+def _decimal_text(value: Decimal) -> str:
+    """Display the exact value without insignificant zeros or exponent notation."""
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _parse_date(raw: str) -> str | None:
@@ -34,10 +40,10 @@ def _extract_appendix_3a1(text: str) -> dict:
     result: dict = {}
 
     # Amount: "Distribution Amount\nAUD 0.83000000"
-    m = re.search(r"Distribution Amount\s*\nAUD\s+([\d.]+)", text)
+    m = re.search(r"Distribution Amount\s*\nAUD\s+(\d+(?:\.\d+)?)(?![\d.])(?=\s|$)", text)
     if m:
-        cents = round(float(m.group(1)) * 100)
-        result["amount_per_share"] = f"{cents} cents"
+        cents = Decimal(m.group(1)) * 100
+        result["amount_per_share"] = f"{_decimal_text(cents)} cents"
 
     # Ex Date / Record Date / Payment Date from summary section
     for field, key in [("Ex Date", "ex_date"), ("Record Date", "record_date"), ("Payment Date", "payment_date")]:
