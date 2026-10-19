@@ -60,9 +60,9 @@ def _extract_appendix_3a1(text: str) -> dict:
         result["dividend_type"] = "final"
 
     # Franking: "3A.3 Percentage of ordinary dividend/distribution that is\nfranked\n75.0000 %"
-    m = re.search(r"Percentage[^\n]+\nfranked\n([\d.]+)\s*%", text)
+    m = re.search(rf"Percentage[^\n]+\nfranked\n({_DECIMAL_NUMBER})\s*%", text)
     if m:
-        result["franking_percent"] = f"{float(m.group(1)):.0f}%"
+        result["franking_percent"] = f"{_decimal_text(Decimal(m.group(1)))}%"
     elif "fully franked" in text.lower():
         result["franking_percent"] = "100%"
 
@@ -84,9 +84,9 @@ def _extract_news_release(title: str, text: str) -> dict:
         result["amount_per_share"] = f"{amount} cents"
 
     # Franking: "partially franked at 75%" or "fully franked"
-    m = re.search(r"partially franked at\s+([\d]+)\s*%", text, re.IGNORECASE)
+    m = re.search(rf"partially franked at\s+({_DECIMAL_NUMBER})\s*%", text, re.IGNORECASE)
     if m:
-        result["franking_percent"] = f"{m.group(1)}%"
+        result["franking_percent"] = f"{_decimal_text(Decimal(m.group(1)))}%"
     elif re.search(r"\bfully franked\b", text, re.IGNORECASE):
         result["franking_percent"] = "100%"
 
