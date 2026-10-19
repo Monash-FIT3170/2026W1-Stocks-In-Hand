@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from .base import ReportCategory
 
+_DECIMAL_NUMBER = r"\d+(?:\.\d+)?"
+
 # Date format helpers
 _MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4,
@@ -40,7 +42,7 @@ def _extract_appendix_3a1(text: str) -> dict:
     result: dict = {}
 
     # Amount: "Distribution Amount\nAUD 0.83000000"
-    m = re.search(r"Distribution Amount\s*\nAUD\s+(\d+(?:\.\d+)?)(?![\d.])(?=\s|$)", text)
+    m = re.search(rf"Distribution Amount\s*\nAUD\s+({_DECIMAL_NUMBER})(?![\d.])(?=\s|$)", text)
     if m:
         cents = Decimal(m.group(1)) * 100
         result["amount_per_share"] = f"{_decimal_text(cents)} cents"
@@ -71,10 +73,14 @@ def _extract_news_release(title: str, text: str) -> dict:
     """Extract from News Release prose format."""
     result: dict = {}
 
-    # Amount: "83  cents per share" or "83 cents per share"
-    m = re.search(r"(\d[\d\s]*?)\s+cents?\s+per\s+share", text, re.IGNORECASE)
+    # Match one complete number, so 12.5 is not read as 5 or joined to a year.
+    m = re.search(
+        rf"(?<![\w.,+\-])({_DECIMAL_NUMBER})\s+cents?\s+per\s+share\b",
+        text,
+        re.IGNORECASE,
+    )
     if m:
-        amount = m.group(1).replace(" ", "")
+        amount = _decimal_text(Decimal(m.group(1)))
         result["amount_per_share"] = f"{amount} cents"
 
     # Franking: "partially franked at 75%" or "fully franked"

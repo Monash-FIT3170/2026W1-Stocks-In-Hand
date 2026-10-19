@@ -35,3 +35,35 @@ def test_invalid_appendix_amount_is_omitted_without_parsing_a_partial_value(amou
     )
 
     assert "amount_per_share" not in result
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Declared 12.5 cents per share.", "12.5 cents"),
+        ("Declared 0.5 cents per share.", "0.5 cents"),
+        ("Declared 83  cents per share.", "83 cents"),
+        ("Declared 12.5000 cents per share.", "12.5 cents"),
+        ("Declared 1 cent per share.", "1 cents"),
+        ("Declared 0 cents per share.", "0 cents"),
+        ("For 2026\n12.5 cents per share was declared.", "12.5 cents"),
+        ("Declared 12.5\ncents per share.", "12.5 cents"),
+        ("Declared 12.5 CENTS PER SHARE.", "12.5 cents"),
+    ],
+)
+def test_prose_amount_preserves_the_complete_number(text, expected):
+    assert DividendAnnouncement.extract("Interim dividend", text)["amount_per_share"] == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Declared 12..5 cents per share.",
+        "Declared -12.5 cents per share.",
+        "Declared 12,5 cents per share.",
+        "Declared .5 cents per share.",
+        "Declared no amount per share.",
+    ],
+)
+def test_prose_does_not_invent_an_amount_from_a_partial_or_unsupported_number(text):
+    assert "amount_per_share" not in DividendAnnouncement.extract("Dividend", text)
