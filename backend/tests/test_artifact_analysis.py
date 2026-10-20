@@ -334,7 +334,7 @@ def test_an_eligible_candidate_is_assessed_before_it_is_summarised(
     assert story.artifact_metadata["feed_eligible"] is True
     assert story.artifact_metadata["eligibility_confidence"] == 0.94
     assert story.artifact_metadata["feed_eligibility_prompt_version"] == (
-        "llm-feed-eligibility-v2"
+        "llm-feed-eligibility-v3"
     )
 
 

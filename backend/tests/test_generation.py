@@ -263,7 +263,7 @@ def test_feed_eligibility_is_strictly_validated() -> None:
     )
 
     assert result.value == ELIGIBILITY
-    assert result.prompt_version == "llm-feed-eligibility-v2"
+    assert result.prompt_version == "llm-feed-eligibility-v3"
     assert provider.calls[0].temperature == 0
 
 

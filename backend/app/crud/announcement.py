@@ -10,23 +10,24 @@ from app.models.ticker import Ticker
 from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
 from app.services.artifact_card import artifact_card
 from app.status import AnalysisStatus
+from app.services.feed_eligibility import approved_reddit_filter
 
 
 _SYDNEY_TZ = ZoneInfo("Australia/Sydney")
 
 
 def _feed_eligible_filter():
-    """Official items and non-official items not explicitly rejected.
+    """Official filings, assessed Reddit, and compatible publisher records.
 
-    A completed legacy record with no decision remains visible during the
-    compatibility/backfill window. New pending records stay hidden until
-    analysis gives them an explicit decision.
+    Reddit records without a relevance decision stay hidden until reassessed.
+    Publisher news retains its existing legacy compatibility rule.
     """
     decision = Artifact.artifact_metadata["feed_eligible"].as_boolean()
     return or_(
         Artifact.source_type == "asx_announcement",
+        and_(Artifact.source_type == "reddit", approved_reddit_filter()),
         and_(
-            Artifact.source_type.in_(("news", "reddit")),
+            Artifact.source_type == "news",
             or_(
                 decision.is_(True),
                 and_(

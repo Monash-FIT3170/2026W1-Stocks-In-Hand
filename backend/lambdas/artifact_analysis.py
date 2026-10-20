@@ -395,7 +395,7 @@ def analyse_stored_text(
 
     ports.records.start(artifact_id)
     title = _title(facts)
-    eligibility = _stored_text_eligibility(facts, title, text, ports)
+    eligibility = assess_feed_eligibility(facts, title, text, ports)
     if eligibility is None:
         ports.records.record_metadata(
             artifact_id,
@@ -440,15 +440,13 @@ def analyse_stored_text(
     )
 
 
-def _stored_text_eligibility(
+def assess_feed_eligibility(
     facts: ArtifactFacts,
     title: str,
     text: str,
     ports: AnalysisPorts,
 ) -> dict[str, Any] | None:
     """Use a saved decision, reject unmatched Reddit, or assess the text."""
-    if facts.feed_eligible is not None:
-        return {"feed_eligible": facts.feed_eligible}
     if facts.source_type == "reddit" and not facts.has_ticker_match:
         return {
             "feed_eligible": False,
@@ -456,6 +454,8 @@ def _stored_text_eligibility(
             "eligibility_reason": "The post is not linked to a supported ASX company or ticker.",
             "feed_eligibility_prompt_version": "deterministic-ticker-match-v1",
         }
+    if facts.feed_eligible is not None:
+        return {"feed_eligible": facts.feed_eligible}
 
     generated = generation.generate(
         generation.FeedEligibility(
@@ -512,6 +512,13 @@ def summarise(
             "Artifact has no text to summarise",
             code="no_extractable_text",
         )
+    if facts.source_type == "reddit":
+        eligibility = assess_feed_eligibility(facts, _title(facts), text, ports)
+        if eligibility is None:
+            return SummaryUnavailable(artifact_id=artifact_id, reason="Feed relevance assessment unavailable")
+        ports.records.record_metadata(artifact_id, eligibility)
+        if not eligibility["feed_eligible"]:
+            return SummaryUnavailable(artifact_id=artifact_id, reason="Reddit post excluded from the research feed")
     generated = generation.generate(
         _summary_request(
             facts,
