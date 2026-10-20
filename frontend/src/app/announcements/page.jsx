@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
@@ -54,6 +54,7 @@ function formatAnnouncementTimestamp(value) {
 function AnnouncementsContent() {
   const searchParams = useSearchParams()
   const [attempt, setAttempt] = useState(0)
+  const feedGeneration = useRef(0)
   const query = searchParams.toString()
   const filters = useMemo(() => {
     const params = new URLSearchParams(query)
@@ -79,9 +80,10 @@ function AnnouncementsContent() {
 
   useEffect(() => {
     let cancelled = false
+    feedGeneration.current += 1
 
     async function loadAnnouncements() {
-      setState((current) => ({ ...current, errorMessage: "", isLoading: true }))
+      setState((current) => ({ ...current, announcementCards: [], hasMore: false, isLoadingMore: false, loadMoreError: "", errorMessage: "", isLoading: true }))
 
       try {
         const [announcements, trendingStocks] = await Promise.all([
@@ -124,10 +126,12 @@ function AnnouncementsContent() {
     loadAnnouncements()
     return () => {
       cancelled = true
+      feedGeneration.current += 1
     }
   }, [attempt, filters])
 
   async function loadMoreAnnouncements() {
+    const generation = feedGeneration.current
     setState((current) => ({ ...current, isLoadingMore: true, loadMoreError: "" }))
     try {
       const announcements = await fetchAnnouncements({
@@ -135,6 +139,7 @@ function AnnouncementsContent() {
         limit: ANNOUNCEMENT_PAGE_SIZE,
         offset: state.nextOffset,
       })
+      if (generation !== feedGeneration.current) return
       const nextCards = announcements.map((item) => ({
         ...item,
         time: formatAnnouncementTimestamp(item.published_at),
@@ -154,6 +159,7 @@ function AnnouncementsContent() {
         }
       })
     } catch {
+      if (generation !== feedGeneration.current) return
       setState((current) => ({
         ...current,
         isLoadingMore: false,
