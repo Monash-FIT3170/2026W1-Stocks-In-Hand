@@ -555,6 +555,20 @@ def test_the_market_feed_filters_by_topic(db_session: Session) -> None:
     assert tagged.id in {uuid.UUID(item["id"]) for item in answered.json()}
 
 
+def test_deep_dive_filters_before_the_record_limit_and_can_be_cleared(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    old = _artifact(db_session, ticker, title="Older class action", day=1)
+    _record(db_session, old, _topic("litigation"), _topic("regulation"))
+    for day in range(2, 14):
+        _artifact(db_session, ticker, day=day)
+
+    assert old.title not in {item.title for item in ticker_records.read_deep_dive(db_session, ticker.symbol)}
+    for topic in ("litigation", "regulation"):
+        assert [item.title for item in ticker_records.read_deep_dive(db_session, ticker.symbol, topic=topic)] == [old.title]
+    assert ticker_records.read_deep_dive(db_session, ticker.symbol, topic="product_launch") == []
+    assert len(ticker_records.read_deep_dive(db_session, ticker.symbol)) == ticker_records.PAGE_RECORDS
+
+
 # Tagging stored artifacts
 
 

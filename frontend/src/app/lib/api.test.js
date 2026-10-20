@@ -19,6 +19,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+test("deep dive sends the selected topic and clearing removes it", async () => {
+  const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response("[]")))
+  vi.stubGlobal("fetch", fetchMock)
+  const { fetchTickerDeepDive } = await import("./api")
+  await fetchTickerDeepDive("BHP", "litigation")
+  await fetchTickerDeepDive("BHP")
+  expect(fetchMock.mock.calls[0][0]).toContain("/BHP/deep-dive-timeline?topic=litigation")
+  expect(fetchMock.mock.calls[1][0]).toMatch(/\/BHP\/deep-dive-timeline$/)
+})
+
 describe("apiFetch authentication compatibility", () => {
   test("keeps legacy and public requests unauthenticated", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }))

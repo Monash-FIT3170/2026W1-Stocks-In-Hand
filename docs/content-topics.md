@@ -95,6 +95,31 @@ for every other table. A tagged artifact's metadata records
   Feed cards and source records show topic chips that link to the filtered
   feed.
 
+## Topic filter UAT
+
+The market feed filters on the server before pagination. In Deep Dive, the Topic
+selector filters research history before the ten-record limit and restricts the
+development groups to the same topic. All topics or Clear topic restores history.
+The deep-dive endpoint accepts the optional `topic` identifier and rejects unknown
+identifiers with HTTP 422. Existing clients can omit it.
+
+Verify in a local or staging database after `alembic upgrade head`:
+
+1. Dry-run the tagging command below, then tag a bounded test set. Do not infer
+   tagging success from the migration alone: existing records need tagging.
+2. Select Litigation in the market feed, combine it with sector/date filters,
+   load another page, and clear it. Only tagged matching records should appear.
+3. Change the topic while another page is loading. The old page must not append.
+4. In Deep Dive, select Litigation and Regulation. A record with both topics
+   should appear under either, including when it is older than ten other records.
+5. Select a topic without records: keep the selector visible and show an empty
+   state. Clear it to restore the history. Check loading and retry on failed reads.
+6. Check the same controls on a narrow mobile viewport and follow original links.
+
+Automated checks: `npm test`, `npm run lint`, and the backend content-topic,
+deep-dive-topic-route and ticker-read-model tests. Database tests skip without
+Postgres; run them against a disposable migrated database before merging.
+
 ## Tagging stored artifacts
 
 ```bash
