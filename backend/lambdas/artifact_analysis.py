@@ -13,9 +13,15 @@ alertable sentiment is then sent to alert delivery.
 else, and ``repair_missing_summaries`` uses it to complete the summaries of
 analysed announcements.
 
+Once an eligible artifact's analysis is recorded, its content topics are
+tagged and clustered through the topic port. A tagging failure never fails
+the analysis, which is already recorded; its error's type is returned for
+the Lambda to log, as for a failed alert.
+
 The module reaches outside code only through ``AnalysisPorts``: the
 records, whose one adapter is ``PostgresAnalysisRecords``, the sentiment
-scorer, the LLM provider, the raw document store and the alert sender.
+scorer, the LLM provider, the raw document store, the alert sender and the
+content topic tagger.
 ``deployed_ports`` builds them for the analysis Lambda and ``local_ports``
 for the local loader.
 
@@ -150,6 +156,8 @@ class Analysed:
     summarised: bool
     # The type of the error that stopped the alert from being sent.
     alert_error: str | None = None
+    # The type of the error that stopped its content topics being recorded.
+    topic_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +273,13 @@ class AnalysisRecords(Protocol):
         """
 
 
+class TopicTagger(Protocol):
+    """Where an analysed artifact's content topics are decided and recorded."""
+
+    def tag(self, artifact_id: UUID, *, provider: TextProvider | None = None) -> object:
+        """Decide, record and cluster the artifact's content topics."""
+
+
 @dataclass(frozen=True)
 class AnalysisPorts:
     """The outside code an analysis reaches."""
@@ -277,6 +292,8 @@ class AnalysisPorts:
     provider: TextProvider | None = None
     # None sends no alerts.
     alerts: AlertSender | None = None
+    # None records no content topics.
+    topics: TopicTagger | None = None
 
 
 def analyse_stored_document(
@@ -437,6 +454,7 @@ def analyse_stored_text(
         page_count=1,
         classification=None,
         summarised=ports.records.finish(artifact_id, result),
+        topic_error=_tag_topics(artifact_id, ports),
     )
 
 
@@ -617,6 +635,7 @@ def sqs_alert_sender(queue_url: str, client: Any | None = None) -> AlertSender:
 def deployed_ports() -> AnalysisPorts:
     """The ports the analysis Lambda runs with, from its settings."""
     # Imported on use: the records module imports this one and the database layer.
+    from app.services.content_topics import PostgresContentTopics
     from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 
     return AnalysisPorts(
@@ -628,17 +647,20 @@ def deployed_ports() -> AnalysisPorts:
             if settings.NOTIFICATIONS_ENABLED
             else None
         ),
+        topics=PostgresContentTopics(database_session),
     )
 
 
 def local_ports() -> AnalysisPorts:
     """The ports the local loader runs with: no raw document store and no alerts."""
     # Imported on use, as in deployed_ports.
+    from app.services.content_topics import PostgresContentTopics
     from lambdas.artifact_analysis_records import PostgresAnalysisRecords
 
     return AnalysisPorts(
         records=PostgresAnalysisRecords(database_session),
         scorer=FinBertScorer(),
+        topics=PostgresContentTopics(database_session),
     )
 
 
@@ -700,6 +722,7 @@ def _analyse_document(
         ),
     )
     summarised = ports.records.finish(facts.artifact_id, result)
+    topic_error = _tag_topics(facts.artifact_id, ports)
     return Analysed(
         artifact_id=facts.artifact_id,
         run_id=facts.run_id,
@@ -710,6 +733,7 @@ def _analyse_document(
         classification=parsed.classification,
         summarised=summarised,
         alert_error=_alert(facts, result.sentiment, ports),
+        topic_error=topic_error,
     )
 
 
@@ -792,6 +816,21 @@ def _alert(facts: ArtifactFacts, sentiment: Sentiment, ports: AnalysisPorts) -> 
                 confidence_score=sentiment.confidence,
             )
         )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return type(exc).__name__
+    return None
+
+
+def _tag_topics(artifact_id: UUID, ports: AnalysisPorts) -> str | None:
+    """Record the analysed artifact's content topics, if the ports tag topics.
+
+    A failure never fails the analysis, which is already recorded. The
+    error's type is returned for the Lambda to log, never its text.
+    """
+    if ports.topics is None:
+        return None
+    try:
+        ports.topics.tag(artifact_id, provider=ports.provider)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         return type(exc).__name__
     return None

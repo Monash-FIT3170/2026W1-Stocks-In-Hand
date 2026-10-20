@@ -33,6 +33,7 @@ COPY parsing/__init__.py parsing/analysis.py parsing/classification_metadata.py 
     ${LAMBDA_TASK_ROOT}/parsing/
 COPY parsing/categories ${LAMBDA_TASK_ROOT}/parsing/categories
 COPY parsing/classification ${LAMBDA_TASK_ROOT}/parsing/classification
+COPY parsing/content_topics ${LAMBDA_TASK_ROOT}/parsing/content_topics
 
 # RapidOCR includes its ONNX models in the image, so scanned PDFs are analysed
 # without Textract, network calls, or a separate OCR service.

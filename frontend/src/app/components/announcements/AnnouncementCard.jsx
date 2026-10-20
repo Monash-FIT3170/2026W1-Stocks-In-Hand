@@ -1,5 +1,6 @@
 import Link from "next/link"
 import styles from "./AnnouncementCard.module.css"
+import { TopicChips } from "../topics/TopicChips"
 import { companyRoute, meaningfulText, originalUrl, recordSources, sourceKind } from "./recordPresentation"
 
 function Arrow({ external = false }) {
@@ -26,6 +27,7 @@ export function AnnouncementCard({ item, headingLevel = "h3", grouped = false })
       {(!grouped || /\d{1,2}:\d{2}/.test(item.time || "")) && <time>{item.time || "Date unavailable"}</time>}
     </div>
     <Title className={styles.title}>{item.title || "Untitled source record"}</Title>
+    <TopicChips item={item} />
     {about && <p className={styles.excerpt}>{about}</p>}
     {!about && !changed && !matters && <p className={styles.pending}>Analysis pending</p>}
     <div className={styles.actions}>

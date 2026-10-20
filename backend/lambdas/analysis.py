@@ -26,7 +26,12 @@ from pydantic import ValidationError
 
 from app.messages import AnalysisRequest, SummaryRequestMessage, analysis_request
 from lambdas import artifact_analysis
-from lambdas.artifact_analysis import AlreadyAnalysed, SummaryUnavailable, deployed_ports
+from lambdas.artifact_analysis import (
+    AlreadyAnalysed,
+    Analysed,
+    SummaryUnavailable,
+    deployed_ports,
+)
 from lambdas.common import PermanentDocumentError
 from lambdas.pipeline_stage import (
     StageRecord,
@@ -123,6 +128,7 @@ def _analyse_stored_documents(current: StageRecord) -> None:
                 run_id=outcome.run_id,
                 error_code=outcome.alert_error,
             )
+        _log_topic_error(current, outcome)
         classification = outcome.classification
         current.log(
             "completed",
@@ -143,12 +149,24 @@ def _analyse_stored_text(current: StageRecord, artifact_id: UUID) -> None:
     if isinstance(outcome, AlreadyAnalysed):
         current.log("duplicate_skipped", run_id=outcome.run_id)
         return
+    _log_topic_error(current, outcome)
     current.log(
         "completed",
         run_id=outcome.run_id,
         category=outcome.category.upper(),
         source_type=outcome.source_type,
     )
+
+
+def _log_topic_error(current: StageRecord, outcome: Analysed) -> None:
+    """Log content topics that could not be recorded; the analysis itself completed."""
+    if outcome.topic_error is not None:
+        current.log(
+            "content_topics_failed",
+            level=logging.WARNING,
+            run_id=outcome.run_id,
+            error_code=outcome.topic_error,
+        )
 
 
 def _summarise(current: StageRecord, artifact_id: UUID) -> None:

@@ -1,6 +1,6 @@
 "use client"
 
-import { Suspense, useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { AnnouncementCard } from "../components/announcements/AnnouncementCard"
@@ -9,6 +9,7 @@ import { TrendingStocks } from "../components/announcements/TrendingStocks"
 import { groupByPublicationDate } from "../components/announcements/recordPresentation"
 import { ArrowIcon } from "../components/company/CompanyPrimitives"
 import { fetchAnnouncements, fetchTrendingAnnouncements } from "../lib/api"
+import { isContentTopic, topicLabel } from "../lib/contentTopics"
 import { appendAnnouncementPage } from "./pagination"
 import pageStyles from "../page.module.css"
 import styles from "../components/research/ResearchSurface.module.css"
@@ -53,12 +54,15 @@ function formatAnnouncementTimestamp(value) {
 function AnnouncementsContent() {
   const searchParams = useSearchParams()
   const [attempt, setAttempt] = useState(0)
+  const feedGeneration = useRef(0)
   const query = searchParams.toString()
   const filters = useMemo(() => {
     const params = new URLSearchParams(query)
     return {
       today: params.get("today") === "true",
       sector: params.get("sector") || "",
+      // An unknown topic is ignored rather than sent, so a stale link still shows the feed.
+      topic: isContentTopic(params.get("topic")) ? params.get("topic") : "",
       startDate: params.get("start_date") || "",
       endDate: params.get("end_date") || "",
     }
@@ -76,9 +80,10 @@ function AnnouncementsContent() {
 
   useEffect(() => {
     let cancelled = false
+    feedGeneration.current += 1
 
     async function loadAnnouncements() {
-      setState((current) => ({ ...current, errorMessage: "", isLoading: true }))
+      setState((current) => ({ ...current, announcementCards: [], hasMore: false, isLoadingMore: false, loadMoreError: "", errorMessage: "", isLoading: true }))
 
       try {
         const [announcements, trendingStocks] = await Promise.all([
@@ -121,10 +126,12 @@ function AnnouncementsContent() {
     loadAnnouncements()
     return () => {
       cancelled = true
+      feedGeneration.current += 1
     }
   }, [attempt, filters])
 
   async function loadMoreAnnouncements() {
+    const generation = feedGeneration.current
     setState((current) => ({ ...current, isLoadingMore: true, loadMoreError: "" }))
     try {
       const announcements = await fetchAnnouncements({
@@ -132,6 +139,7 @@ function AnnouncementsContent() {
         limit: ANNOUNCEMENT_PAGE_SIZE,
         offset: state.nextOffset,
       })
+      if (generation !== feedGeneration.current) return
       const nextCards = announcements.map((item) => ({
         ...item,
         time: formatAnnouncementTimestamp(item.published_at),
@@ -151,6 +159,7 @@ function AnnouncementsContent() {
         }
       })
     } catch {
+      if (generation !== feedGeneration.current) return
       setState((current) => ({
         ...current,
         isLoadingMore: false,
@@ -168,7 +177,7 @@ function AnnouncementsContent() {
     loadMoreError,
     trendingStocks,
   } = state
-  const { today, sector, startDate, endDate } = filters
+  const { today, sector, topic, startDate, endDate } = filters
   const isPreview = announcementCards.some((item) => item.is_preview)
     || trendingStocks.some((item) => typeof item === "object" && item?.is_preview)
 
@@ -183,17 +192,17 @@ function AnnouncementsContent() {
         </header>
         {isPreview ? <div className={styles.previewNotice}><strong>Local preview data</strong><span>Illustrative records are shown because the local API is not connected.</span></div> : null}
         <div className={styles.feedWorkbench}>
-          <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} />
+          <AnnouncementFilters endDate={endDate} sector={sector} startDate={startDate} today={today} topic={topic} />
         </div>
         <div className={styles.feedLayout}><section className={styles.feedReading} aria-labelledby="latest-records-heading">
         <div className={styles.feedHeading}>
-          <h2 id="latest-records-heading">Latest source records</h2>
+          <h2 id="latest-records-heading">{topic ? `Latest records about ${topicLabel(topic).toLowerCase()}` : "Latest source records"}</h2>
           {!isLoading && !errorMessage ? <span>{announcementCards.length} shown</span> : null}
         </div>
         <div className={styles.feedList}>
           {isLoading ? <div className={styles.statePanel} aria-live="polite">Loading source records…</div> : null}
           {errorMessage ? <div className={styles.statePanel} role="alert"><h2>Could not load announcements</h2><p>{errorMessage}</p><button className={styles.secondaryButton} onClick={() => setAttempt((value) => value + 1)} type="button">Try again</button></div> : null}
-          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.statePanel}><h2>No market updates found</h2><p>Adjust the filters or collect new ASX, news, and Reddit content.</p></div> : null}
+          {!isLoading && !errorMessage && announcementCards.length === 0 ? <div className={styles.statePanel}><h2>No market updates found</h2><p>{topic ? "No collected records have been tagged with this topic for these filters. Try another topic or clear the topic filter." : "Adjust the filters or collect new ASX, news, and Reddit content."}</p></div> : null}
           {groupByPublicationDate(announcementCards).map((group) => <section className={styles.dateGroup} key={group.label}><h3>{group.label}</h3>{group.items.map((item) => <AnnouncementCard item={item} headingLevel="h4" grouped key={item.id} />)}</section>)}
           {loadMoreError ? <p role="alert">{loadMoreError}</p> : null}
           {hasMore ? (

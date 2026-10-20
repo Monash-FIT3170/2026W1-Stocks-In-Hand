@@ -406,6 +406,14 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     MAX_OCR_PIXELS_PER_PAGE: int = integer(8_000_000, minimum=1)
     # Where the analysis worker sends alerts while NOTIFICATIONS_ENABLED is on.
     NOTIFICATION_QUEUE_URL: str = text(strip=True)
+    # Whether content topic tagging asks the LLM. With it off, or with no LLM
+    # switched on, the rules alone decide an artifact's topics.
+    CONTENT_TOPICS_LLM_ENABLED: bool = flag(True)
+    # The least confidence a content topic is recorded with.
+    CONTENT_TOPIC_MIN_CONFIDENCE: float = fraction(0.5)
+    # How many days apart two artifacts may be published and still join one
+    # topic cluster.
+    CONTENT_TOPIC_CLUSTER_WINDOW_DAYS: int = integer(14, minimum=1, maximum=90)
 
     @classmethod
     def from_environment(

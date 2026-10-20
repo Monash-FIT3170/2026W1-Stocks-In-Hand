@@ -1,8 +1,9 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.content_topic_vocabulary import CONTENT_TOPICS
 from app.crud import announcement as crud
 from app.database.connection import get_db
 from app.schemas.announcement import AnnouncementResponse, TrendingAnnouncementResponse
@@ -29,8 +30,15 @@ def list_announcements(
     sector: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    topic: str | None = None,
     db: Session = Depends(get_db),
 ):
+    topic = (topic or "").strip() or None
+    if topic is not None and topic not in CONTENT_TOPICS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown topic. Use one of: {', '.join(CONTENT_TOPICS)}",
+        )
     return crud.get_announcements(
         db,
         limit=limit,
@@ -39,4 +47,5 @@ def list_announcements(
         sector=sector,
         start_date=start_date,
         end_date=end_date,
+        topic=topic,
     )

@@ -57,6 +57,7 @@ export function getPreviewAnnouncements(filters = {}) {
     const itemDate = item.published_at.slice(0, 10)
     if (filters.today && itemDate !== today) return false
     if (filters.sector && item.sector !== filters.sector) return false
+    if (filters.topic && !(Array.isArray(item.topics) && item.topics.includes(filters.topic))) return false
     if (start && itemDate < start) return false
     if (end && itemDate > end) return false
     return true

@@ -139,6 +139,9 @@ itself is set.
 | `ALERT_CLAIM_STALE_MINUTES` | No | Age at which an unfinished delivery claim may be retried. Defaults to `15`. |
 | `FRONTEND_BASE_URL` | No | Public frontend base of every link in alert and verification emails. Defaults to `http://localhost:3000`. |
 | `ALERT_VERIFICATION_TOKEN_TTL_HOURS` | No | Lifetime of email confirmation links. Defaults to `24`. |
+| `CONTENT_TOPICS_LLM_ENABLED` | No | Lets content topic tagging ask the LLM, one extra call per analysed artifact while an LLM is switched on. With it off, or with no LLM, keyword rules decide. Defaults to `true`. |
+| `CONTENT_TOPIC_MIN_CONFIDENCE` | No | Least confidence a content topic is recorded with, from `0` to `1`. Defaults to `0.5`. |
+| `CONTENT_TOPIC_CLUSTER_WINDOW_DAYS` | No | Days apart two artifacts may be published and still join one topic cluster, from `1` to `90`. Defaults to `14`. |
 
 ### Use Bedrock locally
 
@@ -187,6 +190,8 @@ signed email link, so they do not need to be added to Brevo first. See the
 | GET | `/health` | Health check |
 | GET | `/docs` | FastAPI auto-generated interactive API docs |
 | GET | `/tickers` | List all implemented ASX tickers |
+| GET | `/tickers/symbol/{symbol}/topics` | Every content topic for a ticker: its recent and previous 30-day counts, trend, and the topic clusters seen in the window, each with its records and evidence. Params: `days` (1 to 365, default 90) |
+| GET | `/announcements/` | The market feed. Params: `limit`, `offset`, `today`, `sector`, `start_date`, `end_date` and `topic` (one content topic identifier; any other value answers 422). Each item lists its `topics` |
 
 ### Sentiment (FinBERT)
 | Method | Path | Description |
@@ -517,3 +522,25 @@ a rules score, not a probability. Ambiguous and unknown results remain
 See [the advanced content classification guide](docs/advanced-content-classification.md)
 for the taxonomy, fixture evaluator, extension process and bounded
 reclassification command.
+
+## Content topics
+
+Every analysed announcement, news story and public discussion post is tagged
+with the content topics it discusses: earnings and guidance, litigation,
+regulation, product launches and macro-economic exposure. Keyword rules always
+run; with an LLM switched on, the LLM decides with the rules' topics as hints
+and quotes the passage that shows each topic. A ticker's artifacts about one
+development are grouped into topic clusters, which the deep dive shows, and the
+market feed can be filtered by topic.
+
+Apply migration `86d9contenttopics`, then tag artifacts analysed before it:
+
+```bash
+cd backend
+python -m alembic upgrade head
+python -m tools.tag_content_topics --dry-run
+python -m tools.tag_content_topics --apply
+```
+
+See [the content topics guide](docs/content-topics.md) for how topics are
+decided, the evaluator, the tagging command and how to add a topic.

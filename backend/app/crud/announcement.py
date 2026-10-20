@@ -2,8 +2,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.crud.content_topic import topic_filter
 from app.models.artifact import Artifact
 from app.models.artifact_ticker_mention import ArtifactTickerMention
 from app.models.ticker import Ticker
@@ -82,6 +83,7 @@ def get_announcements(
     sector: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    topic: str | None = None,
 ) -> list[AnnouncementResponse]:
     date_value = func.coalesce(Artifact.published_at, Artifact.created_at)
     query = (
@@ -93,6 +95,7 @@ def get_announcements(
             joinedload(Artifact.ticker_mentions).joinedload(
                 ArtifactTickerMention.ticker
             ),
+            selectinload(Artifact.content_topics),
         )
         .filter(_feed_eligible_filter())
     )
@@ -117,6 +120,9 @@ def get_announcements(
                 ),
             )
         )
+
+    if topic:
+        query = query.filter(topic_filter(topic))
 
     # UUID provides deterministic ordering when several records share the same
     # publication timestamp. Stable ordering reduces overlap between offset pages.

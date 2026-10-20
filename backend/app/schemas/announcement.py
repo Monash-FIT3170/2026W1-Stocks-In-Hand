@@ -19,6 +19,8 @@ class AnnouncementResponse(BaseModel):
     changed: Optional[str]
     matters: Optional[str]
     url: Optional[str]
+    # The content topics recorded for the artifact, most confident first.
+    topics: list[str] = []
 
 
 class TrendingAnnouncementResponse(BaseModel):

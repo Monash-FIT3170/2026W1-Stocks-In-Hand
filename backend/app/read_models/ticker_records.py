@@ -16,6 +16,7 @@ from sqlalchemy import Text, cast, func
 from sqlalchemy.orm import Session, selectinload
 
 from app.crud import ticker as ticker_crud
+from app.crud.content_topic import topic_filter
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.schemas.ticker_records import DeepDiveEvent, NewsFeedRecord
@@ -61,14 +62,14 @@ def read_news_feed(db: Session, symbol: str) -> list[NewsFeedRecord]:
     ]
 
 
-def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
+def read_deep_dive(db: Session, symbol: str, *, topic: str | None = None) -> list[DeepDiveEvent]:
     """The ticker's newest records as its research history. No records, no history.
 
     Raises ``TickerNotFound`` for a symbol with no ticker.
     """
     ticker = find_ticker(db, symbol)
     events: list[DeepDiveEvent] = []
-    for artifact in recent_artifacts(db, ticker.id, limit=PAGE_RECORDS):
+    for artifact in recent_artifacts(db, ticker.id, limit=PAGE_RECORDS, topic=topic):
         summary = artifact_summary.read(artifact)
         events.append(
             DeepDiveEvent(
@@ -82,7 +83,7 @@ def read_deep_dive(db: Session, symbol: str) -> list[DeepDiveEvent]:
     return events
 
 
-def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifact]:
+def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int, topic: str | None = None) -> list[Artifact]:
     """A ticker's newest distinct source documents.
 
     Copies of one document count once before the limit. A copy with a
@@ -96,9 +97,11 @@ def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifa
         func.nullif(func.btrim(Artifact.url), ""),
         cast(Artifact.id, Text),
     )
+    candidates = db.query(Artifact.id).filter(Artifact.ticker_id == ticker_id)
+    if topic:
+        candidates = candidates.filter(topic_filter(topic))
     distinct_records = (
-        db.query(Artifact.id)
-        .filter(Artifact.ticker_id == ticker_id)
+        candidates
         .order_by(
             source, Artifact.summaries.any().desc(), *_NEWEST_FIRST, Artifact.id.desc()
         )
@@ -108,7 +111,11 @@ def recent_artifacts(db: Session, ticker_id: UUID, *, limit: int) -> list[Artifa
     return (
         db.query(Artifact)
         .join(distinct_records, distinct_records.c.id == Artifact.id)
-        .options(artifact_summary.WITH_SUMMARY, selectinload(Artifact.platform))
+        .options(
+            artifact_summary.WITH_SUMMARY,
+            selectinload(Artifact.platform),
+            selectinload(Artifact.content_topics),
+        )
         .order_by(*_NEWEST_FIRST, Artifact.id.desc())
         .limit(limit)
         .all()
