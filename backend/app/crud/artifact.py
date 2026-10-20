@@ -14,6 +14,7 @@ from app.models.ticker import Ticker
 from app.schemas.artifact import ArtifactCreate, SourceType
 from app.services import artifact_summary
 from app.services.artifact_summary import Summary
+from app.services.feed_eligibility import approved_reddit_filter
 
 
 def create_artifact(db: Session, artifact: ArtifactCreate):
@@ -232,6 +233,7 @@ def get_discussion_posts_for_ticker(
             ),
         )
         .filter(Artifact.source_type.in_(tuple(source_types)))
+        .filter(or_(Artifact.source_type != SourceType.REDDIT.value, approved_reddit_filter()))
         .filter(Artifact.published_at >= cutoff)
         .filter(
             or_(

@@ -27,6 +27,7 @@ from app.messages import NotificationMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.models.ticker import Ticker
 from app.services import artifact_summary, scrape_runs
 from app.services import sentiment as sentiment_service
 from app.services.generation.providers import ScriptedProvider
@@ -156,10 +157,16 @@ def _news(db: Session, **values) -> Artifact:
 
 
 def _post(db: Session, **values) -> Artifact:
+    ticker = db.query(Ticker).filter(Ticker.symbol == "BHP").first()
+    if ticker is None:
+        ticker = Ticker(symbol="BHP", company_name="BHP Group", exchange="ASX")
+        db.add(ticker)
+        db.flush()
     return _artifact(
         db,
         **{
             "source_type": "reddit",
+            "ticker_id": ticker.id,
             "artifact_type": "reddit_post",
             "title": "$BHP earnings outlook",
             "raw_text": "I think profit will rise next year.",
@@ -334,7 +341,7 @@ def test_an_eligible_candidate_is_assessed_before_it_is_summarised(
     assert story.artifact_metadata["feed_eligible"] is True
     assert story.artifact_metadata["eligibility_confidence"] == 0.94
     assert story.artifact_metadata["feed_eligibility_prompt_version"] == (
-        "llm-feed-eligibility-v2"
+        "llm-feed-eligibility-v3"
     )
 
 
@@ -362,7 +369,7 @@ def test_an_ineligible_candidate_is_completed_without_summary_or_sentiment(
 def test_an_unmatched_reddit_post_is_rejected_without_calling_the_llm(
     db_session: Session,
 ) -> None:
-    post = _post(db_session, artifact_metadata={})
+    post = _post(db_session, ticker_id=None, artifact_metadata={})
     ports = _ports(db_session)
 
     outcome = analyse_stored_text(post.id, ports)

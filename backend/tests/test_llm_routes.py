@@ -150,7 +150,8 @@ def _reddit_post(db: Session, title: str, engagement: int) -> Artifact:
         ticker_id=_bhp(db).id,
         title=title,
         raw_text=f"{title} body",
-        artifact_metadata={"score": engagement, "engagement": engagement},
+        analysis_status=AnalysisStatus.COMPLETED,
+        artifact_metadata={"score": engagement, "engagement": engagement, "feed_eligible": True},
     )
 
 

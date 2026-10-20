@@ -494,6 +494,13 @@ def test_posts_for_a_ticker_rank_by_stored_engagement(db_session: Session, monke
     _collect("reddit", posts, db_session, monkeypatch)
     _collect("bluesky", [bluesky_post(f"at://x/{_unique('b')}")], db_session, monkeypatch)
 
+    # Digest selection ranks only company posts approved by analysis.
+    for post_id in (quiet, busy):
+        post = _stored(db_session, f"reddit:{post_id}")
+        post.analysis_status = "completed"
+        post.artifact_metadata = {**post.artifact_metadata, "feed_eligible": True}
+    db_session.flush()
+
     found = artifact_crud.get_discussion_posts_for_ticker(
         db_session, "bhp", source_types=("reddit",), days=36500, limit=50
     )
