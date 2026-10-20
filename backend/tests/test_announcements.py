@@ -31,6 +31,7 @@ from app.crud.announcement import (
 from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.services import artifact_summary
+from app.status import AnalysisStatus
 
 
 @pytest.fixture()
@@ -64,6 +65,32 @@ def test_announcements_route_accepts_path_without_trailing_slash(monkeypatch) ->
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_reddit_feed_requires_approval_and_preserves_company_and_link(db_session):
+    ticker = Ticker(symbol=f"R{uuid.uuid4().hex[:8]}", company_name="Research Test", exchange="ASX")
+    db_session.add(ticker)
+    db_session.flush()
+    posts = []
+    for index, (decision, linked) in enumerate([(None, True), (False, True), (True, True), (True, False)]):
+        post = Artifact(
+            ticker_id=ticker.id if linked else None,
+            source_type="reddit", artifact_type="reddit_post",
+            title=["Income etfs", "Am i in the right direction at 19 years old?", "Company earnings research", "Unmatched post"][index],
+            url=f"https://reddit.com/r/ASX/comments/{uuid.uuid4().hex}",
+            raw_text="Discussion text", published_at=datetime(2040, 1, 2, tzinfo=timezone.utc),
+            analysis_status=AnalysisStatus.COMPLETED,
+            artifact_metadata={} if decision is None else {"feed_eligible": decision},
+        )
+        db_session.add(post)
+        posts.append(post)
+    db_session.flush()
+    feed = {item.id: item for item in get_announcements(db_session, start_date=date(2040, 1, 2), end_date=date(2040, 1, 2))}
+    assert posts[0].id not in feed
+    assert posts[1].id not in feed
+    assert posts[3].id not in feed
+    assert feed[posts[2].id].ticker == ticker.symbol
+    assert feed[posts[2].id].url == posts[2].url
 
 
 def test_the_feed_shows_a_recorded_summary_and_no_lines_without_one(
