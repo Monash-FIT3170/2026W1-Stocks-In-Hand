@@ -869,6 +869,7 @@ def test_announcements_feed_and_trending_include_supported_content_sources(
         raw_text="Reddit post body",
         published_at=published_at,
         content_hash=f"reddit-{uuid.uuid4()}",
+        analysis_status=AnalysisStatus.COMPLETED,
         artifact_metadata={"feed_eligible": True},
     )
     news = Artifact(
