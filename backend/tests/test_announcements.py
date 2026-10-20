@@ -5,6 +5,7 @@ Each item is the artifact card (``app/services/artifact_card.py``), which
 """
 
 import sys
+import json
 import uuid
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
@@ -32,6 +33,8 @@ from app.models.artifact import Artifact
 from app.models.ticker import Ticker
 from app.services import artifact_summary
 from app.status import AnalysisStatus
+from app.services.generation.providers import ScriptedProvider
+from tools.reassess_reddit_feed import run_reassessment
 
 
 @pytest.fixture()
@@ -91,6 +94,39 @@ def test_reddit_feed_requires_approval_and_preserves_company_and_link(db_session
     assert posts[3].id not in feed
     assert feed[posts[2].id].ticker == ticker.symbol
     assert feed[posts[2].id].url == posts[2].url
+
+
+def test_legacy_reassessment_updates_only_eligibility_on_postgres(db_session):
+    ticker = Ticker(symbol=f"L{uuid.uuid4().hex[:8].upper()}", company_name="Legacy Test", exchange="ASX")
+    db_session.add(ticker)
+    db_session.flush()
+    post = Artifact(
+        ticker_id=ticker.id, source_type="reddit", artifact_type="reddit_post",
+        title="Income etfs", raw_text="Please review my portfolio holdings.",
+        url="https://reddit.com/r/ASX/comments/legacy-example",
+        analysis_status=AnalysisStatus.COMPLETED, artifact_metadata={"score": 45},
+    )
+    db_session.add(post)
+    db_session.commit()
+    provider = ScriptedProvider([json.dumps({
+        "feed_eligible": False, "eligibility_confidence": 0.99,
+        "reason": "General portfolio advice without company research",
+    })])
+    dry = run_reassessment(db_session, ticker=ticker.symbol, provider=provider)
+    assert dry["selected"] == 1
+    assert dry["updated"] == 0
+    assert provider.calls == []
+    applied = run_reassessment(db_session, ticker=ticker.symbol, provider=provider, apply=True)
+    assert applied["updated"] == 1
+    assert applied["failed"] == []
+    db_session.refresh(post)
+    assert post.artifact_metadata["feed_eligible"] is False
+    assert post.artifact_metadata["score"] == 45
+    assert post.ticker_id == ticker.id
+    assert post.url == "https://reddit.com/r/ASX/comments/legacy-example"
+    assert post.raw_text == "Please review my portfolio holdings."
+    assert post.analysis_status == AnalysisStatus.COMPLETED
+    assert run_reassessment(db_session, ticker=ticker.symbol)["selected"] == 0
 
 
 def test_the_feed_shows_a_recorded_summary_and_no_lines_without_one(
