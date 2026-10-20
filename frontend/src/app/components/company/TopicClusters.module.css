@@ -1,3 +1,30 @@
+.topicFilter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 24px;
+}
+
+.topicFilter select {
+  max-width: 100%;
+  padding: 10px;
+  background: var(--canvas-subtle);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.topicFilter button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .section {
   margin: 0 0 40px;
   padding-bottom: 32px;

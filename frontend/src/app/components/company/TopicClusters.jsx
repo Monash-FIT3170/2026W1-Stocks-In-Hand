@@ -41,10 +41,11 @@ function Cluster({ cluster }) {
   </article>
 }
 
-export function TopicClusters() {
+export function TopicClusters({ topic: selectedTopic = "" }) {
   const { symbol, isLoading } = useCompanyData()
   const resource = useCompanyResource(fetchTickerTopics, symbol, !isLoading)
-  const topics = Array.isArray(resource.data?.topics) ? resource.data.topics : []
+  const topics = (Array.isArray(resource.data?.topics) ? resource.data.topics : [])
+    .filter((topic) => !selectedTopic || topic.topic === selectedTopic)
   const withClusters = topics.filter((topic) => Array.isArray(topic.clusters) && topic.clusters.length)
   const [selected, setSelected] = useState(null)
   const active = selected || withClusters[0]?.topic

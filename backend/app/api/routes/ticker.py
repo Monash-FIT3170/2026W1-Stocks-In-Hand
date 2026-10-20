@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.crud import ticker as crud
+from app.content_topic_vocabulary import CONTENT_TOPICS
 from app.database.connection import get_db
 from app.read_models import ticker_brief, ticker_records, ticker_topics
 from app.read_models.ticker_records import TickerNotFound
@@ -87,10 +88,13 @@ def get_ticker_news_feed(symbol: str, db: Session = Depends(get_db)):
 
 
 @router.get("/symbol/{symbol}/deep-dive-timeline", response_model=list[DeepDiveEvent])
-def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db)):
+def get_ticker_deep_dive_timeline(symbol: str, db: Session = Depends(get_db), topic: str | None = None):
     """A ticker's research history from its stored records; with none it is empty."""
+    topic = (topic or "").strip() or None
+    if topic is not None and topic not in CONTENT_TOPICS:
+        raise HTTPException(status_code=422, detail="Unknown content topic")
     try:
-        return ticker_records.read_deep_dive(db, symbol)
+        return ticker_records.read_deep_dive(db, symbol, topic=topic)
     except TickerNotFound as exc:
         raise HTTPException(status_code=404, detail="Ticker not found") from exc
 

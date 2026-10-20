@@ -177,8 +177,11 @@ export async function fetchTickerNews(symbol) {
   return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/news-feed`)
 }
 
-export async function fetchTickerDeepDive(symbol) {
-  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/deep-dive-timeline`)
+export async function fetchTickerDeepDive(symbol, topic = "") {
+  const params = new URLSearchParams()
+  if (topic) params.set("topic", topic)
+  const query = params.toString()
+  return fetchJson(`/tickers/symbol/${encodeURIComponent(symbol)}/deep-dive-timeline${query ? `?${query}` : ""}`)
 }
 
 // Every content topic for the ticker, with its trend and the developments under it.
