@@ -63,6 +63,12 @@ from scrapers.adapter import SourceAdapter, SourceUnreachableError
 from scrapers.base import Announcement
 from tools.template_model import template_model
 
+ELIGIBLE = {
+    "feed_eligible": True,
+    "eligibility_confidence": 0.95,
+    "reason": "The story contains substantive company-specific financial information.",
+}
+
 
 @pytest.fixture()
 def db_session() -> Iterator[Session]:
@@ -640,6 +646,7 @@ ANNOUNCEMENT_SUMMARY = {
     "matters": "Higher revenue may support earnings.",
     "confirmed_facts": ["Revenue increased."],
     "speculation": [],
+    "claim_evidence": [],
 }
 
 
@@ -788,7 +795,7 @@ def test_analysis_records_the_summary_with_the_result(
     assert artifact_summary.read(artifact) == artifact_summary.from_answer(
         ANNOUNCEMENT_SUMMARY,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert artifact.artifact_metadata["page_count"] == 1
     assert (
@@ -980,6 +987,7 @@ def test_stored_text_is_analysed_once_and_each_message_is_logged(
     ports = _analysis_ports(
         workers_use,
         monkeypatch,
+        ELIGIBLE,
         {
             "summary": "BHP reported higher copper production.",
             "about": "The story covers BHP's quarterly copper output.",
@@ -995,7 +1003,7 @@ def test_stored_text_is_analysed_once_and_each_message_is_logged(
     workers_use.refresh(story)
     completed, skipped = _pipeline_events(caplog)
     assert story.analysis_status == AnalysisStatus.COMPLETED
-    assert len(ports.provider.calls) == 1
+    assert len(ports.provider.calls) == 2
     assert (completed["event"], completed["category"], completed["source_type"]) == (
         "completed",
         "NEWS_ARTICLE",
@@ -1053,7 +1061,7 @@ def test_a_summary_request_records_a_summary_and_nothing_else(
     assert {key: completed[key] for key in ("event", "artifact_id", "prompt_version")} == {
         "event": "completed",
         "artifact_id": str(artifact.id),
-        "prompt_version": "llm-announcement-summary-v3",
+        "prompt_version": "llm-announcement-summary-v4",
     }
 
 

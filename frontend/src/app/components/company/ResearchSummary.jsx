@@ -2,9 +2,10 @@
 
 import { useState } from "react"
 import { fetchTickerCategorySentiment, fetchTickerPublicDiscussionStatus } from "../../lib/api"
+import { ClarityLayer } from "./ClarityLayer"
 import { useCompanyData } from "./CompanyData"
 import { useCompanyResource } from "./useCompanyResource"
-import { displayDate, EmptyState, ResourceState, sentimentClass, SourceLinks } from "./CompanyPrimitives"
+import { displayDate, ResourceState, sentimentClass, SourceLinks } from "./CompanyPrimitives"
 import { hasResearchText, modelName, percentage } from "./companyFormat"
 import styles from "./CompanyWorkspace.module.css"
 
@@ -64,7 +65,7 @@ export function ResearchSummary() {
         <section className={styles.contextPanel}><h2>Filing activity themes</h2>{aside?.themes?.length ? <ul className={styles.themeList}>{aside.themes.map((theme, index) => <li key={index}>{theme}</li>)}</ul> : <p className={styles.muted}>No filing activity themes are available.</p>}<p className={styles.finePrint}>Themes describe filing categories, rather than financial conclusions.</p></section>
       </aside>
     </div>
-    <section className={`${styles.section} ${styles.factsSection}`} id="research-clarity"><div className={styles.sectionHeading}><h2>Facts & interpretation</h2><p>AI-assisted classification of the stored research.</p></div>{clarity?.is_classified ? <div className={styles.clarityColumns}><div><h3>Confirmed facts</h3>{clarity.confirmed_facts?.length ? <ul>{clarity.confirmed_facts.map((fact, index) => <li key={index}>{fact}</li>)}</ul> : <p>No confirmed facts were returned.</p>}</div><div><h3>Interpretation & speculation</h3>{clarity.speculation?.length ? <ul>{clarity.speculation.map((claim, index) => <li key={index}>{claim}</li>)}</ul> : <p>No interpretation was returned.</p>}</div></div> : <EmptyState title="This research has not been classified">The stored text has not yet been separated into confirmed facts and interpretation. Check its original sources before relying on a claim.</EmptyState>}</section>
+    <ClarityLayer clarity={clarity} sources={overview.sources} />
     <DiscussionCoverage resource={discussion} />
   </div>
 }

@@ -62,7 +62,7 @@ NEWS_ANSWER = {
     "matters": "Output supports revenue.",
 }
 RAW_TEXT = "Raw filing text that is not a summary."
-UNCLASSIFIED = {"is_classified": False, "confirmed_facts": [], "speculation": []}
+UNCLASSIFIED = {"is_classified": False, "confirmed_facts": [], "speculation": [], "traceable_claims": []}
 BUCKETS = {"revenue", "strategy", "risk", "dividend", "organisational", "user_discussion"}
 
 
@@ -252,6 +252,10 @@ def test_the_brief_tells_the_latest_summary_and_its_clarity(db_session: Session)
         "is_classified": True,
         "confirmed_facts": ANNOUNCEMENT_ANSWER["confirmed_facts"],
         "speculation": ANNOUNCEMENT_ANSWER["speculation"],
+        "traceable_claims": [
+            {"text": "Net profit was $1 billion.", "kind": "confirmed_fact", "source": None},
+            {"text": "Management expects costs to fall.", "kind": "speculation", "source": None},
+        ],
     }
 
 
@@ -364,6 +368,78 @@ def test_the_deep_dive_shows_the_ten_newest_records_newest_first(db_session: Ses
 
     assert [event.title for event in timeline] == [f"Update {day}" for day in range(11, 1, -1)]
     assert [event.date for event in timeline[:2]] == ["Jan 11, 2040", "Jan 10, 2040"]
+
+
+@pytest.mark.parametrize("read", [ticker_records.read_news_feed, ticker_records.read_deep_dive])
+def test_duplicate_filings_do_not_use_up_the_ten_record_slots(
+    db_session: Session,
+    read,
+) -> None:
+    ticker = _ticker(db_session)
+    for day in range(1, 13):
+        _artifact(db_session, ticker, day=day, url=f"https://example.test/{day}.pdf")
+    for _ in range(PAGE_RECORDS):
+        _artifact(db_session, ticker, day=12, url="https://example.test/12.pdf")
+
+    records = read(db_session, ticker.symbol)
+
+    assert [record.title for record in records] == [f"Update {day}" for day in range(12, 2, -1)]
+    assert len({record.sources[0].url for record in records}) == PAGE_RECORDS
+
+
+def test_a_duplicate_filing_keeps_its_available_summary(db_session: Session) -> None:
+    ticker = _ticker(db_session)
+    filing = _artifact(db_session, ticker, day=2, url="https://example.test/result.pdf")
+    summary = _record(db_session, filing, ANNOUNCEMENT_ANSWER)
+    _artifact(db_session, ticker, day=3, url="https://example.test/result.pdf")
+
+    history = ticker_records.read_deep_dive(db_session, ticker.symbol)
+    feed = ticker_records.read_news_feed(db_session, ticker.symbol)
+
+    assert [event.detail for event in history] == [summary.text]
+    assert [item.id for item in feed] == [filing.id]
+
+
+@pytest.mark.parametrize("url_field", ["canonical_url", "document_url"])
+def test_a_legacy_filing_and_its_document_url_are_one_record(
+    db_session: Session,
+    url_field: str,
+) -> None:
+    ticker = _ticker(db_session)
+    url = "https://example.test/result.pdf"
+    _artifact(db_session, ticker, day=2, url=url)
+    latest = _artifact(db_session, ticker, day=3, **{url_field: url})
+
+    records = ticker_records.recent_artifacts(db_session, ticker.id, limit=PAGE_RECORDS)
+
+    assert [record.id for record in records] == [latest.id]
+
+
+def test_distinct_documents_and_records_without_links_are_not_duplicates(
+    db_session: Session,
+) -> None:
+    ticker = _ticker(db_session)
+    filings = [
+        _artifact(
+            db_session,
+            ticker,
+            day=day,
+            title="Quarterly update",
+            canonical_url="https://example.test/announcements",
+            document_url=f"https://example.test/{day}.pdf",
+        )
+        for day in (1, 2)
+    ]
+    unlinked = [
+        _artifact(db_session, ticker, day=3),
+        _artifact(db_session, ticker, day=4, url="", document_url=" "),
+    ]
+
+    records = ticker_records.recent_artifacts(db_session, ticker.id, limit=PAGE_RECORDS)
+
+    assert [record.id for record in records] == [
+        unlinked[1].id, unlinked[0].id, filings[1].id, filings[0].id
+    ]
 
 
 def test_each_news_feed_item_is_the_artifact_card(db_session: Session) -> None:

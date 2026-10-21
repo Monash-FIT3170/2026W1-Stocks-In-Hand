@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.models.artifact import Artifact
 from app.models.artifact_summary import ArtifactSummary
+from app.services.claim_traceability import normalise_claim_evidence
 from app.services.generation import SUMMARY_LIST_KEYS, SUMMARY_TEXT_KEYS, Generated
 from app.status import AnalysisStatus
 
@@ -63,7 +64,17 @@ class SummaryExtension:
     required_for: frozenset[str] = frozenset()
 
 
-EXTENSIONS: tuple[SummaryExtension, ...] = ()
+EXTENSIONS: tuple[SummaryExtension, ...] = (
+    SummaryExtension(
+        key="claim_evidence",
+        normalise=lambda answer: (
+            normalise_claim_evidence(answer)
+            if isinstance(answer.get("claim_evidence"), list)
+            else None
+        ),
+        required_for=CLARITY_SOURCE_TYPES,
+    ),
+)
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from typing import Any
 
 from app.models.artifact import Artifact
 from app.services import artifact_summary
+from app.services.claim_traceability import artifact_source_url
 
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
@@ -66,7 +67,7 @@ def tag(artifact: Artifact) -> str:
 
 def sources(artifact: Artifact) -> list[dict[str, Any]]:
     """The artifact's original source, as evidence for a feed item or brief."""
-    url = _clean_text(artifact.url)
+    url = artifact_source_url(artifact)
     if not url:
         return []
     source_label = label(artifact.source_type, "Source")

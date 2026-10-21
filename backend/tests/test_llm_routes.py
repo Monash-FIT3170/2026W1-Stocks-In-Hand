@@ -43,6 +43,7 @@ ANNOUNCEMENT_SUMMARY = {
     "matters": "Investors can plan income timing.",
     "confirmed_facts": ["The payment date is 2 January 2040."],
     "speculation": ["The dividend may affect future income expectations."],
+    "claim_evidence": [],
 }
 NEWS_SUMMARY = {
     "summary": "BHP reported higher copper production.",

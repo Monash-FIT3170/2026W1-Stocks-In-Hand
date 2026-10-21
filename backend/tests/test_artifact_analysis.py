@@ -68,6 +68,7 @@ ANNOUNCEMENT_ANSWER = {
     "matters": "Higher revenue may support earnings.",
     "confirmed_facts": ["Revenue increased."],
     "speculation": ["Earnings may rise next year."],
+    "claim_evidence": [],
 }
 NEWS_ANSWER = {
     "summary": "BHP reported higher copper production.",
@@ -144,7 +145,11 @@ def _news(db: Session, **values) -> Artifact:
             "artifact_type": "news_article",
             "title": "BHP lifts copper output",
             "raw_text": "BHP reported an increase in quarterly copper production.",
-            "artifact_metadata": {"provider": "marketaux", "source_name": "Example News"},
+            "artifact_metadata": {
+                "provider": "marketaux",
+                "source_name": "Example News",
+                "feed_eligible": True,
+            },
             **values,
         },
     )
@@ -158,9 +163,22 @@ def _post(db: Session, **values) -> Artifact:
             "artifact_type": "reddit_post",
             "title": "$BHP earnings outlook",
             "raw_text": "I think profit will rise next year.",
+            "artifact_metadata": {"feed_eligible": True},
             **values,
         },
     )
+
+
+ELIGIBLE = {
+    "feed_eligible": True,
+    "eligibility_confidence": 0.94,
+    "reason": "The item contains substantive company-specific financial information.",
+}
+INELIGIBLE = {
+    "feed_eligible": False,
+    "eligibility_confidence": 0.98,
+    "reason": "The item is casual chatter without useful financial information.",
+}
 
 
 def _pipeline_announcement(db: Session, *, title: str = "CSL half year results"):
@@ -291,6 +309,113 @@ def test_a_discussion_post_uses_the_discussion_prompt_with_its_source_type(
     assert call.prompt.endswith("I think profit will rise next year.")
     assert post.artifact_metadata["category"] == "user_discussion"
     assert artifact_summary.read(post).prompt_version == "llm-public-discussion-summary-v2"
+
+
+def test_an_eligible_candidate_is_assessed_before_it_is_summarised(
+    db_session: Session,
+) -> None:
+    story = _news(
+        db_session,
+        artifact_metadata={"provider": "marketaux", "source_name": "Example News"},
+    )
+    ports = _ports(db_session, ELIGIBLE, NEWS_ANSWER)
+
+    outcome = analyse_stored_text(story.id, ports)
+
+    db_session.refresh(story)
+    assert outcome.summarised is True
+    assert len(ports.provider.calls) == 2
+    assert ports.provider.calls[0].prompt.startswith(
+        "You are deciding whether one candidate belongs"
+    )
+    assert ports.provider.calls[1].prompt.startswith(
+        "You are summarising a financial news story"
+    )
+    assert story.artifact_metadata["feed_eligible"] is True
+    assert story.artifact_metadata["eligibility_confidence"] == 0.94
+    assert story.artifact_metadata["feed_eligibility_prompt_version"] == (
+        "llm-feed-eligibility-v2"
+    )
+
+
+def test_an_ineligible_candidate_is_completed_without_summary_or_sentiment(
+    db_session: Session,
+) -> None:
+    story = _news(
+        db_session,
+        artifact_metadata={"provider": "marketaux", "source_name": "Example News"},
+    )
+    ports = _ports(db_session, INELIGIBLE)
+
+    outcome = analyse_stored_text(story.id, ports)
+
+    db_session.refresh(story)
+    assert outcome.summarised is False
+    assert story.analysis_status == AnalysisStatus.COMPLETED
+    assert story.artifact_metadata["feed_eligible"] is False
+    assert story.artifact_metadata["eligibility_reason"] == INELIGIBLE["reason"]
+    assert ports.scorer.scored == []
+    assert _rows(db_session, ArtifactSummary, story) == []
+    assert _rows(db_session, ArtifactSentiment, story) == []
+
+
+def test_an_unmatched_reddit_post_is_rejected_without_calling_the_llm(
+    db_session: Session,
+) -> None:
+    post = _post(db_session, artifact_metadata={})
+    ports = _ports(db_session)
+
+    outcome = analyse_stored_text(post.id, ports)
+
+    db_session.refresh(post)
+    assert outcome.summarised is False
+    assert post.artifact_metadata["feed_eligible"] is False
+    assert post.artifact_metadata["eligibility_confidence"] == 1.0
+    assert ports.provider.calls == []
+    assert ports.scorer.scored == []
+
+
+def test_a_low_confidence_acceptance_is_excluded(db_session: Session) -> None:
+    story = _news(
+        db_session,
+        artifact_metadata={"provider": "marketaux", "source_name": "Example News"},
+    )
+    uncertain = {
+        "feed_eligible": True,
+        "eligibility_confidence": 0.5,
+        "reason": "The item may be relevant.",
+    }
+
+    analyse_stored_text(story.id, _ports(db_session, uncertain))
+
+    db_session.refresh(story)
+    assert story.artifact_metadata["feed_eligible"] is False
+    assert story.artifact_metadata["eligibility_reason"].startswith(
+        "Low-confidence eligibility decision:"
+    )
+    assert _rows(db_session, ArtifactSummary, story) == []
+
+
+def test_an_unavailable_eligibility_assessment_stays_retryable(
+    db_session: Session,
+) -> None:
+    story = _news(
+        db_session,
+        artifact_metadata={"provider": "marketaux", "source_name": "Example News"},
+    )
+
+    with pytest.raises(RuntimeError, match="eligibility assessment is unavailable"):
+        analyse_stored_text(
+            story.id,
+            _ports(db_session, LLMUnavailableError("Amazon Bedrock is disabled")),
+        )
+
+    db_session.refresh(story)
+    assert story.analysis_status == AnalysisStatus.ANALYZING
+    assert story.artifact_metadata["feed_eligibility_status"] == "unavailable"
+    assert "feed_eligible" not in story.artifact_metadata
+    assert _rows(db_session, ArtifactSummary, story) == []
+    assert _rows(db_session, ArtifactSentiment, story) == []
 
 
 def test_a_post_without_a_title_is_untitled_for_the_summary_and_finbert(
@@ -451,7 +576,7 @@ def test_a_stored_announcement_is_read_classified_summarised_and_recorded(
     assert artifact_summary.read(artifact) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert (run.status, run.items_analyzed) == (ScrapeRunStatus.COMPLETED, 1)
     assert alerts == [
@@ -755,7 +880,7 @@ def test_an_announcement_is_summarised_again_from_its_stored_category_and_fields
     assert outcome == Summarised(
         artifact_id=announcement.id,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
         complete=True,
     )
     [call] = ports.provider.calls
@@ -764,7 +889,7 @@ def test_an_announcement_is_summarised_again_from_its_stored_category_and_fields
     assert artifact_summary.read(announcement) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="scripted:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     [sentiment] = _rows(db_session, ArtifactSentiment, announcement)
     assert (sentiment.sentiment_label, sentiment.model_used) == ("neutral", "earlier-finbert")
@@ -900,7 +1025,7 @@ def test_the_repair_records_only_complete_summaries(db_session: Session) -> None
     assert artifact_summary.read(incomplete) == artifact_summary.from_answer(
         ANNOUNCEMENT_ANSWER,
         model="bedrock:test-model",
-        prompt_version="llm-announcement-summary-v3",
+        prompt_version="llm-announcement-summary-v4",
     )
     assert artifact_summary.read(complete).model == "bedrock:earlier-model"
     assert artifact_summary.read(unrepaired).model == "bedrock:earlier-model"
@@ -1038,7 +1163,10 @@ def test_every_path_gives_finbert_the_title_and_text(
         db_session,
         title=title,
         raw_text=raw_text,
-        artifact_metadata={"summary": "A generated summary that must not be scored."},
+        artifact_metadata={
+            "summary": "A generated summary that must not be scored.",
+            "feed_eligible": True,
+        },
     )
     _run, announcement, stored = _stored_document(db_session, store)
     local = _local_announcement(db_session, announcement.document_url)

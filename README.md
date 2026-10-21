@@ -493,6 +493,19 @@ exec`, LocalStack's port is published — point it at
 dummy credentials (`AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test`);
 LocalStack doesn't validate them.
 
+## Claim source traceability
+
+The ticker clarity layer links each claim to its source document and publication
+date. Paraphrased claims keep their wording and show a separate supporting
+quotation. Quotations are checked against the stored document before display;
+missing passages, dates and source links are shown as unavailable.
+
+New ASX summaries store claim evidence with prompt version
+`llm-announcement-summary-v4`. Existing summaries can be refreshed through the
+admin endpoint `POST /gemini/summarise/ticker/{symbol}` or the analysis worker's
+`resummarise_missing_fields` operation. Legacy literal claims still show matching
+source passages without regeneration.
+
 ## Document classification
 
 ASX documents use the deterministic, in-process `rules-v2` classifier. It

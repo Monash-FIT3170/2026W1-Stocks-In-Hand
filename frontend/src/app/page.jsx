@@ -11,8 +11,8 @@ import { fetchAnnouncements, fetchTickers } from "./lib/api"
 import styles from "./page.module.css"
 
 // Landing page route for "/".
-// This file should stay focused on the first-screen marketing/search experience:
-// hero copy, the landing search form, popular ticker links, and feature-card layout.
+// This file should stay focused on hero copy, the landing search form,
+// popular ticker links, and feature-card layout. Saved companies live at /watchlist.
 // Shared navigation/footer changes belong in AppFrame.jsx.
 const features = [
   {

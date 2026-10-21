@@ -1453,3 +1453,8 @@
     font-size: 14px;
   }
 }
+
+
+.clarityClaims > li { margin-bottom: 1.25rem; overflow-wrap: anywhere; }
+.claimEvidence { margin: .75rem 0; padding-left: 1rem; border-left: 2px solid var(--border, #d7d9de); font-size: .875rem; line-height: 1.6; }
+.claimEvidence strong { display: block; margin-bottom: .25rem; font-size: .75rem; }
