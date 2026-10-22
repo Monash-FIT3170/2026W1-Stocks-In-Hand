@@ -131,13 +131,13 @@ def test_the_card_names_the_source_and_labels_the_link_to_it(
                 "source_url": "https://example.test/page",
                 "pdf_url": "https://example.test/file.pdf",
             },
-            "https://example.test/page",
+            "https://example.test/file.pdf",
         ),
         ("", {"pdf_url": "https://example.test/file.pdf"}, "https://example.test/file.pdf"),
         (None, {}, None),
     ],
 )
-def test_the_link_falls_back_to_the_source_page_then_the_document(
+def test_the_link_prefers_a_legacy_document_over_the_source_page(
     url: str | None,
     metadata: dict,
     expected: str | None,

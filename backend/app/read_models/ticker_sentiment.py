@@ -29,6 +29,7 @@ from app.schemas.category_sentiment import CategorySentimentResponse, CategorySe
 from app.schemas.public_discussion import PublicDiscussionSource
 from app.sentiment_buckets import SENTIMENT_BUCKETS
 from app.services import artifact_summary
+from app.services.claim_traceability import artifact_source_url
 from app.services.public_discussion import PUBLIC_DISCUSSION_SOURCE_TYPES
 from app.services.sentiment import SENTIMENT_LABELS
 from parsing.classification.taxonomy import category_for_compatibility
@@ -404,7 +405,7 @@ def _source(artifact: Artifact) -> PublicDiscussionSource:
     return PublicDiscussionSource(
         source_type=text(artifact.source_type) or "unknown",
         title=text(artifact.title),
-        url=text(artifact.canonical_url) or text(artifact.document_url) or text(artifact.url),
+        url=artifact_source_url(artifact),
         author=text(artifact.author),
         published_at=artifact.published_at,
     )

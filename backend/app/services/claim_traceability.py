@@ -119,9 +119,21 @@ def traceable_claims(artifact: Artifact | None, summary: Summary | None) -> list
 
 
 def artifact_source_url(artifact: Artifact) -> str | None:
-    """Prefer the direct document, then the canonical and legacy source links."""
+    """Prefer a specific document over a canonical page or legacy source link.
+
+    Older artifacts keep their PDF link in metadata. Treat that as a document
+    too, and use the legacy listing page only when no more specific link exists.
+    Every candidate must be a usable HTTP(S) URL.
+    """
+    metadata = artifact.artifact_metadata if isinstance(artifact.artifact_metadata, dict) else {}
+    candidates = (
+        artifact.document_url,
+        metadata.get("pdf_url"),
+        artifact.canonical_url,
+        artifact.url,
+        metadata.get("source_url"),
+    )
     return next(
-        (url for value in (artifact.document_url, artifact.canonical_url, artifact.url)
-         if (url := safe_source_url(value))),
+        (url for value in candidates if (url := safe_source_url(value))),
         None,
     )

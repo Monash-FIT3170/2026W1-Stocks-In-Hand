@@ -493,6 +493,17 @@ exec`, LocalStack's port is published — point it at
 dummy credentials (`AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test`);
 LocalStack doesn't validate them.
 
+## Company report sources
+
+Report links in the market feed, company records, research brief, claim citations
+and sentiment evidence use the same document-first selection. Older records can
+use a PDF link stored in metadata; publication and source pages remain fallbacks
+when a document link is unavailable. Company citations display the report title
+and its supplied date, including in compact layouts.
+
+See [company report source links](docs/company-report-sources.md) for link
+precedence, legacy behavior and verification.
+
 ## Claim source traceability
 
 The ticker clarity layer links each claim to its source document and publication
