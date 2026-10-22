@@ -692,6 +692,61 @@ def test_an_announcement_is_stored_under_its_categorys_artifact_type(
     assert artifact.artifact_type == artifact_type
 
 
+@pytest.mark.parametrize("path", ["worker", "local_loader"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        (
+            "Appendix 3A.1\nDistribution Amount\nAUD 0.12500000\n"
+            "Percentage of ordinary dividend/distribution that is\nfranked\n75.5000 %\n"
+            "Payment Date\n1/7/2026\nThe dividend relates to six months."
+        ),
+        (
+            "The board declared an interim dividend of 12.5 cents per share, "
+            "partially franked at 75.5%. Payment Date Wednesday, 1 July 2026."
+        ),
+    ],
+    ids=["appendix", "prose"],
+)
+def test_dividend_precision_reaches_persisted_fields_and_the_summary_prompt(
+    db_session: Session,
+    store: RawDocumentStore,
+    path: str,
+    text: str,
+) -> None:
+    title = "Interim Dividend Announcement"
+    answer = {
+        "summary": "An interim dividend was declared.",
+        "about": "The company declared a dividend of 12.5 cents per share.",
+        "changed": "The dividend is 75.5% franked.",
+        "matters": "The payment date is 1 July 2026.",
+        "confirmed_facts": [],
+        "speculation": [],
+        "claim_evidence": [],
+    }
+    ports = _ports(db_session, answer, documents=store)
+    if path == "worker":
+        _run, artifact, stored = _stored_document(db_session, store, title=title, text=text)
+        outcome = analyse_stored_document(stored.location, ports)
+    else:
+        artifact = _local_announcement(db_session, f"https://example.test/{uuid.uuid4()}.txt")
+        artifact.title = title
+        db_session.commit()
+        outcome = analyse_downloaded_document(artifact.id, _document(artifact, text), ports)
+
+    db_session.refresh(artifact)
+    assert isinstance(outcome, Analysed)
+    assert artifact.artifact_type == "dividend_announcement"
+    extracted = artifact.artifact_metadata["extracted_data"]
+    assert extracted["amount_per_share"] == "12.5 cents"
+    assert extracted["franking_percent"] == "75.5%"
+    assert extracted["payment_date"] == "2026-07-01"
+    assert extracted["dividend_type"] == "interim"
+    [call] = ports.provider.calls
+    assert '"amount_per_share": "12.5 cents"' in call.prompt
+    assert '"franking_percent": "75.5%"' in call.prompt
+
+
 def test_a_completed_announcement_is_not_analysed_again(
     db_session: Session,
     store: RawDocumentStore,
