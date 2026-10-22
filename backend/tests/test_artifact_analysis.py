@@ -27,6 +27,7 @@ from app.messages import NotificationMessage
 from app.models.artifact import Artifact
 from app.models.artifact_sentiment import ArtifactSentiment
 from app.models.artifact_summary import ArtifactSummary
+from app.read_models import ticker_records, ticker_sentiment
 from app.services import artifact_summary, scrape_runs
 from app.services import sentiment as sentiment_service
 from app.services.generation.providers import ScriptedProvider
@@ -690,6 +691,37 @@ def test_an_announcement_is_stored_under_its_categorys_artifact_type(
 
     db_session.refresh(artifact)
     assert artifact.artifact_type == artifact_type
+
+
+def test_an_analysed_appendix_2a_is_visible_but_excluded_from_sentiment_buckets(
+    db_session: Session,
+    store: RawDocumentStore,
+) -> None:
+    _run, artifact, stored = _stored_document(
+        db_session,
+        store,
+        title="Application for quotation of securities - CSL",
+        text="Appendix 2A\nTotal number of +securities on issue following this notice.",
+    )
+    ports = _ports(db_session, ANNOUNCEMENT_ANSWER, documents=store)
+
+    outcome = analyse_stored_document(stored.location, ports)
+
+    db_session.refresh(artifact)
+    assert isinstance(outcome, Analysed)
+    assert artifact.artifact_type == "security_notification"
+    assert artifact.artifact_metadata["category"] == "SecurityNotification"
+    assert artifact.artifact_metadata["classification"]["classifier_version"] == "rules-v3"
+    assert artifact.artifact_metadata["extracted_data"] == {}
+    assert ticker_sentiment.buckets_for(artifact) == ()
+    assert _rows(db_session, ArtifactSentiment, artifact)
+    categories = ticker_sentiment.read_category_sentiment(db_session, "CSL").categories
+    assert all(not result.available and result.sources_count == 0 for result in categories.values())
+    [record] = ticker_records.read_news_feed(db_session, "CSL")
+    assert record.id == artifact.id
+    assert record.tag == "Security Notification"
+    [call] = ports.provider.calls
+    assert "Detected category:\nSecurityNotification" in call.prompt
 
 
 def test_a_completed_announcement_is_not_analysed_again(

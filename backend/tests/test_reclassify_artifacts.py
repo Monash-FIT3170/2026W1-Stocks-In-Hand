@@ -9,6 +9,7 @@ from tools.reclassify_artifacts import (
     ReclassificationOptions,
     reclassify_records,
 )
+from app.read_models.ticker_sentiment import buckets_for
 
 
 def _artifact(
@@ -145,6 +146,40 @@ def test_reclassification_stores_an_announcements_category_type() -> None:
     assert "classification" in story.artifact_metadata
     assert story.artifact_type == "news_article"
     assert unapplied.artifact_type == "asx_announcement_other"
+
+
+def test_an_older_appendix_2a_is_reclassified_once_without_rewriting_its_analysis() -> None:
+    artifact = _artifact(
+        artifact_id=1,
+        ticker="ANZ",
+        title="Application for quotation of securities - ANZ",
+        raw_text="Appendix 2A\nTotal number of +securities on issue.",
+        metadata={
+            "category": "UNKNOWN",
+            "classification": {"classifier_version": "rules-v2", "status": "unknown"},
+            "summary": "Previously stored summary.",
+            "sentiment_label": "neutral",
+            "custom": {"preserved": True},
+        },
+    )
+    original = deepcopy(artifact.artifact_metadata)
+    preview = reclassify_records([artifact], ReclassificationOptions())
+
+    assert preview.changed == 1
+    assert artifact.artifact_metadata == original
+    assert artifact.artifact_type == "asx_announcement_other"
+
+    applied = reclassify_records([artifact], ReclassificationOptions(dry_run=False))
+    repeated = reclassify_records([artifact], ReclassificationOptions(dry_run=False))
+
+    assert applied.changed == 1 and applied.failed == 0
+    assert repeated.changed == 0 and repeated.unchanged == 1
+    assert artifact.artifact_metadata["category"] == "SecurityNotification"
+    assert artifact.artifact_metadata["classification"]["classifier_version"] == "rules-v3"
+    assert artifact.artifact_type == "security_notification"
+    assert buckets_for(artifact) == ()
+    for key in ("summary", "sentiment_label", "custom"):
+        assert artifact.artifact_metadata[key] == original[key]
 
 
 def test_reclassification_reports_unknown_documents() -> None:

@@ -8,6 +8,10 @@ service, Groq, Gemini or another model.
 The score is a deterministic rules score. It is not a probability or a measure
 of model certainty.
 
+The current classifier version is `rules-v3`. This version adds Appendix 2A
+quotation notices to the existing security-notification category; stored category
+identifiers and artifact types are unchanged.
+
 ## Taxonomy
 
 | Stable identifier | Compatibility category |
@@ -43,9 +47,41 @@ consumers.
 4. Add sanitized regression excerpts and manifest entries before changing the
    rules. Each enabled category should retain at least five positive fixtures.
 5. Run the focused public-interface tests and evaluator.
-6. Add an extractor to `backend/parsing/extractors.py` only if a separate,
-   existing metric extractor supports the category. Classification does not
-   imply that metric extraction exists.
+6. Set the definition's `extractor` in the taxonomy only if a separate, existing
+   metric extractor supports the category. Classification does not imply that
+   metric extraction exists.
+
+## Appendix 2A quotation notices
+
+Titles naming an “Application for quotation of securities” (including ASX's
+`+securities` markup) and bounded Appendix 2A identifiers in titles or filenames
+identify security notifications. Body-only form evidence still needs supporting
+context to reach the classification threshold. Incidental references, conflicting
+capital-raising context and unsupported publisher/news inputs retain the existing
+review and source-type safeguards.
+
+New analyses store `category: SecurityNotification` and
+`artifact_type: security_notification`. These notices remain available in source
+records, summaries and research history. The category's existing mapping excludes
+them from category-sentiment buckets; this does not remove their stored sentiment
+or change the separate latest-filing signal rule. No Appendix 2A metric extractor
+is added.
+
+The supplemental `appendix_2a_manifest.json` contains nine synthetic regression
+cases. The original 85-fixture corpus and its frozen legacy baseline are retained
+unchanged. Run both current-rule evaluations from `backend/`:
+
+```bash
+python -m tools.evaluate_classification --classifier current
+python -m tools.evaluate_classification --classifier current \
+  --manifest tests/fixtures/classification/appendix_2a_manifest.json
+```
+
+Verification for this change: 174 selected tests passed in Docker across
+classification, taxonomy, reclassification, artifact analysis, ticker read-models
+and database behavior. Both the original 85-fixture corpus and the nine-case
+supplement scored macro F1 1.0 with no unknown false positives. These are bounded
+regression results, rather than a claim of accuracy on every real-world filing.
 
 ## Adding a regression fixture
 
@@ -95,9 +131,17 @@ python -m tools.reclassify_artifacts \
 ```
 
 The JSON summary reports scanned, changed, unchanged, ambiguous, unknown and
-failed counts. Repeating the command for `rules-v2` skips already current rows.
+failed counts. Repeating the command for `rules-v3` skips already current rows.
 Unrelated metadata is preserved. Existing extracted data is retained and marked
 stale when its compatibility category changes.
+
+The version change makes older `rules-v2` records eligible for this tool. They
+are not reclassified automatically by deploying the new rules. Review the dry-run
+output before applying it: the selection includes all older classifications in
+the chosen ticker/bounds, rather than only Appendix 2A notices. Applying it does
+not regenerate summaries or rescore sentiment, although category-sentiment results
+will use the updated category immediately. No data migration or live backfill is
+included in this change.
 
 ## Comparing sentiment buckets
 

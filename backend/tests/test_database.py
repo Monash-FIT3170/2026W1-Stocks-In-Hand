@@ -1163,5 +1163,5 @@ def test_reclassification_command_filters_batches_and_is_idempotent(
     assert applied.scanned == 1 and applied.changed == 1
     assert repeated.scanned == 0 and repeated.changed == 0
     assert csl_artifact.artifact_metadata["custom"] == "preserved"
-    assert csl_artifact.artifact_metadata["classification_method"] == "rules-v2"
+    assert csl_artifact.artifact_metadata["classification_method"] == "rules-v3"
     assert anz_artifact.artifact_metadata == {}
