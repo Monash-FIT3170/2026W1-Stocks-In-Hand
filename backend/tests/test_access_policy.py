@@ -39,12 +39,15 @@ PUBLIC_WRITE_ROUTES = {
     ("POST", "/auth/sign-up"),
     ("POST", "/auth/sign-in"),
     ("POST", "/auth/sign-out"),
+    ("POST", "/auth/confirm-email-change"),
     ("POST", "/notifications/verify"),
     ("POST", "/notifications/unsubscribe"),
 }
 # Routes where a signed-in investor changes their own data.
 INVESTOR_WRITE_ROUTES = {
     ("POST", "/auth/bootstrap"),
+    ("PATCH", "/auth/me"),
+    ("POST", "/auth/me/change-password"),
     ("POST", "/watchlists"),
     ("POST", "/watchlists/"),
     ("DELETE", "/watchlists/{watchlist_id}"),

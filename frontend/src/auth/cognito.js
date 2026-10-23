@@ -3,6 +3,7 @@ import {
   confirmSignIn,
   confirmSignUp,
   confirmResetPassword,
+  confirmUserAttribute,
   fetchAuthSession,
   getCurrentUser,
   resendSignUpCode,
@@ -12,6 +13,8 @@ import {
   signOut,
   signUp,
   updateMFAPreference,
+  updatePassword,
+  updateUserAttributes,
   verifyTOTPSetup,
 } from "aws-amplify/auth"
 
@@ -168,6 +171,31 @@ export async function confirmCognitoPasswordReset({
     confirmationCode: confirmationCode.trim(),
     newPassword,
   })
+}
+
+export async function updateCognitoProfile({ email, name }) {
+  configureCognito()
+  const userAttributes = {}
+  if (email) {
+    userAttributes.email = email.trim().toLowerCase()
+  }
+  if (name) {
+    userAttributes.name = name.trim()
+  }
+  return updateUserAttributes({ userAttributes })
+}
+
+export async function confirmCognitoEmailChange(confirmationCode) {
+  configureCognito()
+  return confirmUserAttribute({
+    userAttributeKey: "email",
+    confirmationCode: confirmationCode.trim(),
+  })
+}
+
+export async function changeCognitoPassword({ oldPassword, newPassword }) {
+  configureCognito()
+  return updatePassword({ oldPassword, newPassword })
 }
 
 export function getCognitoErrorMessage(error, fallback) {

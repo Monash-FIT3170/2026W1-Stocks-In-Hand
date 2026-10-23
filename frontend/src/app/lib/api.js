@@ -194,6 +194,32 @@ export async function fetchCurrentInvestor() {
   return data?.investor || null
 }
 
+export async function updateProfile(data) {
+  return fetchJson("/auth/me", {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function changePassword(data) {
+  return fetchJson("/auth/me/change-password", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function confirmEmailChange(token) {
+  return fetchJson("/auth/confirm-email-change", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  })
+}
+
 // The signed-in investor's watchlist and each watched company, in one request.
 export async function fetchWatchlistSummary() {
   return fetchJson("/watchlists/me/summary", { credentials: "include" })

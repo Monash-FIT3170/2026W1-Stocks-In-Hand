@@ -14,6 +14,7 @@ class InvestorResponse(BaseModel):
     username: Optional[str]
     role: str
     created_at: datetime
+    pending_email: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

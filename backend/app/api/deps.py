@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -84,6 +85,21 @@ def get_current_investor(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Cognito profile setup required",
             )
+        if investor.email != cognito_user.email or (
+            cognito_user.name and investor.username != cognito_user.name
+        ):
+            investor.email = cognito_user.email
+            if cognito_user.name:
+                investor.username = cognito_user.name
+            try:
+                db.commit()
+                db.refresh(investor)
+            except IntegrityError as exc:
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Verified email belongs to another investor",
+                ) from exc
         investor._cognito_mfa_enabled = cognito_user.mfa_enabled
         investor._authenticated_with_cognito = True
         return investor

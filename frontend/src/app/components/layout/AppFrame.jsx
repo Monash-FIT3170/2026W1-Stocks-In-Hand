@@ -39,6 +39,7 @@ function titleForPath(pathname) {
   }
   if (pathname.startsWith("/announcements")) return "Announcements"
   if (pathname.startsWith("/watchlist")) return "My watchlist"
+  if (pathname.startsWith("/settings/profile")) return "Profile settings"
   if (pathname.startsWith("/settings/notifications")) return "Alert settings"
   if (pathname.startsWith("/unsubscribe")) return "Unsubscribe"
   if (pathname.startsWith("/search")) return "Company search"
@@ -72,6 +73,8 @@ export function AppFrame({ children }) {
       ? "search"
     : pathname.startsWith("/watchlist")
       ? "watchlist"
+      : pathname.startsWith("/settings/profile")
+        ? "profile-settings"
       : pathname.startsWith("/settings/notifications")
         ? "alert-settings"
       : pathname === "/"
@@ -229,6 +232,7 @@ export function AppFrame({ children }) {
             </button>
           </nav>
           <div className={styles.navActions}>
+            {hasSession && <Link aria-current={active === "profile-settings" ? "page" : undefined} className={styles.settingsLink} href="/settings/profile">Profile</Link>}
             {hasSession && <Link aria-current={active === "alert-settings" ? "page" : undefined} className={styles.settingsLink} href="/settings/notifications">Alerts</Link>}
             {hasSession && isCognitoAuthEnabled() ? <Link className={styles.settingsLink} href="/mfa-setup">Security</Link> : null}
             <Link className={styles.signInButton} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Sign out" : "Sign in"}</Link>
@@ -251,6 +255,7 @@ export function AppFrame({ children }) {
             {aboutLinks.map((item) => <Link href={item.href} key={item.href}>{item.title}</Link>)}
           </nav>
           <div className={styles.mobilePanelFooter}>
+            {hasSession && <Link href="/settings/profile">Profile</Link>}
             {hasSession && <Link href="/settings/notifications">Alert settings</Link>}
             {hasSession && isCognitoAuthEnabled() ? <Link href="/mfa-setup">Security</Link> : null}
             <Link className={styles.mobileAccountAction} href={hasSession ? "/sign-out" : "/sign-in"}>{hasSession ? "Sign out" : "Sign in"}</Link>

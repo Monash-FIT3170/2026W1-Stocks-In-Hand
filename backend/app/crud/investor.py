@@ -1,10 +1,15 @@
+import secrets
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from uuid import UUID
 from app.models.investor import Investor
 from app.schemas.investor import InvestorCreate
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password, hash_session_token, verify_password
+
+EMAIL_CHANGE_TOKEN_TTL = timedelta(hours=24)
 
 def get_investor(db: Session, investor_id: UUID):
     return db.query(Investor).filter(Investor.id == investor_id).first()
@@ -154,6 +159,84 @@ def update_investor(db: Session, investor_id: UUID, data: dict):
     db.commit()
     db.refresh(db_investor)
     return db_investor
+
+def update_investor_profile(db: Session, investor: Investor, data: dict):
+    """Apply immediate (non-email) profile fields. Email changes go through
+    ``request_email_change`` instead, since they must be verified first."""
+    allowed = {"username"}
+    for key, value in data.items():
+        if key not in allowed:
+            raise ValueError(f"Investor field '{key}' cannot be updated")
+        setattr(investor, key, value)
+    db.commit()
+    db.refresh(investor)
+    return investor
+
+def change_password(db: Session, investor: Investor, current_password: str, new_password: str):
+    if not verify_password(current_password, investor.hashed_password):
+        raise ValueError("Current password is incorrect")
+    investor.hashed_password = hash_password(new_password)
+    db.commit()
+    db.refresh(investor)
+    return investor
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+def request_email_change(db: Session, investor: Investor, new_email: str) -> str:
+    """Start a pending email change, returning the raw confirmation token.
+
+    The investor's ``email`` is not touched until the new address is
+    confirmed through ``confirm_email_change``.
+    """
+    normalized = new_email.strip().lower()
+    if normalized == investor.email:
+        raise ValueError("That is already your email address")
+    existing = get_auth_investor_by_email(db, email=normalized)
+    if existing and existing.id != investor.id:
+        raise ValueError("Email already registered")
+
+    raw_token = secrets.token_urlsafe(32)
+    investor.pending_email = normalized
+    investor.pending_email_token_hash = hash_session_token(raw_token)
+    investor.pending_email_requested_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(investor)
+    return raw_token
+
+def confirm_email_change(db: Session, investor_id: UUID, raw_token: str) -> Investor:
+    invalid = ValueError("This confirmation link is invalid or has expired")
+    investor = get_investor(db, investor_id)
+    if (
+        not investor
+        or not investor.pending_email
+        or not investor.pending_email_token_hash
+        or not investor.pending_email_requested_at
+    ):
+        raise invalid
+    requested_at = _aware_utc(investor.pending_email_requested_at)
+    if datetime.now(timezone.utc) - requested_at > EMAIL_CHANGE_TOKEN_TTL:
+        raise invalid
+    if not secrets.compare_digest(
+        hash_session_token(raw_token), investor.pending_email_token_hash
+    ):
+        raise invalid
+
+    new_email = investor.pending_email
+    conflicting = get_auth_investor_by_email(db, email=new_email)
+    investor.pending_email = None
+    investor.pending_email_token_hash = None
+    investor.pending_email_requested_at = None
+    if conflicting and conflicting.id != investor.id:
+        db.commit()
+        raise ValueError("That email address was claimed by another account")
+
+    investor.email = new_email
+    db.commit()
+    db.refresh(investor)
+    return investor
 
 def delete_investor(db: Session, investor_id: UUID):
     db_investor = get_investor(db, investor_id)

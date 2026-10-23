@@ -13,5 +13,8 @@ class Investor(Base):
     username = Column(String, nullable=True)
     hashed_password = Column(String, nullable=True)
     role = Column(String, default="user")
+    pending_email = Column(String, nullable=True)
+    pending_email_token_hash = Column(String(64), nullable=True)
+    pending_email_requested_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

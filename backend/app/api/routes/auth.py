@@ -1,4 +1,8 @@
+import logging
 from datetime import datetime, timedelta, timezone
+from html import escape
+from urllib.parse import urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -16,7 +20,17 @@ from app.crud import investor as investor_crud
 from app.database.connection import get_db
 from app.models.auth_session import AuthSession
 from app.models.investor import Investor
-from app.schemas.auth import AuthResponse, SignInRequest, SignUpRequest
+from app.schemas.auth import (
+    AuthResponse,
+    ConfirmEmailChangeRequest,
+    PasswordChangeRequest,
+    ProfileUpdateRequest,
+    SignInRequest,
+    SignUpRequest,
+)
+from app.services.email_sender import Accepted, OutgoingEmail, configured_sender
+
+LOGGER = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -104,6 +118,114 @@ def sign_in(body: SignInRequest, response: Response, db: Session = Depends(get_d
 @router.get("/me", response_model=AuthResponse)
 def me(current_investor: Investor = Depends(get_current_investor)):
     return {"message": "Authenticated", "investor": current_investor}
+
+
+def _reject_if_cognito_managed(current_investor: Investor) -> None:
+    if getattr(current_investor, "_authenticated_with_cognito", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This account is managed through Cognito — update it there instead",
+        )
+
+
+def _email_change_confirmation_url(investor_id: UUID, raw_token: str) -> str:
+    base_url = settings.FRONTEND_BASE_URL.strip().rstrip("/")
+    token = f"{investor_id.hex}.{raw_token}"
+    return f"{base_url}/confirm-email-change?{urlencode({'token': token})}"
+
+
+def _send_email_change_confirmation(to: str, confirm_url: str) -> None:
+    subject = "Confirm your new Stocks In Hand email address"
+    safe_url = escape(confirm_url, quote=True)
+    html = (
+        "<!doctype html><html lang=\"en\"><body>"
+        "<h1>Confirm your new email address</h1>"
+        "<p>Click the link below to confirm this is your new Stocks In Hand sign-in email.</p>"
+        f'<p><a href="{safe_url}">Confirm email address</a></p>'
+        "<p>If you did not request this change, you can ignore this email.</p>"
+        "</body></html>"
+    )
+    text = (
+        "Confirm your new Stocks In Hand email address\n\n"
+        "Open this link to confirm:\n"
+        f"{confirm_url}\n\n"
+        "If you did not request this change, you can ignore this email.\n"
+    )
+    outcome = configured_sender().send(
+        OutgoingEmail(to=to, subject=subject, html=html, text=text)
+    )
+    if not isinstance(outcome, Accepted):
+        LOGGER.warning("Email change confirmation to %s was not accepted: %s", to, outcome)
+
+
+@router.patch("/me", response_model=AuthResponse)
+def update_profile(
+    body: ProfileUpdateRequest,
+    current_investor: Investor = Depends(get_current_investor),
+    db: Session = Depends(get_db),
+):
+    _reject_if_cognito_managed(current_investor)
+    data = body.model_dump(exclude_unset=True)
+    new_email = data.pop("email", None)
+
+    if data:
+        try:
+            investor_crud.update_investor_profile(db, current_investor, data)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    message = "Profile updated successfully"
+    if new_email is not None and new_email != current_investor.email:
+        try:
+            raw_token = investor_crud.request_email_change(
+                db, current_investor, new_email
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        confirm_url = _email_change_confirmation_url(current_investor.id, raw_token)
+        _send_email_change_confirmation(current_investor.pending_email, confirm_url)
+        message = (
+            "Profile updated successfully. Check your new email address to "
+            "confirm the change."
+        )
+
+    return {"message": message, "investor": current_investor}
+
+
+@router.post("/confirm-email-change")
+def confirm_email_change(body: ConfirmEmailChangeRequest, db: Session = Depends(get_db)):
+    invalid_link = HTTPException(
+        status_code=400, detail="This confirmation link is invalid or has expired"
+    )
+    parts = body.token.split(".", 1)
+    if len(parts) != 2:
+        raise invalid_link
+    try:
+        investor_id = UUID(hex=parts[0])
+    except ValueError as exc:
+        raise invalid_link from exc
+
+    try:
+        investor_crud.confirm_email_change(db, investor_id, parts[1])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": "Email address updated successfully"}
+
+
+@router.post("/me/change-password")
+def change_password(
+    body: PasswordChangeRequest,
+    current_investor: Investor = Depends(get_current_investor),
+    db: Session = Depends(get_db),
+):
+    _reject_if_cognito_managed(current_investor)
+    try:
+        investor_crud.change_password(
+            db, current_investor, body.current_password, body.new_password
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": "Password changed successfully"}
 
 
 @router.post("/bootstrap", response_model=AuthResponse)

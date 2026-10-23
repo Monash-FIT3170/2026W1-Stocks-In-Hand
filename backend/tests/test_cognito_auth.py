@@ -274,6 +274,50 @@ def test_current_investor_uses_cognito_subject_in_cognito_mode(
     verify_user.assert_called_once_with(principal)
 
 
+def test_current_investor_syncs_email_from_cognito_attributes(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    investor = Investor(
+        email="old@example.com",
+        cognito_sub="subject-123",
+        username="Old Name",
+        role="user",
+    )
+    db_session.add(investor)
+    db_session.commit()
+    principal = CognitoPrincipal("subject-123", None, "access-token", {})
+    monkeypatch.setattr(settings, "AUTH_PROVIDER", "cognito")
+    monkeypatch.setattr(
+        deps,
+        "authenticate_cognito_authorization",
+        MagicMock(return_value=principal),
+    )
+    monkeypatch.setattr(
+        deps,
+        "get_verified_cognito_user",
+        MagicMock(
+            return_value=CognitoUser(
+                sub="subject-123",
+                email="new@example.com",
+                name="New Name",
+            )
+        ),
+    )
+
+    current = deps.get_current_investor(
+        session_token=None,
+        authorization="Bearer access-token",
+        db=db_session,
+    )
+
+    assert current.email == "new@example.com"
+    assert current.username == "New Name"
+    db_session.refresh(investor)
+    assert investor.email == "new@example.com"
+    assert investor.username == "New Name"
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status"),
     [
