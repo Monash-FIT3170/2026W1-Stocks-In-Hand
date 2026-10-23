@@ -2,22 +2,21 @@
 
 ## People
 
-* Arv Surana
-* Mahissh Pranav Surendhar Rajasudha
-* Christian Rogan
-* Merrick Campbell
-* Akshara Balreddygari
-* Akshat Porwal
-* Mitchell Padula
-* James Baxter
-* Raveen Munasinghe
-* Roshan Raj Saravanan
-* Moin Vohra
-* Caden Arnold
-* Jordan Tran
-* Alan Sebastian
-* Aadi Kapoor
-
+- Arv Surana
+- Mahissh Pranav Surendhar Rajasudha
+- Christian Rogan
+- Merrick Campbell
+- Akshara Balreddygari
+- Akshat Porwal
+- Mitchell Padula
+- James Baxter
+- Raveen Munasinghe
+- Roshan Raj Saravanan
+- Moin Vohra
+- Caden Arnold
+- Jordan Tran
+- Alan Sebastian
+- Aadi Kapoor
 
 # Project
 
@@ -38,8 +37,28 @@ A full-stack proof of concept for financial sentiment analysis on ASX/stock news
 
 ## Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- No Python, Node, or npm needed locally
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Compose v2 and BuildKit support — the Dockerfiles use BuildKit cache mounts
+- Git, and a terminal — PowerShell works for normal startup, but Git Bash or WSL is needed for the Bash-only `init.sh` script on Windows
+- Internet access on the first build, to pull base images and download Playwright's Chromium and the FinBERT model
+- No Python, Node, or npm needed locally; the containers currently use Node 20, Python 3.11 (3.12 for the analysis Lambda image), and PostgreSQL 15
+
+### Practical workstation sizing
+
+| Resource  | Practical minimum | Recommended      | Why                                                                     |
+| --------- | ----------------- | ---------------- | ----------------------------------------------------------------------- |
+| CPU       | 4 logical cores   | 6+ logical cores | Container builds, Next.js and PyTorch can run concurrently.             |
+| Memory    | 8 GB RAM          | 16 GB RAM        | Docker, PostgreSQL, Chromium and FinBERT are memory-heavy together.     |
+| Free disk | 8 GB              | 15+ GB           | Images include PyTorch, Chromium and a ~500MB model, plus build caches. |
+
+These are practical estimates derived from the container stack, not hard limits declared by the repository.
+
+### Local ports
+
+| Port | Service          | Notes                                                                      |
+| ---- | ---------------- | -------------------------------------------------------------------------- |
+| 3000 | Next.js frontend | Published by all Compose variants.                                         |
+| 8000 | FastAPI backend  | Published by all Compose variants.                                         |
+| 5432 | PostgreSQL       | Published only by `docker-compose-dev.yml`; otherwise internal to Compose. |
 
 ---
 
@@ -55,6 +74,7 @@ cp backend/.env.example backend/.env
 
 Then, fill in `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET` (see "Environment
 variables" below) and, in the root folder of the project:
+
 ```bash
 docker compose -f docker-compose.yml up --build
 ```
@@ -94,51 +114,51 @@ AWS a secret, such as `DATABASE_URL` or `BREVO_API_KEY`, is read from the SSM
 parameter that its `<NAME>_PARAMETER` variable names, unless the variable
 itself is set.
 
-| Variable | Required | Description |
-|---|---|---|
-| `REDDIT_CLIENT_ID` | For Reddit | Client ID from a Reddit script application. |
-| `REDDIT_CLIENT_SECRET` | For Reddit | Client secret from the same Reddit application. |
-| `BLUESKY_IDENTIFIER` | No | Bluesky handle for authenticated search. Leave empty for public search. |
-| `BLUESKY_APP_PASSWORD` | No | Bluesky app password. Must be set with `BLUESKY_IDENTIFIER`. |
-| `PUBLIC_DISCUSSION_FEED_URLS` | For blogs | Comma-separated HTTPS RSS or Atom feed allowlist. |
-| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No | Scheduled subset of `reddit`, `bluesky`, `mastodon` and `blog`. Other names are ignored. Defaults to `bluesky,mastodon`. |
-| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT` | No | Scheduled item limit per source, from `1` to `25`. Defaults to `10`. |
-| `PUBLIC_DISCUSSION_SEARCH_QUERY` | No | Shared Reddit, Bluesky, and Mastodon search value, at most 100 characters. Defaults to `ASX`, also when empty. |
-| `LLM_PROVIDER` | No | Defaults to `bedrock`. `groq` remains available only for an explicit local rollback. |
-| `BEDROCK_ENABLED` | For generated summaries | Must be `true` before the app invokes Bedrock. Defaults to `false`. |
-| `BEDROCK_MODEL_ID` | No | Defaults to regional `openai.gpt-oss-120b-1:0`. |
-| `BEDROCK_SERVICE_TIER` | No | `default`, `flex`, or `priority`. AWS queued analysis uses `flex`. |
-| `BEDROCK_MAX_PROMPT_CHARS` | No | Rejects prompts over 30,000 characters by default. |
-| `GROQ_API_KEY` | Local rollback only | Not loaded by the AWS deployment. |
-| `GROQ_MODEL` | Local rollback only | Defaults to `openai/gpt-oss-120b`. |
-| `FINBERT_MODEL` | No | Defaults to `/app/finbert` (bundled in Docker image) |
-| `MAX_ANALYSIS_CHARS` | No | Characters of an artifact's title and text that FinBERT scores, at least `1`. Defaults to `50000`. |
-| `SCHEDULED_TICKERS` | No | Tickers the weekly schedule scrapes. Tickers outside the catalogue are ignored. Defaults to the catalogue's scheduled tickers. |
-| `MARKETAUX_ENABLED` | No | Lets the weekly schedule collect Marketaux news. Defaults to `false`. |
-| `MARKETAUX_PER_TICKER_LIMIT` | No | Stories the weekly schedule asks Marketaux for per ticker, from `1` to `25`. Defaults to `10`. |
-| `DISCOVERY_LOOKBACK_DAYS` | No | Days back that discovery looks for announcements, at least `1`. Defaults to `30`. |
-| `MAX_DOCUMENTS_PER_RUN` | No | Announcements discovery queues per scrape run, at least `1`. Defaults to `3`. |
-| `MAX_DOCUMENT_BYTES` | No | Largest document download and analysis accept. Defaults to `26214400` (25 MiB). |
-| `MAX_DOCX_UNCOMPRESSED_BYTES` | No | Most a DOCX may expand to when unzipped. Defaults to `20971520` (20 MiB). |
-| `MAX_PDF_PAGES` | No | Pages over which analysis refuses a PDF, at least `1`. Defaults to `500`. |
-| `MAX_OCR_PAGES` | No | Pages over which analysis refuses a scanned PDF instead of reading it by OCR. Defaults to `5`. |
-| `MAX_OCR_PIXELS_PER_PAGE` | No | Largest page image OCR reads. Defaults to `8000000`. |
-| `DOWNLOAD_QUEUE_URL` | Pipeline only | Queue discovery sends documents to. Discovery fails without it. |
-| `RAW_DOCUMENT_BUCKET` | Pipeline only | S3 bucket for raw documents. Download, and the analysis of a stored document, fail without it. |
-| `NOTIFICATIONS_ENABLED` | No | Master switch for watchlist alerts. Defaults to `false` outside the development compose stack. |
-| `NOTIFICATION_QUEUE_URL` | With alerts in the pipeline | Queue the analysis worker sends alerts to while notifications are on. |
-| `NOTIFICATIONS_DRY_RUN` | No | Renders and logs alerts without contacting Brevo. The example environment sets it to `true`. |
-| `ALERT_SENDER_EMAIL` | Live Brevo only | Sender address verified in the Brevo account. |
-| `ALERT_SENDER_NAME` | No | Display name for alert emails. Defaults to `Stocks In Hand`. |
-| `BREVO_API_KEY` | Live Brevo only | Brevo API key. Store it outside source control. |
-| `BREVO_API_KEY_PARAMETER` | AWS only | SSM parameter name containing the Brevo API key. |
-| `BREVO_API_BASE_URL` | No | Defaults to `https://api.brevo.com/v3`. |
-| `ALERT_DAILY_BUDGET` | No | Maximum alert delivery commitments across the last 24 hours. Defaults to `180`. |
-| `ALERT_MAX_PER_INVESTOR_PER_RUN` | No | Direct alerts per investor and scrape run before one rollup. Defaults to `5`. |
-| `ALERT_DEFAULT_MIN_CONFIDENCE` | No | Threshold the alert settings show before an investor saves a rule, from `0` to `1`. Defaults to `0.75`. |
-| `ALERT_CLAIM_STALE_MINUTES` | No | Age at which an unfinished delivery claim may be retried. Defaults to `15`. |
-| `FRONTEND_BASE_URL` | No | Public frontend base of every link in alert and verification emails. Defaults to `http://localhost:3000`. |
-| `ALERT_VERIFICATION_TOKEN_TTL_HOURS` | No | Lifetime of email confirmation links. Defaults to `24`. |
+| Variable                              | Required                    | Description                                                                                                                    |
+| ------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `REDDIT_CLIENT_ID`                    | For Reddit                  | Client ID from a Reddit script application.                                                                                    |
+| `REDDIT_CLIENT_SECRET`                | For Reddit                  | Client secret from the same Reddit application.                                                                                |
+| `BLUESKY_IDENTIFIER`                  | No                          | Bluesky handle for authenticated search. Leave empty for public search.                                                        |
+| `BLUESKY_APP_PASSWORD`                | No                          | Bluesky app password. Must be set with `BLUESKY_IDENTIFIER`.                                                                   |
+| `PUBLIC_DISCUSSION_FEED_URLS`         | For blogs                   | Comma-separated HTTPS RSS or Atom feed allowlist.                                                                              |
+| `SCHEDULED_PUBLIC_DISCUSSION_SOURCES` | No                          | Scheduled subset of `reddit`, `bluesky`, `mastodon` and `blog`. Other names are ignored. Defaults to `bluesky,mastodon`.       |
+| `PUBLIC_DISCUSSION_PER_SOURCE_LIMIT`  | No                          | Scheduled item limit per source, from `1` to `25`. Defaults to `10`.                                                           |
+| `PUBLIC_DISCUSSION_SEARCH_QUERY`      | No                          | Shared Reddit, Bluesky, and Mastodon search value, at most 100 characters. Defaults to `ASX`, also when empty.                 |
+| `LLM_PROVIDER`                        | No                          | Defaults to `bedrock`. `groq` remains available only for an explicit local rollback.                                           |
+| `BEDROCK_ENABLED`                     | For generated summaries     | Must be `true` before the app invokes Bedrock. Defaults to `false`.                                                            |
+| `BEDROCK_MODEL_ID`                    | No                          | Defaults to regional `openai.gpt-oss-120b-1:0`.                                                                                |
+| `BEDROCK_SERVICE_TIER`                | No                          | `default`, `flex`, or `priority`. AWS queued analysis uses `flex`.                                                             |
+| `BEDROCK_MAX_PROMPT_CHARS`            | No                          | Rejects prompts over 30,000 characters by default.                                                                             |
+| `GROQ_API_KEY`                        | Local rollback only         | Not loaded by the AWS deployment.                                                                                              |
+| `GROQ_MODEL`                          | Local rollback only         | Defaults to `openai/gpt-oss-120b`.                                                                                             |
+| `FINBERT_MODEL`                       | No                          | Defaults to `/app/finbert` (bundled in Docker image)                                                                           |
+| `MAX_ANALYSIS_CHARS`                  | No                          | Characters of an artifact's title and text that FinBERT scores, at least `1`. Defaults to `50000`.                             |
+| `SCHEDULED_TICKERS`                   | No                          | Tickers the weekly schedule scrapes. Tickers outside the catalogue are ignored. Defaults to the catalogue's scheduled tickers. |
+| `MARKETAUX_ENABLED`                   | No                          | Lets the weekly schedule collect Marketaux news. Defaults to `false`.                                                          |
+| `MARKETAUX_PER_TICKER_LIMIT`          | No                          | Stories the weekly schedule asks Marketaux for per ticker, from `1` to `25`. Defaults to `10`.                                 |
+| `DISCOVERY_LOOKBACK_DAYS`             | No                          | Days back that discovery looks for announcements, at least `1`. Defaults to `30`.                                              |
+| `MAX_DOCUMENTS_PER_RUN`               | No                          | Announcements discovery queues per scrape run, at least `1`. Defaults to `3`.                                                  |
+| `MAX_DOCUMENT_BYTES`                  | No                          | Largest document download and analysis accept. Defaults to `26214400` (25 MiB).                                                |
+| `MAX_DOCX_UNCOMPRESSED_BYTES`         | No                          | Most a DOCX may expand to when unzipped. Defaults to `20971520` (20 MiB).                                                      |
+| `MAX_PDF_PAGES`                       | No                          | Pages over which analysis refuses a PDF, at least `1`. Defaults to `500`.                                                      |
+| `MAX_OCR_PAGES`                       | No                          | Pages over which analysis refuses a scanned PDF instead of reading it by OCR. Defaults to `5`.                                 |
+| `MAX_OCR_PIXELS_PER_PAGE`             | No                          | Largest page image OCR reads. Defaults to `8000000`.                                                                           |
+| `DOWNLOAD_QUEUE_URL`                  | Pipeline only               | Queue discovery sends documents to. Discovery fails without it.                                                                |
+| `RAW_DOCUMENT_BUCKET`                 | Pipeline only               | S3 bucket for raw documents. Download, and the analysis of a stored document, fail without it.                                 |
+| `NOTIFICATIONS_ENABLED`               | No                          | Master switch for watchlist alerts. Defaults to `false` outside the development compose stack.                                 |
+| `NOTIFICATION_QUEUE_URL`              | With alerts in the pipeline | Queue the analysis worker sends alerts to while notifications are on.                                                          |
+| `NOTIFICATIONS_DRY_RUN`               | No                          | Renders and logs alerts without contacting Brevo. The example environment sets it to `true`.                                   |
+| `ALERT_SENDER_EMAIL`                  | Live Brevo only             | Sender address verified in the Brevo account.                                                                                  |
+| `ALERT_SENDER_NAME`                   | No                          | Display name for alert emails. Defaults to `Stocks In Hand`.                                                                   |
+| `BREVO_API_KEY`                       | Live Brevo only             | Brevo API key. Store it outside source control.                                                                                |
+| `BREVO_API_KEY_PARAMETER`             | AWS only                    | SSM parameter name containing the Brevo API key.                                                                               |
+| `BREVO_API_BASE_URL`                  | No                          | Defaults to `https://api.brevo.com/v3`.                                                                                        |
+| `ALERT_DAILY_BUDGET`                  | No                          | Maximum alert delivery commitments across the last 24 hours. Defaults to `180`.                                                |
+| `ALERT_MAX_PER_INVESTOR_PER_RUN`      | No                          | Direct alerts per investor and scrape run before one rollup. Defaults to `5`.                                                  |
+| `ALERT_DEFAULT_MIN_CONFIDENCE`        | No                          | Threshold the alert settings show before an investor saves a rule, from `0` to `1`. Defaults to `0.75`.                        |
+| `ALERT_CLAIM_STALE_MINUTES`           | No                          | Age at which an unfinished delivery claim may be retried. Defaults to `15`.                                                    |
+| `FRONTEND_BASE_URL`                   | No                          | Public frontend base of every link in alert and verification emails. Defaults to `http://localhost:3000`.                      |
+| `ALERT_VERIFICATION_TOKEN_TTL_HOURS`  | No                          | Lifetime of email confirmation links. Defaults to `24`.                                                                        |
 
 ### Use Bedrock locally
 
@@ -182,43 +202,49 @@ signed email link, so they do not need to be added to Brevo first. See the
 ## API endpoints
 
 ### Core
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Health check |
-| GET | `/docs` | FastAPI auto-generated interactive API docs |
-| GET | `/tickers` | List all implemented ASX tickers |
+
+| Method | Path       | Description                                 |
+| ------ | ---------- | ------------------------------------------- |
+| GET    | `/health`  | Health check                                |
+| GET    | `/docs`    | FastAPI auto-generated interactive API docs |
+| GET    | `/tickers` | List all implemented ASX tickers            |
 
 ### Sentiment (FinBERT)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/analyse` | Admin only. Runs FinBERT on raw text where torch, transformers and the model are installed, as in the local Docker backend. Body: `{ "text": "..." }`. Returns `label` (positive/negative/neutral) and its confidence, `score`. The deployed API answers 503 for any non-blank text, because its image has no FinBERT; FinBERT runs in the analysis worker |
-| GET | `/sentiment/{ticker}` | A ticker's stored sentiment in each sentiment bucket (revenue, strategy, risk, dividend, organisational) and in public discussion, read from what the analysis worker stored. Never runs FinBERT. Params: `days` (default: 365), `limit` (default: 250) |
+
+| Method | Path                  | Description                                                                                                                                                                                                                                                                                                                                                |
+| ------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/analyse`            | Admin only. Runs FinBERT on raw text where torch, transformers and the model are installed, as in the local Docker backend. Body: `{ "text": "..." }`. Returns `label` (positive/negative/neutral) and its confidence, `score`. The deployed API answers 503 for any non-blank text, because its image has no FinBERT; FinBERT runs in the analysis worker |
+| GET    | `/sentiment/{ticker}` | A ticker's stored sentiment in each sentiment bucket (revenue, strategy, risk, dividend, organisational) and in public discussion, read from what the analysis worker stored. Never runs FinBERT. Params: `days` (default: 365), `limit` (default: 250)                                                                                                    |
 
 ### Reddit (PRAW)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/reddit/scrape` | Admin-only bounded Reddit collection. Params: `subreddit` (default: ASX), `limit` (default: 10) |
-| GET | `/reddit/ticker-sentiment/{ticker_symbol}` | Authenticated Bedrock summary of stored Reddit posts mentioning a ticker. Returns dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
+
+| Method | Path                                       | Description                                                                                                                                                              |
+| ------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST   | `/reddit/scrape`                           | Admin-only bounded Reddit collection. Params: `subreddit` (default: ASX), `limit` (default: 10)                                                                          |
+| GET    | `/reddit/ticker-sentiment/{ticker_symbol}` | Authenticated Bedrock summary of stored Reddit posts mentioning a ticker. Returns dominant sentiment and key themes. Params: `days` (default: 30), `limit` (default: 50) |
 
 ### Bluesky (public API)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/bluesky/scrape` | Admin-only public or authenticated Bluesky collection. Params: `query` (default: ASX), `limit` (default: 25) |
+
+| Method | Path              | Description                                                                                                  |
+| ------ | ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| POST   | `/bluesky/scrape` | Admin-only public or authenticated Bluesky collection. Params: `query` (default: ASX), `limit` (default: 25) |
 
 ### Mastodon (public API)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/mastodon/scrape` | Admin-only `aus.social` hashtag collection. Params: `tag` (default: ASX), `limit` (default: 25) |
+
+| Method | Path               | Description                                                                                     |
+| ------ | ------------------ | ----------------------------------------------------------------------------------------------- |
+| POST   | `/mastodon/scrape` | Admin-only `aus.social` hashtag collection. Params: `tag` (default: ASX), `limit` (default: 25) |
 
 ### Blogs and public discussion status
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/blogs/scrape` | Admin-only RSS or Atom collection. `feed_url` must be in `PUBLIC_DISCUSSION_FEED_URLS` |
-| GET | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker |
-| POST | `/public-discussion/analysis/requeue` | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
+| Method | Path                                        | Description                                                                                      |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| POST   | `/blogs/scrape`                             | Admin-only RSS or Atom collection. `feed_url` must be in `PUBLIC_DISCUSSION_FEED_URLS`           |
+| GET    | `/public-discussion/ticker/{ticker}/status` | Return collection and analysis counts for one ticker                                             |
+| POST   | `/public-discussion/analysis/requeue`       | Admin-only recovery endpoint. Defaults to a dry run. Set `execute=true` to queue a bounded batch |
 
 ### LLM routes
+
 Admin only. The category route asks the LLM while you wait and answers 503 when
 no LLM provider is switched on. The summary routes queue a summary request for
 the analysis worker and answer 202; the worker writes the summary shortly after.
@@ -227,37 +253,41 @@ When no LLM is switched on, or the LLM's answer has no text, it logs
 its summary. They answer 503 when `ANALYSIS_QUEUE_URL` is not set, so locally
 they need the LocalStack overlay described in "Local pipeline development".
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/llm/categorise/recent` | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size` |
-| POST | `/llm/summarise/ticker/{symbol}` | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` (1 to 50, default 50; each request is one LLM call) |
-| POST | `/llm/summarise/artifact/{artifact_id}` | Queues a new summary of one artifact, which replaces its summary |
+| Method | Path                                    | Description                                                                                                                                                                                                                                                                                                                                                          |
+| ------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/llm/categorise/recent`                | Sorts a ticker's recent ASX announcements into the five sentiment categories. Params: `ticker`, `days`, `limit`, `offset`, `batch_size`                                                                                                                                                                                                                              |
+| POST   | `/llm/summarise/ticker/{symbol}`        | Queues a summary of each of a ticker's newest announcements and news stories that has no complete summary: all four lines, plus both clarity lists for an announcement. Skips those whose analysis is queued or running. Returns `candidates`, `queued`, `skipped`, `artifact_ids` and `errors`. Params: `limit` (1 to 50, default 50; each request is one LLM call) |
+| POST   | `/llm/summarise/artifact/{artifact_id}` | Queues a new summary of one artifact, which replaces its summary                                                                                                                                                                                                                                                                                                     |
 
 ### Scraping
-| Method | Path | Description |
-|---|---|---|
-| POST | `/scrape/{ticker}` | Trigger a background ASX announcement scrape for any supported ticker. Automatic schedules remain separately controlled by `SCHEDULED_TICKERS`. |
-| GET | `/headlines` | Scrape live Yahoo Finance headlines via Playwright (default ticker BHP.AX) |
+
+| Method | Path               | Description                                                                                                                                     |
+| ------ | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/scrape/{ticker}` | Trigger a background ASX announcement scrape for any supported ticker. Automatic schedules remain separately controlled by `SCHEDULED_TICKERS`. |
+| GET    | `/headlines`       | Scrape live Yahoo Finance headlines via Playwright (default ticker BHP.AX)                                                                      |
 
 ### Storage (direct DB access)
-| Method | Path | Description |
-|---|---|---|
-| POST | `/artifact-sentiments/` | Manually store a sentiment record against an artifact |
-| GET | `/artifact-sentiments/artifact/{artifact_id}` | Get all sentiment records for an artifact |
-| GET | `/artifact-sentiments/{sentiment_id}` | Get a single sentiment record |
+
+| Method | Path                                          | Description                                           |
+| ------ | --------------------------------------------- | ----------------------------------------------------- |
+| POST   | `/artifact-sentiments/`                       | Manually store a sentiment record against an artifact |
+| GET    | `/artifact-sentiments/artifact/{artifact_id}` | Get all sentiment records for an artifact             |
+| GET    | `/artifact-sentiments/{sentiment_id}`         | Get a single sentiment record                         |
 
 ### Watchlist notifications
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/notifications/preferences` | Read the signed-in investor's rule, verification state, and latest delivery status |
-| PUT | `/notifications/preferences` | Enable or disable alerts and update sentiment labels and confidence threshold |
-| POST | `/notifications/preferences/resend-verification` | Resend the Brevo confirmation email, limited to once per minute |
-| POST | `/notifications/verify` | Confirm an alert email address with a signed, expiring token |
-| POST | `/notifications/unsubscribe` | Disable a matching subscription with a public token; valid and invalid tokens return the same response |
+| Method | Path                                             | Description                                                                                            |
+| ------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| GET    | `/notifications/preferences`                     | Read the signed-in investor's rule, verification state, and latest delivery status                     |
+| PUT    | `/notifications/preferences`                     | Enable or disable alerts and update sentiment labels and confidence threshold                          |
+| POST   | `/notifications/preferences/resend-verification` | Resend the Brevo confirmation email, limited to once per minute                                        |
+| POST   | `/notifications/verify`                          | Confirm an alert email address with a signed, expiring token                                           |
+| POST   | `/notifications/unsubscribe`                     | Disable a matching subscription with a public token; valid and invalid tokens return the same response |
+
 ---
 
 ## Stopping
+
 ```bash
 docker compose down        # stop containers
 docker compose down -v     # stop + wipe the database
@@ -288,26 +318,58 @@ docker compose -f docker-compose-dev.yml up --build db backend frontend
 ```
 
 ## Setup
+
 Before doing any development work in this repository, you must run the init.sh script. It only needs to be run once, unless dependencies change majorly and it may need to be re-run, but this will be clearly communicated
 
 In the root of the repository run the following:
+
 ```bash
 ./init.sh
 ```
 
 ### On macOS and Linux
+
 If you're on macOS or Linux, you may need to change the file permissions first
 
 In the root of the repository run the following:
+
 ```bash
 chmod +x ./init.sh
 ./init.sh
 ```
 
 ## Running the tests
+
 In the root folder of the project
+
 ```bash
 docker compose -f docker-compose-tests.yml up --build
+```
+
+This runs Pylint and mypy (non-blocking, informational only), pytest under
+coverage, and Bandit (medium severity and higher). A pytest or Bandit failure
+fails the run. Timestamped reports are written to `backend/_test_output` on
+the host — after the run, check the newest directory there, in particular
+`_errors.txt`, `pylint.txt`, `mypy.txt`, `pytest.txt` and `bandit.txt`. `backend/.env`
+must exist before running the suite, the same as for the standard stack.
+
+Some backend tests read `.github/`, `infra/`, `frontend/`,
+`docker-compose-dev.yml` and `docker-compose-tests.yml` directly to check
+deployment contracts, so moving or renaming those can break tests
+unexpectedly.
+
+To remove the stopped test containers after reviewing the reports:
+
+```bash
+docker compose -f docker-compose-tests.yml down
+```
+
+Run the frontend checks separately from the `frontend` directory:
+
+```bash
+cd frontend
+npm test       # Vitest suite
+npm run lint   # ESLint
 ```
 
 ## Local backend development without Docker
@@ -371,7 +433,7 @@ This adds:
   mirroring `infra/template.yaml`'s AWS wiring;
 - `discovery-worker`, `download-worker`, and `analysis-worker` containers,
   each running `backend/scripts/local_worker.py` — a small script that long-polls
-  its queue and calls the *same* `lambdas/discovery.py` /
+  its queue and calls the _same_ `lambdas/discovery.py` /
   `download.py` / `analysis.py` `handler()` functions AWS invokes, so the
   code under test is identical to what's deployed; only the invocation
   mechanism (a polling loop instead of a one-shot Lambda call) differs.
@@ -493,6 +555,51 @@ exec`, LocalStack's port is published — point it at
 dummy credentials (`AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test`);
 LocalStack doesn't validate them.
 
+## Common issues and developer notes
+
+- **Commit or push is rejected by a Git hook:** `.githooks/commit-msg` and
+  `.githooks/pre-commit` enforce commit message and branch naming formats
+  (e.g. `feature/<user_story_id>-<description>`). Rename the branch or amend
+  the message to match.
+- **Compose says `backend/.env` is missing:** Create it from
+  `backend/.env.example`. Compose loads the file before starting the backend.
+- **First build is slow or appears stuck:** The build pulls large images and
+  downloads FinBERT, PyTorch dependencies and Chromium. Check network/proxy
+  access and Docker disk space.
+- **A port is already allocated:** Stop the process using 3000 or 8000. The
+  dev Compose file also requires 5432. Alternatively, change the host side
+  of the relevant port mapping.
+- **Backend stays unhealthy:** Check `docker compose logs backend`.
+  Migrations run before Uvicorn; database or migration errors prevent the
+  health check from passing.
+- **Frontend change is not visible:** The Compose files do not bind-mount
+  source code. Rebuild the frontend container after editing.
+- **Backend change is not visible:** Rebuild the backend container for the
+  same reason. `docker-compose-dev.yml` mounts data/output folders, not the
+  application source.
+- **`/api` works in dev but not a static local export:** Next.js rewrites
+  `/api/*` only when `NODE_ENV=development`. Production builds use a static
+  export because CloudFront owns API routing in AWS.
+- **Scrape endpoint returns 401/403:** The queued `/scrape/{ticker}` route
+  requires an authenticated administrator session (see "Verifying it's
+  working" above).
+- **Scrape endpoint returns 503:** The durable scrape path expects
+  `DISCOVERY_QUEUE_URL` and AWS access. Local Compose does not create the
+  production SQS/Lambda pipeline — see "Local pipeline development" above.
+- **External scrape is empty or times out:** Yahoo/ASX sites can change
+  markup, throttle requests or be unavailable. Retry, inspect backend logs,
+  and validate the relevant adapter.
+- **Reddit, Groq or Marketaux feature fails:** Confirm the corresponding
+  credentials and provider settings in `backend/.env`, then recreate the
+  backend container so it receives the updated values.
+- **No summaries generated locally:** No LLM provider is configured. Set up
+  either Bedrock or Groq in `backend/.env`, then recreate the backend
+  container.
+- **Database state causes confusing results:** Check Alembic/logs first. Use
+  `docker compose down -v` only if losing all local data is acceptable.
+- **Line-ending or hook problems on Windows:** Use Git Bash/WSL for
+  `init.sh`, but commit or stash first — the script hard-resets the checkout.
+
 ## Claim source traceability
 
 The ticker clarity layer links each claim to its source document and publication
@@ -517,3 +624,80 @@ a rules score, not a probability. Ambiguous and unknown results remain
 See [the advanced content classification guide](docs/advanced-content-classification.md)
 for the taxonomy, fixture evaluator, extension process and bounded
 reclassification command.
+
+## Cloud deployment
+
+Local Compose is not a complete emulation of staging. The AWS design uses
+CloudFront, a private S3 frontend, API Gateway, Lambda container images, SQS
+queues, S3 document storage, Cognito and Supabase. Deploying it requires an
+AWS account, AWS CLI/SAM CLI, Docker Buildx, configured GitHub OIDC
+roles/variables, SSM SecureString parameters, and change-set review
+permissions.
+
+Pull requests to `main` run the `validate-branch` and
+`validate-staging-release` workflows (backend tests, Bandit, frontend lint,
+tests and builds, image builds, SAM validation). Pushes to `feature/**` and
+`fix/**` branches run `validate-branch`. A push to `main` runs the
+`deploy-staging` workflow. Pylint and mypy run only in the Docker test suite
+and are non-blocking.
+
+Frontend publish, frontend rollback and backend rollback are separate manual
+workflows. Schedules and email notifications both start disabled.
+
+- Read [deployment.md](deployment.md) for the operating model, costs,
+  secrets and release/rollback process.
+- Read [infra/README.md](infra/README.md) for bootstrap and infrastructure
+  commands.
+- Further design notes are in the `docs` folder (including `docs/adr`) and
+  [recommendations.md](recommendations.md).
+- Do not place production secrets in `backend/.env` or commit them. Staging
+  uses SSM parameter paths under `/stocks-in-hand/staging/`.
+- Production frontend output is static and relies on CloudFront to route
+  `/api/*`; this differs from the local Next.js development rewrite.
+- Amazon Bedrock (GPT-OSS 120B) is disabled by default in AWS and must be
+  switched on in the deployment parameters. Without it, analysis still runs
+  but no generated summaries are produced.
+
+## Releases and versioning
+
+The project follows semantic versioning (`MAJOR.MINOR.PATCH`, see
+[semver.org](https://semver.org/)) for internal state tracking — the project
+does not expose a public API, so there is no external compatibility contract
+to protect. Future releases increment:
+
+- **PATCH** — a small, easily reversible change that introduces no new
+  functionality, primarily bug fixes.
+- **MINOR** — new functionality that stays compatible with previous versions,
+  e.g. new UI elements or new data-processing logic.
+- **MAJOR** — major functionality changes, especially large database schema
+  changes or changes to cloud services and their dependencies that spin up
+  new, or tear down existing, cloud services.
+
+## Contributing
+
+### Branching and commits
+
+Branch off `main` using a prefix that signals what you're implementing:
+`feature/<description>` for new work, `bugfix/<description>` for fixes,
+`admin/<description>` for chores/infra. Use underscores in descriptions (e.g.
+`feature/collect_investor_discussions`). Commit incrementally rather than in
+large squashed changes — PRs are merged with a merge commit, so individual
+commits stay visible in `main`'s history.
+
+### Before opening the PR
+
+Run the test suite locally and manually verify your changes work. Run the
+backend tests and security scan (pytest, Bandit), the schema-drift check if
+migrations changed, and frontend lint/test/build. Rebase on current `main`
+rather than merging it in, to keep history readable. In the PR description,
+state what changed and why, and explicitly call out any migration, env var,
+or infra change.
+
+### Review, merge and deploy
+
+Open the pull request against `main` and require at least one reviewer
+approval from the original development team. Merge via a standard merge
+commit once CI is green and review is approved (don't squash or
+rebase-merge). Merging to `main` does not trigger a deployment — staging and
+production releases are manually triggered workflows that one of the
+original code-owning team must run.
