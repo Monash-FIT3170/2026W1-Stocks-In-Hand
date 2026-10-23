@@ -359,6 +359,25 @@ def test_an_ineligible_candidate_is_completed_without_summary_or_sentiment(
     assert _rows(db_session, ArtifactSentiment, story) == []
 
 
+def test_an_unmatched_bluesky_post_is_rejected_without_calling_the_llm(
+    db_session: Session,
+) -> None:
+    post = _post(
+        db_session,
+        source_type="bluesky",
+        artifact_type="bluesky_post",
+        artifact_metadata={},
+    )
+    ports = _ports(db_session)
+
+    outcome = analyse_stored_text(post.id, ports)
+
+    db_session.refresh(post)
+    assert outcome.summarised is False
+    assert post.artifact_metadata["feed_eligible"] is False
+    assert ports.provider.calls == []
+
+
 def test_an_unmatched_reddit_post_is_rejected_without_calling_the_llm(
     db_session: Session,
 ) -> None:

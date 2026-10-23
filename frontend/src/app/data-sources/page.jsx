@@ -5,7 +5,7 @@ export const metadata = { title: "Data sources | StonksInHand" }
 const sources = [
   ["ASX and issuer filings", "Company announcements and related documents collected from supported issuer or ASX-facing sources."],
   ["Publisher news", "Stored publisher records supplied through the configured news integration, with the original publisher URL retained when available."],
-  ["Investor discussion", "Public discussion records from configured communities such as Reddit. Discussion is clearly separated from official company material."],
+  ["Investor discussion", "Public discussion records from configured communities such as Reddit and Bluesky. Discussion is clearly separated from official company material."],
   ["Market quotes", "Current and previous-close quote fields requested from Yahoo Finance. Quotes can be delayed or temporarily unavailable."],
 ]
 

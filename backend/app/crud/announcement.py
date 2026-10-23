@@ -26,7 +26,7 @@ def _feed_eligible_filter():
     return or_(
         Artifact.source_type == "asx_announcement",
         and_(
-            Artifact.source_type.in_(("news", "reddit")),
+            Artifact.source_type.in_(("news", "reddit", "bluesky")),
             or_(
                 decision.is_(True),
                 and_(
