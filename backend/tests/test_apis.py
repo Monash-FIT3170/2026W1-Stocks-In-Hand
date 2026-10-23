@@ -86,14 +86,14 @@ def test_list_reddit_posts_returns_posts() -> None:
     assert result[0]["author"] == "testuser"
 
 
-def test_list_reddit_posts_truncates_body() -> None:
-    """Body text is truncated to 1000 characters."""
+def test_list_reddit_posts_keeps_full_body() -> None:
+    """Body text is stored whole; the summary budget limits it later."""
     long_body = "x" * 2000
     mock_post = _make_mock_submission(selftext=long_body)
 
     result = _fetch_reddit(mock_post)
 
-    assert len(result[0]["body"]) == 1000
+    assert result[0]["body"] == long_body
 
 
 def test_list_reddit_posts_empty_body() -> None:
