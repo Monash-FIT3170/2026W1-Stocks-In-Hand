@@ -1,25 +1,44 @@
 :root {
+  --color-primary: #2f5bea;
+  --color-primary-mid: #2448c7;
+  --color-surface-subtle: #f4f6f8;
+  --color-surface-mist: #f3f2ef;
+  --color-midnight: #101214;
+  --color-text-primary: var(--color-midnight);
+  --color-text-secondary: #4e5965;
+  --color-text-muted: #626a73;
+  --color-text-faint: var(--color-text-muted);
+  --color-border-default: #dfe4e8;
+  --color-border-subtle: #d4d5d2;
+  --color-border-muted: #aab0b5;
+  --color-cta-primary: var(--color-primary);
+  --color-chip-green: var(--color-surface-mist);
+  --color-chip-amber: #fff3d6;
+  --color-sentiment-positive: #13795b;
+  --color-sentiment-amber: #8a5b00;
+  --color-action-hover: #292c30;
+
   --canvas: #fbfcfc;
-  --canvas-subtle: #f4f6f8;
+  --canvas-subtle: var(--color-surface-subtle);
   --surface: #fff;
   --surface-raised: #f8fafc;
-  --surface-context: #f3f2ef;
+  --surface-context: var(--color-surface-mist);
   --surface-tint: #e9eeff;
-  --ink: #101214;
-  --ink-secondary: #4e5965;
-  --ink-tertiary: #626a73;
-  --line: #dfe4e8;
+  --ink: var(--color-text-primary);
+  --ink-secondary: var(--color-text-secondary);
+  --ink-tertiary: var(--color-text-muted);
+  --line: var(--color-border-default);
   --line-strong: #818991;
-  --brand: #2f5bea;
-  --brand-hover: #2448c7;
+  --brand: var(--color-primary);
+  --brand-hover: var(--color-primary-mid);
   --brand-soft: #e9eeff;
-  --positive: #13795b;
+  --positive: var(--color-sentiment-positive);
   --positive-soft: #e5f5ef;
-  --warning: #8a5b00;
-  --warning-soft: #fff3d6;
+  --warning: var(--color-sentiment-amber);
+  --warning-soft: var(--color-chip-amber);
   --negative: #b4233b;
   --negative-soft: #fdecef;
-  --focus: #2f5bea;
+  --focus: var(--color-primary);
   --overlay: rgb(16 18 20 / 48%);
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ease-standard: cubic-bezier(.4, 0, .2, 1);
@@ -80,7 +99,7 @@ input::placeholder, textarea::placeholder {
 
 ::selection {
   background: var(--brand);
-  color: #fff;
+  color: var(--surface);
 }
 
 :is(a, button, input, select, textarea, summary):focus-visible {
@@ -101,7 +120,7 @@ a {
 }
 
 * {
-  scrollbar-color: #aab0b5 var(--canvas-subtle);
+  scrollbar-color: var(--color-border-muted) var(--canvas-subtle);
   scrollbar-width: thin;
 }
 

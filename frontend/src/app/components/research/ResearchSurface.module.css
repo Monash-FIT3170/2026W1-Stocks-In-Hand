@@ -233,7 +233,7 @@
 
 .rangePresetActive {
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   border-color: var(--ink);
 }
 
@@ -326,7 +326,7 @@
   align-items: center;
   padding: 16px 0;
   min-height: 64px;
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
   color: var(--ink);
   text-decoration: none;
 }
@@ -425,7 +425,7 @@
   padding: 0 20px;
   margin: 28px auto 0;
   background: var(--ink);
-  color: white;
+  color: var(--surface);
   border: 0;
   border-radius: 6px;
   font-size: 14px;
@@ -433,7 +433,7 @@
 }
 
 .loadMore:hover {
-  background: #292c30;
+  background: var(--color-action-hover);
 }
 
 .loadMore:disabled {

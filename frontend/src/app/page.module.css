@@ -125,7 +125,7 @@
   justify-content: center;
   gap: 8px;
   background: var(--ink);
-  color: #fff;
+  color: var(--surface);
   text-decoration: none;
   font-size: 14px;
   font-weight: 550;
@@ -134,7 +134,7 @@
 }
 
 .searchSubmit:hover,.primaryAction:hover,.authSubmit:hover:not(:disabled) {
-  background: #292c30;
+  background: var(--color-action-hover);
 }
 
 .primaryAction svg {
@@ -200,7 +200,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 1px solid #d4d5d2;
+  border-bottom: 1px solid var(--color-border-subtle);
   padding-bottom: 20px;
   margin-bottom: 28px;
 }
@@ -269,7 +269,7 @@
   display: flex;
   justify-content: space-between;
   gap: 20px;
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
   padding: 12px 0;
   font-size: 13px;
 }
@@ -1008,7 +1008,7 @@
   display: grid;
   gap: 8px;
   padding: 20px 0;
-  border-top: 1px solid #d4d5d2;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .workflow li:first-child {
